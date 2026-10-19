@@ -10,6 +10,7 @@ import copy
 import re
 from typing import Any, Callable
 
+from .linked import follow_ops
 from .util import AppError
 
 _ID_RE = re.compile(r"^[a-z]{1,3}_[a-z0-9]{6,24}$")
@@ -717,10 +718,14 @@ def apply_op(project: dict, op: dict, defaults: dict) -> list[dict]:
     if not isinstance(op, dict):
         raise AppError("操作格式不正確")
     name = op.get("op")
-    if name == "batch":
+    if name in ("batch", "linked"):
+        before = copy.deepcopy(project) if name == "linked" else None
         inverses: list[dict] = []
         for sub in op.get("ops") or []:
             inverses = apply_op(project, sub, defaults) + inverses
+        if before is not None and inverses:
+            for sub in follow_ops(before, project):
+                inverses = apply_op(project, sub, defaults) + inverses
         return inverses
     if name == "shot.add":
         inv = _shot_add(project, op, defaults)

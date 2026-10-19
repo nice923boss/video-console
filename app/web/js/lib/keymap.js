@@ -49,6 +49,7 @@ const BUILT_IN = [
   cmd("edit", "edit.zoomOut", "縮小時間軸", ["-"], ["mod+-"]),
   cmd("edit", "edit.zoomFit", "時間軸符合視窗寬度", ["shift+z"]),
   cmd("edit", "edit.snap", "開關磁吸對齊", ["n"]),
+  cmd("edit", "edit.link", "開關連動上下軌", ["shift+n"]),
   cmd("edit", "edit.delete", "刪除選取的片段", ["delete", "backspace"]),
   cmd("edit", "edit.deselect", "取消選取片段", ["escape"]),
 

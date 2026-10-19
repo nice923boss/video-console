@@ -6,8 +6,13 @@ import { applyTheme } from "./theme.js";
 import { newId, shotLabel } from "./format.js";
 import { toast, updateToast, dismissToast, toastError } from "../components/toast.js";
 import { confirmDialog } from "../components/overlay.js";
+import { readPref } from "./prefs.js";
 
 const EMPTY_UNDO = { undo: 0, redo: 0, undoLabel: "", redoLabel: "" };
+// With linking on (the timeline's link toggle), shot edits carry the items on the other tracks along.
+export const LINK_PREF = "vc.timeline.link";
+const SHOT_OPS = new Set(["shot.add", "shot.delete", "shot.move", "shot.update"]);
+const linking = (list) => readPref(LINK_PREF, true, (v) => typeof v === "boolean") && list.some((o) => SHOT_OPS.has(o.op));
 const enc = encodeURIComponent;
 let bootedOnce = false;
 
@@ -192,7 +197,8 @@ export async function ops(list, { label = "", coalesce = null, undoable = true, 
   const { pid } = getState();
   if (!pid || !list.length) return null;
   try {
-    const res = await api.post(`/api/projects/${enc(pid)}/ops`, { ops: list, label, coalesce, undoable, batch });
+    const sent = linking(list) ? [{ op: "linked", ops: list }] : list;
+    const res = await api.post(`/api/projects/${enc(pid)}/ops`, { ops: sent, label, coalesce, undoable, batch });
     if (res && res.changed) ensureRev(pid, res.rev);
     return res;
   } catch (err) {

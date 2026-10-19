@@ -7,7 +7,7 @@ import { useStore, setState } from "../lib/store.js";
 import { usePref } from "../lib/prefs.js";
 import { useKeymap, keyHint } from "../lib/keymap.js";
 import { clock, setTime, onClock } from "../lib/clock.js";
-import { ops, undo, deleteShots } from "../lib/actions.js";
+import { ops, undo, deleteShots, LINK_PREF } from "../lib/actions.js";
 import { uploadFiles } from "../lib/jobs-actions.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
 import { sequenceDuration, audioLength } from "../lib/sequence.js";
@@ -139,6 +139,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const { editSel, focus } = useStore((s) => ({ editSel: s.editSel, focus: s.focus }));
   const [pps, setPps] = usePref("vc.timeline.pps", PPS_DEFAULT, validPps);
   const [snapOn, setSnapOn] = usePref("vc.timeline.snap", true, isBool);
+  const [linkOn, setLinkOn] = usePref(LINK_PREF, true, isBool);
   const [viewW, setViewW] = useState(0);
   const [drop, setDrop] = useState(null);
   const scrollRef = useRef(null);
@@ -148,7 +149,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const ppsRef = useRef(pps);
   const dataRef = useRef(null);
   ppsRef.current = pps;
-  dataRef.current = { project, clips, snapOn };
+  dataRef.current = { project, clips, snapOn, linkOn };
 
   const placeHead = () => {
     const el = headRef.current;
@@ -268,6 +269,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.zoomOut": () => zoomTo(ppsRef.current / ZOOM_STEP),
     "edit.zoomFit": () => fit(),
     "edit.snap": () => setSnapOn(!dataRef.current.snapOn),
+    "edit.link": () => setLinkOn(!dataRef.current.linkOn),
   }, { active: hotkeys });
 
   const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
@@ -355,6 +357,9 @@ export function Timeline({ project, clips, hotkeys = true }) {
         disabled=${!clips.length && !(editSel && editSel.type !== "shot")} onClick=${() => splitAtPlayhead(project, clips, editSel)} />
       <${IconButton} icon="magnet" size=${16} active=${snapOn}
         title=${`${snapOn ? "磁吸對齊：開，拖曳時按住 Alt 暫停" : "磁吸對齊：關"}${keyHint("edit.snap")}`} onClick=${() => setSnapOn(!snapOn)} />
+      <${IconButton} icon="link" size=${16} active=${linkOn}
+        title=${`${linkOn ? "連動上下軌：開，鏡頭移動或改長度時，字幕、上層畫面、音樂、音效跟著移動" : "連動上下軌：關"}${keyHint("edit.link")}`}
+        onClick=${() => setLinkOn(!linkOn)} />
       <span class="grow"></span>
       <span class="tl-total dim">序列 ${fmtTime(total, { tenths: false })}，${clips.length} 個片段</span>
       <${IconButton} icon="zoom-out" size=${16} title=${`縮小${keyHint("edit.zoomOut")}`} disabled=${pps <= PPS_MIN} onClick=${() => zoomTo(pps / ZOOM_STEP)} />

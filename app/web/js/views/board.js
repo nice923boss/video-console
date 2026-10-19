@@ -12,7 +12,7 @@ import { usePref } from "../lib/prefs.js";
 import { Icon } from "../components/icons.js";
 import { Button, IconButton, Chip, Badge, Progress, Spinner, Empty, Segmented } from "../components/ui.js";
 import { Thumb, mediaEntry, openLightbox } from "../components/media.js";
-import { openMenu } from "../components/overlay.js";
+import { openMenu, promptDialog } from "../components/overlay.js";
 import { toast } from "../components/toast.js";
 import { Inspector } from "../components/inspector.js";
 import { openScriptImport } from "../dialogs/script-import.js";
@@ -63,6 +63,19 @@ function openShotPreview(pid, project, rows, id) {
   openLightbox(pid, items, start);
 }
 
+async function moveShotTo(shot, index, count) {
+  const text = await promptDialog({
+    title: `移動「${shotLabel(shot, index)}」`,
+    label: `移到第幾個（1 到 ${count}）`,
+    value: String(index + 1),
+    confirmLabel: "移動",
+    validate: (v) => (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= count ? "" : `請輸入 1 到 ${count} 的整數`),
+  });
+  if (text == null) return;
+  const to = Number(text) - 1;
+  if (to !== index) moveShot(shot.id, to);
+}
+
 function shotMenu(e, ctx, row) {
   const { project, selected, rows, pid } = ctx;
   const { shot, index } = row;
@@ -85,6 +98,7 @@ function shotMenu(e, ctx, row) {
       onClick: () => duplicateShots(ids) },
     single && { label: "移到最前面", icon: "to-top", disabled: index === 0, onClick: () => moveShot(shot.id, 0) },
     single && { label: "移到最後面", icon: "arrow-right", disabled: index === last, onClick: () => moveShot(shot.id, last) },
+    single && { label: "移到第幾個…", icon: "hash", disabled: last === 0, onClick: () => moveShotTo(shot, index, last + 1) },
     { label: allOff ? "放入輸出序列" : "移出輸出序列", icon: allOff ? "eye" : "eye-off",
       onClick: () => updateShots(ids, { inSequence: allOff }, allOff ? "放入序列" : "移出序列") },
     { divider: true },
