@@ -1,0 +1,52 @@
+{
+  "id": "flux3-klein-t2i",
+  "name": "FLUX3-Klein 文生圖",
+  "kind": "image",
+  "mode": "t2i",
+  "description": "FLUX3-Klein 蒸餾版，16 步出圖，比 Z-Image Turbo 快約一倍，中文提示詞直接可讀。",
+  "builtin": true,
+  "verified": true,
+  "frameRule": "any",
+  "maxFrames": 0,
+  "defaultFps": 0,
+  "graph": {
+    "1": {"class_type": "UNETLoader", "_meta": {"title": "載入 FLUX3-Klein"},
+          "inputs": {"unet_name": "flux3-image-klein-int8-convrot.safetensors", "weight_dtype": "default"}},
+    "2": {"class_type": "ModelSamplingFlux", "_meta": {"title": "取樣偏移"},
+          "inputs": {"model": ["1", 0], "max_shift": 2.77259, "base_shift": 2.77259, "width": 1024, "height": 1024}},
+    "3": {"class_type": "CLIPLoader", "_meta": {"title": "載入文字編碼器"},
+          "inputs": {"clip_name": "qwen3vl_4b_int8_convrot.safetensors", "type": "flux3", "device": "default"}},
+    "4": {"class_type": "VAELoader", "_meta": {"title": "載入 VAE"},
+          "inputs": {"vae_name": "flux2-vae.safetensors"}},
+    "5": {"class_type": "CLIPTextEncode", "_meta": {"title": "正向提示詞"},
+          "inputs": {"text": "", "clip": ["3", 0]}},
+    "6": {"class_type": "CLIPTextEncode", "_meta": {"title": "負向提示詞"},
+          "inputs": {"text": "", "clip": ["3", 0]}},
+    "7": {"class_type": "EmptyFlux2LatentImage", "_meta": {"title": "空白畫布"},
+          "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+    "8": {"class_type": "KSampler", "_meta": {"title": "取樣"},
+          "inputs": {"model": ["2", 0], "seed": 0, "steps": 16, "cfg": 1.0, "sampler_name": "euler",
+                     "scheduler": "simple", "positive": ["5", 0], "negative": ["6", 0],
+                     "latent_image": ["7", 0], "denoise": 1.0}},
+    "9": {"class_type": "VAEDecode", "_meta": {"title": "解碼"},
+          "inputs": {"samples": ["8", 0], "vae": ["4", 0]}},
+    "10": {"class_type": "SaveImage", "_meta": {"title": "儲存圖片"},
+           "inputs": {"images": ["9", 0], "filename_prefix": "vc/image"}}
+  },
+  "bindings": {
+    "prompt": [{"node": "5", "input": "text"}],
+    "negative": [{"node": "6", "input": "text"}],
+    "seed": [{"node": "8", "input": "seed"}],
+    "width": [{"node": "7", "input": "width"}],
+    "height": [{"node": "7", "input": "height"}],
+    "steps": [{"node": "8", "input": "steps"}],
+    "prefix": [{"node": "10", "input": "filename_prefix"}]
+  },
+  "params": [
+    {"key": "steps", "label": "步數", "type": "int", "min": 8, "max": 30, "step": 1, "default": 16,
+     "help": "蒸餾版建議 16 步"}
+  ],
+  "outputs": ["10"],
+  "notes": "來源：FLUX3-Klein進階 FK-01。CFG 固定 1，負向提示詞不起作用。授權是 FLUX Kommunity License：非商業使用，年營收低於 500 萬美元的合格使用者可商用輸出。",
+  "download": []
+}

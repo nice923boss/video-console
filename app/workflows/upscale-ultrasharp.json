@@ -1,0 +1,37 @@
+{
+  "id": "upscale-ultrasharp",
+  "name": "4x-UltraSharp 快速放大",
+  "kind": "upscale",
+  "mode": "upscale",
+  "description": "用 4x-UltraSharp 模型放大，不重新繪製，速度快。預設輸出 2 倍邊長。",
+  "builtin": true,
+  "verified": true,
+  "frameRule": "any",
+  "maxFrames": 0,
+  "defaultFps": 0,
+  "graph": {
+    "1": {"class_type": "LoadImage", "_meta": {"title": "原圖"},
+          "inputs": {"image": "example.png"}},
+    "2": {"class_type": "UpscaleModelLoader", "_meta": {"title": "載入放大模型"},
+          "inputs": {"model_name": "4x-UltraSharp.pth"}},
+    "3": {"class_type": "ImageUpscaleWithModel", "_meta": {"title": "4 倍放大"},
+          "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
+    "4": {"class_type": "ImageScaleBy", "_meta": {"title": "縮回目標倍率"},
+          "inputs": {"image": ["3", 0], "upscale_method": "lanczos", "scale_by": 0.5}},
+    "5": {"class_type": "SaveImage", "_meta": {"title": "儲存圖片"},
+          "inputs": {"images": ["4", 0], "filename_prefix": "vc/upscale"}}
+  },
+  "bindings": {
+    "image": [{"node": "1", "input": "image"}],
+    "scale": [{"node": "4", "input": "scale_by"}],
+    "prefix": [{"node": "5", "input": "filename_prefix"}]
+  },
+  "params": [
+    {"key": "scale", "label": "輸出倍率", "type": "select", "default": 0.5,
+     "options": [{"value": 0.5, "label": "2 倍"}, {"value": 1.0, "label": "4 倍"}],
+     "help": "模型固定放大 4 倍，再依這裡的設定縮回"}
+  ],
+  "outputs": ["5"],
+  "notes": "模型檔：models/upscale_models/4x-UltraSharp.pth。",
+  "download": []
+}

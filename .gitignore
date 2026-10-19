@@ -1,0 +1,15 @@
+# runtime data: settings, encrypted keys, projects, logs, installed tools
+data/
+
+# build output
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# local tooling and notes
+.claude/
+_FOLDER_INFO.md

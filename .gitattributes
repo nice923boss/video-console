@@ -1,0 +1,3 @@
+# cmd.exe reads .bat files as CP950 with CRLF; keep the bytes exactly as committed
+*.bat -text
+*.ico binary

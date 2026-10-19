@@ -1,0 +1,463 @@
+/* Video Console base: design tokens, reset, utilities, boot screens, keyframes.
+   Theme switches through html[data-theme]; "system" is resolved to dark or light by theme.js. */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0c0c0d;
+  --surface-1: #141416;
+  --surface-2: #1a1a1d;
+  --surface-3: #222226;
+  --surface-hover: rgba(255, 255, 255, .05);
+  --surface-press: rgba(255, 255, 255, .08);
+  --border: rgba(255, 255, 255, .07);
+  --border-strong: rgba(255, 255, 255, .12);
+  --text: #ededee;
+  --text-2: #a1a1a8;
+  --muted: #6c6c74;
+
+  --accent: #d4ff3f;
+  --accent-hover: #e0ff6e;
+  --accent-ink: #111;
+  --accent-soft: rgba(212, 255, 63, .12);
+  --accent-text: #d4ff3f;
+  --accent-line: #d4ff3f;
+
+  --ok: #2ec4b6;
+  --ok-soft: rgba(46, 196, 182, .14);
+  --warn: #f5b544;
+  --warn-soft: rgba(245, 181, 68, .14);
+  --danger: #f2555a;
+  --danger-soft: rgba(242, 85, 90, .14);
+  --info: #4aa8ff;
+  --info-soft: rgba(74, 168, 255, .14);
+  --blue: #7aa2ff;
+  --blue-soft: rgba(122, 162, 255, .14);
+  --neutral: #a1a1a8;
+  --neutral-soft: rgba(255, 255, 255, .07);
+
+  --ring: #d4ff3f;
+  --selection: rgba(212, 255, 63, .28);
+  --input-bg: #101012;
+  --seg-active: #2a2a2f;
+  --seg-shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  --scrim: rgba(6, 6, 7, .62);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .38), 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .06);
+  --pop-bg: #1c1c1f;
+  --stage-bg: #050506;
+  --scroll-thumb: rgba(255, 255, 255, .14);
+  --scroll-thumb-hover: rgba(255, 255, 255, .24);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f6f3;
+  --surface-1: #fff;
+  --surface-2: #f0f0ec;
+  --surface-3: #e7e7e2;
+  --surface-hover: rgba(0, 0, 0, .04);
+  --surface-press: rgba(0, 0, 0, .07);
+  --border: rgba(0, 0, 0, .08);
+  --border-strong: rgba(0, 0, 0, .14);
+  --text: #18181b;
+  --text-2: #55555c;
+  --muted: #8a8a91;
+
+  --accent: #c6f135;
+  --accent-hover: #b9e624;
+  --accent-ink: #141414;
+  --accent-soft: rgba(132, 180, 0, .14);
+  --accent-text: #4d7c0f;
+  --accent-line: #7fb20e;
+
+  --ok: #0f9488;
+  --ok-soft: rgba(15, 148, 136, .12);
+  --warn: #c27c0e;
+  --warn-soft: rgba(194, 124, 14, .13);
+  --danger: #dc3c42;
+  --danger-soft: rgba(220, 60, 66, .11);
+  --info: #1f7ae0;
+  --info-soft: rgba(31, 122, 224, .11);
+  --blue: #4a6cf0;
+  --blue-soft: rgba(74, 108, 240, .11);
+  --neutral: #55555c;
+  --neutral-soft: rgba(0, 0, 0, .06);
+
+  --ring: #4d7c0f;
+  --selection: rgba(132, 180, 0, .3);
+  --input-bg: #fff;
+  --seg-active: #fff;
+  --seg-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 0 0 1px rgba(0, 0, 0, .04);
+  --scrim: rgba(24, 24, 27, .36);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .06);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .06);
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, .16), 0 0 0 1px rgba(0, 0, 0, .06);
+  --pop-bg: #fff;
+  --stage-bg: #101012;
+  --scroll-thumb: rgba(0, 0, 0, .16);
+  --scroll-thumb-hover: rgba(0, 0, 0, .28);
+}
+
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft JhengHei UI", "Noto Sans TC", system-ui, sans-serif;
+  --mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+  --r-card: 10px;
+  --r-input: 8px;
+  --r-sm: 6px;
+  --r-pill: 999px;
+  --rail-w: 74px;
+  --topbar-h: 52px;
+  --statusbar-h: 28px;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --dur: 140ms;
+}
+
+/* Reset */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13.5px/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+dl,
+dd,
+figure {
+  margin: 0;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+img,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: .92em;
+}
+
+b,
+strong {
+  font-weight: 650;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+svg.icon {
+  flex: none;
+  display: block;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scroll-thumb-hover);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Utilities */
+
+.dim {
+  color: var(--text-2);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.row-2,
+.row-3 {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+
+.row-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.row-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.mt-6 {
+  margin-top: 6px;
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+.warn-text {
+  color: var(--warn);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+/* Boot, error and closed screens */
+
+.boot-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+  background:
+    radial-gradient(600px 360px at 50% 38%, var(--accent-soft), transparent 70%),
+    var(--bg);
+}
+
+.boot-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 800;
+  font-size: 19px;
+  letter-spacing: -.02em;
+  box-shadow: 0 0 0 6px var(--accent-soft);
+  animation: vc-breathe 1.8s var(--ease) infinite;
+}
+
+.boot-text {
+  color: var(--text-2);
+}
+
+.boot-card {
+  width: min(440px, calc(100vw - 32px));
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  box-shadow: var(--shadow-pop);
+}
+
+.boot-card .boot-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 15px;
+  animation: none;
+}
+
+.boot-card h1 {
+  font-size: 18px;
+}
+
+.boot-card p {
+  line-height: 1.6;
+}
+
+.boot-noscript {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 10px 16px;
+  border-radius: var(--r-input);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Keyframes */
+
+@keyframes vc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes vc-ping {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--tone, var(--accent)) 55%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@keyframes vc-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 12px transparent;
+  }
+}
+
+@keyframes vc-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(290%);
+  }
+}
+
+@keyframes vc-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes vc-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(.98);
+  }
+}
+
+@keyframes vc-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
