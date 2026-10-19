@@ -15,12 +15,13 @@ export function imageTake(project, shot) {
   return take && take.kind === "image" ? take : null;
 }
 
-// Picture shown for a shot on cards: the active image, else the active video's thumbnail.
+// Picture shown for a shot on cards: the active video's thumbnail (what the sequence plays and the
+// card's hover preview shows), else the active image.
 export function shotCover(project, shot) {
+  const vid = videoTake(project, shot);
+  if (vid && vid.thumb) return { take: vid, path: vid.thumb };
   const img = imageTake(project, shot);
   if (img) return { take: img, path: img.thumb || img.file };
-  const vid = videoTake(project, shot);
-  if (vid) return { take: vid, path: vid.thumb };
   return null;
 }
 
