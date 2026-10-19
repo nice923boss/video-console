@@ -42,6 +42,8 @@ const BUILT_IN = [
   cmd("edit", "edit.start", "跳到開頭", ["home"]),
   cmd("edit", "edit.end", "跳到結尾", ["end"]),
   cmd("edit", "edit.split", "在播放頭分割片段", ["s"], ["mod+b"]),
+  cmd("edit", "edit.trimStart", "向左裁剪（刪掉播放頭前面的部分）", ["q"], ["alt+["]),
+  cmd("edit", "edit.trimEnd", "向右裁剪（刪掉播放頭後面的部分）", ["w"], ["alt+]"]),
   cmd("edit", "edit.addCaption", "在播放頭新增字幕", ["alt+c"]),
   cmd("edit", "edit.zoomIn", "放大時間軸", ["=", "+"], ["mod+="]),
   cmd("edit", "edit.zoomOut", "縮小時間軸", ["-"], ["mod+-"]),

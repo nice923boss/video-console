@@ -31,7 +31,9 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 
 | Final Cut Pro 指令 | Mac 鍵 | Video Console 指令 | 「Video Console」組 | 「Final Cut Pro」組 | 說明 |
 |---|---|---|---|---|---|
-| Blade（在播放頭切開） | Command-B | 在播放頭分割片段 | S | Ctrl+B | |
+| Blade（在播放頭切開） | Command-B | 在播放頭分割片段 | S | Ctrl+B | 有選取時分割選取的軌道（上方影片、音樂、配音、字幕），沒有選取或選取鏡頭時分割畫面軌 |
+| Trim Start | Option-[ | 向左裁剪（刪掉播放頭前面的部分） | Q | Alt+[ | 作用的軌道同分割；畫面軌後面的鏡頭會往前補，其他軌只移動片段起點。Mac 上 Option+[ 可能無法觸發，見 GAPS.md 第 129 條 |
+| Trim End | Option-] | 向右裁剪（刪掉播放頭後面的部分） | W | Alt+] | 作用的軌道同分割，畫面軌後面的鏡頭會往前補，其他軌只移動片段終點；沒有選取時 Final Cut Pro 裁剪最上層的片段，Video Console 裁剪畫面軌 |
 | Add Caption | Option-C | 在播放頭新增字幕 | Alt+C | Alt+C | 新增一句 2 秒的字幕 |
 | Zoom In | Command-加號（+） | 放大時間軸 | =、+ | Ctrl+= | |
 | Zoom Out | Command-減號（-） | 縮小時間軸 | - | Ctrl+- | |

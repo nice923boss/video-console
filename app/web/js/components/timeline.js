@@ -10,10 +10,11 @@ import { clock, setTime, onClock } from "../lib/clock.js";
 import { ops, undo, deleteShots } from "../lib/actions.js";
 import { uploadFiles } from "../lib/jobs-actions.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
-import { sequenceDuration, clipIndexAt, audioLength } from "../lib/sequence.js";
+import { sequenceDuration, audioLength } from "../lib/sequence.js";
 import { generateMissing } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { toast } from "./toast.js";
+import { splitAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
 import { Button, IconButton } from "./ui.js";
 import { Icon } from "./icons.js";
 import {
@@ -36,32 +37,6 @@ const NEW_CAPTION_LEN = 2;
 
 const isBool = (v) => typeof v === "boolean";
 const validPps = (v) => typeof v === "number" && v >= PPS_MIN && v <= PPS_MAX;
-
-function splitAtPlayhead(clips) {
-  const t = clock.time;
-  const clip = clips[clipIndexAt(clips, t)];
-  if (!clip) {
-    toast("播放頭下方沒有片段", { level: "warn" });
-    return;
-  }
-  const local = t - clip.start;
-  const min = clip.source === "video" ? 0.1 : 0.2;
-  if (local < min || clip.length - local < min) {
-    toast("播放頭太靠近片段邊緣，無法在這裡分割", { level: "warn" });
-    return;
-  }
-  const { shot } = clip;
-  const trans = shot.transition || { type: "cut", duration: 0.5 };
-  const head = clip.source === "video" ? { trimOut: round(clip.in + local, 3) } : { duration: round(local, 2) };
-  const tail = clip.source === "video"
-    ? { trimIn: round(clip.in + local, 3), trimOut: shot.trimOut ?? null }
-    : { duration: round(clip.length - local, 2) };
-  const copy = { ...shot, ...tail, id: newId("s") };
-  ops([
-    { op: "shot.update", id: shot.id, patch: { ...head, transition: { ...trans, type: "cut" } } },
-    { op: "shot.add", shot: copy, index: clip.index + 1 },
-  ], { label: "分割鏡頭" });
-}
 
 function addCaption() {
   const start = round(clock.time, 3);
@@ -285,7 +260,9 @@ export function Timeline({ project, clips, hotkeys = true }) {
   useKeymap({
     "edit.delete": () => deleteSelection(selRef.current),
     "edit.deselect": () => (selRef.current ? setState({ editSel: null }) : false),
-    "edit.split": () => splitAtPlayhead(dataRef.current.clips),
+    "edit.split": () => splitAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current),
+    "edit.trimStart": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "start"),
+    "edit.trimEnd": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "end"),
     "edit.addCaption": () => addCaption(),
     "edit.zoomIn": () => zoomTo(ppsRef.current * ZOOM_STEP),
     "edit.zoomOut": () => zoomTo(ppsRef.current / ZOOM_STEP),
@@ -374,8 +351,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
       <${Button} size="sm" kind="ghost" icon="users" onClick=${openCastDialog} title="人物與 Audio8Voice 配音聲音">人物表<//>
       <${Button} size="sm" kind="ghost" icon="mic" onClick=${generateMissing}
         title="替已指定人物、還沒配音或內容已改的字幕生成配音">生成配音<//>
-      <${IconButton} icon="scissors" size=${16} title=${`在播放頭分割鏡頭${keyHint("edit.split")}`} disabled=${!clips.length}
-        onClick=${() => splitAtPlayhead(clips)} />
+      <${IconButton} icon="scissors" size=${16} title=${`在播放頭分割選取的軌道，沒有選取時分割畫面軌${keyHint("edit.split")}`}
+        disabled=${!clips.length && !(editSel && editSel.type !== "shot")} onClick=${() => splitAtPlayhead(project, clips, editSel)} />
       <${IconButton} icon="magnet" size=${16} active=${snapOn}
         title=${`${snapOn ? "磁吸對齊：開，拖曳時按住 Alt 暫停" : "磁吸對齊：關"}${keyHint("edit.snap")}`} onClick=${() => setSnapOn(!snapOn)} />
       <span class="grow"></span>
