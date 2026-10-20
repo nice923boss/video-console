@@ -109,7 +109,7 @@ export function splitAtPlayhead(project, clips, sel) {
   } else {
     ops([
       { op: "caption.update", id: item.id, patch: { end: t } },
-      { op: "caption.add", item: { ...item, id: newId("c"), start: t } },
+      { op: "caption.add", item: { ...item, id: newId("c"), start: t, shot: null } },
     ], { label: "分割字幕" });
   }
 }

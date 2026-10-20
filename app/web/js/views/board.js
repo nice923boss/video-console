@@ -94,6 +94,8 @@ function shotMenu(e, ctx, row) {
     single && { label: "編輯描述", icon: "pencil", onClick: () => focusShot(shot.id, { tab: "content" }) },
     single && { label: "在剪輯頁查看", icon: "scissors", onClick: () => focusShot(shot.id, { view: "edit" }) },
     single && { divider: true },
+    single && { label: "在前面插入空白鏡頭", icon: "plus", onClick: () => addShot({ index }) },
+    single && { label: "在後面插入空白鏡頭", icon: "plus", onClick: () => addShot({ index: index + 1 }) },
     { label: single ? "複製鏡頭" : `複製 ${ids.length} 個鏡頭`, icon: "copy", hint: keyLabel("board.duplicate"),
       onClick: () => duplicateShots(ids) },
     single && { label: "移到最前面", icon: "to-top", disabled: index === 0, onClick: () => moveShot(shot.id, 0) },
@@ -118,7 +120,7 @@ function CardStatus({ busy }) {
 
 function ShotCard({ row, ctx, drop, handlers }) {
   const { project, pid, routeColors, ratio } = ctx;
-  const { shot, index, image, video, busy, length, selected, focused } = row;
+  const { shot, index, image, video, busy, length, selected, focused, caption } = row;
   const cover = shotCover(project, shot);
   const running = busy.find((j) => j.status === "running" && j.previewRev);
   const off = shot.inSequence === false;
@@ -134,6 +136,8 @@ function ShotCard({ row, ctx, drop, handlers }) {
       onDragStart=${(e) => handlers.dragStart(e, row)} onDragEnd=${handlers.dragEnd}
       onDragOver=${(e) => handlers.dragOver(e, row)} onDragLeave=${(e) => handlers.dragLeave(e, row)}
       onDrop=${(e) => handlers.drop(e, row)}>
+    <button type="button" class="sc-insert" title="在這裡插入空白鏡頭" aria-label=${`在${shotLabel(shot, index)}前面插入空白鏡頭`}
+      onClick=${(e) => { e.stopPropagation(); addShot({ index }); }} onDblClick=${(e) => e.stopPropagation()}><i></i></button>
     <div class="sc-media">
       <${Thumb} pid=${pid} path=${running ? "" : cover ? cover.path : ""} ratio=${ratio} icon="clapper"
           src=${running ? `/api/jobs/${encodeURIComponent(running.id)}/preview?v=${running.previewRev}` : ""}
@@ -157,6 +161,8 @@ function ShotCard({ row, ctx, drop, handlers }) {
         <${IconButton} icon="more" size=${15} title="更多動作" class="sc-more" onClick=${(e) => shotMenu(e, ctx, row)} />
       </div>
       <p class=${`sc-prompt ${shot.prompt ? "" : "dim"}`}>${shot.prompt || "尚未填寫畫面描述"}</p>
+      ${caption && (caption.text || "").trim() && html`<p class="sc-caption" title=${`字幕：${caption.text}`}>
+        <${Icon} name="captions" size=${12} /><span>${caption.text}</span></p>`}
       ${(shot.camera || shot.motion) && html`<div class="sc-meta">
         ${shot.camera && html`<${Badge} tone="blue"><${Icon} name="camera" size=${11} />${shot.camera}<//>`}
         ${shot.motion && html`<span class="dim" title=${shot.motion}><${Icon} name="move" size=${11} />${shot.motion}</span>`}
@@ -218,6 +224,7 @@ export function BoardView() {
   const rows = useMemo(() => {
     if (!project) return [];
     const lengths = new Map(clips.map((c) => [c.shot.id, c.length]));
+    const captions = new Map((project.captions || []).filter((c) => c.shot).map((c) => [c.shot, c]));
     return project.shots.map((shot, index) => ({
       shot,
       index,
@@ -227,6 +234,7 @@ export function BoardView() {
       length: lengths.get(shot.id) || shot.duration || 0,
       selected: selected.includes(shot.id),
       focused: focus === shot.id,
+      caption: captions.get(shot.id) || null,
     }));
   }, [project, clips, jobs, pid, selected, focus]);
   const stats = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.id, rows.filter(f.test).length])), [rows]);
@@ -433,7 +441,8 @@ export function BoardView() {
       </div>
       <div class="board-hint dim">
         <span>拖曳卡片調整順序</span><i></i><span>Ctrl / Shift 多選</span><i></i>
-        <span>G 生圖，V 生影片，Space 預覽</span><i></i><span>把圖片或影片拖到卡片上直接使用</span>
+        <span>G 生圖，V 生影片，Space 預覽</span><i></i><span>把圖片或影片拖到卡片上直接使用</span><i></i>
+        <span>點卡片左側的 + 插入空白鏡頭</span>
       </div>
     </section>
     <${Inspector} />

@@ -85,6 +85,11 @@ export function clipIndexAt(clips, t) {
   return idx;
 }
 
+// The caption bound to a shot (text only; its timing stays the caption's own).
+export function shotCaption(project, shotId) {
+  return (project.captions || []).find((c) => c.shot === shotId) || null;
+}
+
 // Length of an audio item on the timeline.
 export function audioLength(item, media) {
   const full = media && media.duration ? Number(media.duration) : 0;

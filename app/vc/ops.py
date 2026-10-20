@@ -188,7 +188,8 @@ CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _s
                   "speaker": _opt_id,
                   "style": _opt_id,  # a project caption style; None: the project default
                   "x": _opt_float(0, 1),  # dragged to this point (fractions of the frame); None: the style decides
-                  "y": _opt_float(0, 1)}
+                  "y": _opt_float(0, 1),
+                  "shot": _opt_id}  # the storyboard shot showing this text; timing stays the caption's own
 # Sizes and distances are pixels on a 1080-high frame, as in the burnt-in ASS script.
 CAPTION_STYLE_FIELDS = {
     "name": _str(40),
@@ -407,11 +408,18 @@ def _shot_add(p: dict, op: dict, defaults: dict) -> dict | None:
 
 
 def _shot_delete(p: dict, op: dict) -> dict | None:
+    """Captions bound to the shot stay where they are, unbound; undo restores the binding."""
     i = _find(p["shots"], op.get("id"))
     if i < 0:
         return None
     shot = p["shots"].pop(i)
-    return {"op": "shot.add", "shot": shot, "index": i}
+    restores = []
+    for cap in p.get("captions") or []:
+        if cap.get("shot") == shot["id"]:
+            cap["shot"] = None
+            restores.append({"op": "caption.update", "id": cap["id"], "patch": {"shot": shot["id"]}})
+    add = {"op": "shot.add", "shot": shot, "index": i}
+    return {"op": "batch", "ops": [add, *restores]} if restores else add
 
 
 def _shot_update(p: dict, op: dict) -> dict | None:

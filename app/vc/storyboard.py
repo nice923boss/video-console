@@ -117,6 +117,7 @@ def _card(project: dict, index: int, shot: dict, clip: dict | None, picture: str
         _row("動態", shot.get("motion", "")),
         _row("運鏡", shot.get("camera", "")),
         _row("轉場", trans_text),
+        _row("字幕", next((c.get("text", "") for c in project.get("captions") or [] if c.get("shot") == shot["id"]), "")),
         _row("備註", shot.get("notes", "")),
         "</div></article>",
     ]

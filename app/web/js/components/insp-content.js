@@ -1,13 +1,14 @@
 // Shot inspector, "描述" tab: what the shot shows (prompt, framing, camera move, action), its length
 // and its label colour. The prompt and camera fields share one draft with their quick chips, so a
 // chip click never overwrites text that is still being typed.
-import { html, useState } from "../lib/h.js";
-import { useStore } from "../lib/store.js";
+import { html, useState, useRef } from "../lib/h.js";
+import { useStore, getState } from "../lib/store.js";
 import { useHotkeys } from "../lib/keys.js";
-import { updateShot, navigate } from "../lib/actions.js";
+import { updateShot, navigate, ops } from "../lib/actions.js";
 import { api } from "../lib/api.js";
-import { hasCJK } from "../lib/format.js";
-import { videoTake } from "../lib/sequence.js";
+import { setTime } from "../lib/clock.js";
+import { hasCJK, newId, round, fmtSeconds } from "../lib/format.js";
+import { videoTake, buildSequence, shotCaption } from "../lib/sequence.js";
 import { Field, TextArea, TextInput, useDraft, DraftText, NumberInput, Section, Chip, Button } from "./ui.js";
 import { openMenu, openModal, Modal } from "./overlay.js";
 import { toast, toastError } from "./toast.js";
@@ -115,6 +116,53 @@ function EnhanceButton({ text, kind, onApply }) {
     onClick=${open}>潤飾<//>`;
 }
 
+// The caption bound to this shot. Typing the first text adds a caption over the shot's clip and binds
+// it; clearing the text removes it. Only the text is tied to the shot: timing stays the caption's own.
+function CaptionSection({ project, shot }) {
+  const cap = shotCaption(project, shot.id);
+  const clip = buildSequence(project).find((c) => c.shot.id === shot.id) || null;
+  const created = useRef(null); // id of a caption added here that the project does not show yet
+  const queue = useRef(Promise.resolve());
+  const commit = (v) => {
+    queue.current = queue.current.then(async () => {
+      const cur = shotCaption(getState().project, shot.id);
+      if (cur) created.current = null;
+      const id = cur ? cur.id : created.current;
+      if (id) {
+        if (!v.trim()) {
+          created.current = null;
+          await ops([{ op: "caption.delete", id }], { label: "刪除字幕" });
+        } else {
+          await ops([{ op: "caption.update", id, patch: { text: v } }], { label: "修改字幕", coalesce: `caption-text:${id}` });
+        }
+        return;
+      }
+      const seq = buildSequence(getState().project).find((c) => c.shot.id === shot.id);
+      if (!v.trim() || !seq) return;
+      const item = { id: newId("c"), start: seq.start, end: round(seq.start + seq.length, 3), text: v, position: "bottom", shot: shot.id };
+      created.current = item.id;
+      if (!(await ops([{ op: "caption.add", item }], { label: "新增字幕" }))) created.current = null;
+    });
+  };
+  const hint = cap
+    ? `字幕在 ${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}；這裡只同步文字，時間與長度到剪輯頁調整`
+    : clip ? "填寫後會在這個鏡頭的位置新增一句字幕並綁定；清空就移除" : "這個鏡頭不在輸出序列，放入序列後才能加字幕";
+  return html`<${Section} title="字幕" icon="captions">
+    <${Field} hint=${hint}>
+      <${DraftText} multiline rows=${2} value=${cap ? cap.text || "" : ""} maxlength="500" disabled=${!cap && !clip}
+        placeholder="這個鏡頭要說的話（選填）" onCommit=${commit} />
+    <//>
+    ${cap && html`<div class="row">
+      <${Button} size="sm" icon="scissors" onClick=${() => {
+        navigate("edit", { editSel: { type: "caption", id: cap.id } });
+        setTime(cap.start);
+      }}>在剪輯頁查看<//>
+      <${Button} size="sm" kind="ghost" icon="link" title="字幕留在時間軸上，只是不再顯示在這個分鏡"
+        onClick=${() => ops([{ op: "caption.update", id: cap.id, patch: { shot: null } }], { label: "解除綁定鏡頭" })}>解除綁定<//>
+    </div>`}
+  <//>`;
+}
+
 export function ContentTab({ project, shot }) {
   const presets = useStore((s) => s.presets);
   const sizes = presets.shotSizes || NONE;
@@ -168,6 +216,7 @@ export function ContentTab({ project, shot }) {
         </div>
       <//>
     <//>
+    <${CaptionSection} project=${project} shot=${shot} />
     <${Section} title="運鏡與動作" icon="camera">
       <${Field} label="運鏡" hint="生影片時會加進提示詞；做運鏡動畫時也會照這裡決定推拉方向">
         <div class="chips">

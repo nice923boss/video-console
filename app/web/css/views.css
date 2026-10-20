@@ -178,10 +178,10 @@
 .board-scroll, .lib-scroll { position: relative; flex: 1; min-height: 0; padding: 20px 20px 28px; overflow-y: auto; transition: background var(--dur) var(--ease); }
 .board-scroll.drop-files, .lib-scroll.drop-files { outline: 2px dashed var(--accent-line); outline-offset: -8px; background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
 .board-empty { min-height: 100%; }
-.board-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); align-items: start; gap: 14px; }
-.board-grid.density-sm { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.board-grid { --board-gap: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); align-items: start; gap: var(--board-gap); }
+.board-grid.density-sm { --board-gap: 10px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 .board-grid.density-md { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
-.board-grid.density-lg { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+.board-grid.density-lg { --board-gap: 18px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 
 .shot-card {
   position: relative;
@@ -206,6 +206,14 @@
 .shot-card.drop-before::before { left: -9px; }
 .shot-card.drop-after::before { right: -9px; }
 .shot-card.drop-files { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Insert-a-blank-shot target in the gap before each card. */
+.sc-insert { position: absolute; top: 0; bottom: 0; left: calc(-1 * var(--board-gap) - 1px); z-index: 6; display: grid; place-items: center; width: var(--board-gap); padding: 0; border: 0; background: none; cursor: copy; opacity: 0; transition: opacity var(--dur) var(--ease); }
+.sc-insert::before { content: ""; position: absolute; top: 8px; bottom: 8px; left: 50%; width: 2px; border-radius: var(--r-pill); background: var(--accent); transform: translateX(-50%); }
+.sc-insert > i { position: relative; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sc-insert > i::before, .sc-insert > i::after { content: ""; position: absolute; width: 10px; height: 2px; border-radius: 1px; background: currentColor; }
+.sc-insert > i::after { transform: rotate(90deg); }
+.shot-card:hover > .sc-insert { opacity: .35; }
+.shot-card > .sc-insert:is(:hover, :focus-visible) { opacity: 1; outline: none; }
 .sc-media { position: relative; overflow: hidden; border-radius: calc(var(--r-card) - 1px) calc(var(--r-card) - 1px) 0 0; }
 .sc-media > .thumb { border-radius: inherit; }
 .sc-num { position: absolute; top: 8px; left: 8px; z-index: 2; min-width: 22px; height: 20px; padding: 0 6px; border-radius: var(--r-sm); font-size: 11px; font-weight: 700; line-height: 20px; text-align: center; }
@@ -263,6 +271,9 @@
 .sc-more { width: 26px; height: 26px; margin: -4px -5px -4px 0; opacity: 0; transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease); }
 .sc-prompt { display: -webkit-box; min-height: 3em; overflow: hidden; color: var(--text-2); font-size: 12px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 .sc-prompt.dim { color: var(--muted); font-style: italic; }
+.sc-caption { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--blue); font-size: 11.5px; }
+.sc-caption > svg { flex: none; }
+.sc-caption > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-meta { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; font-size: 11px; white-space: nowrap; }
 .sc-meta > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .density-sm .sc-body { gap: 4px; padding: 8px 10px 10px; }

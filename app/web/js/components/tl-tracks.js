@@ -331,10 +331,13 @@ export function CaptionTrack({ project, ctx, editSel }) {
     const cls = ["tl-cap", sel && "is-selected", drag && drag.id === cap.id && "is-dragging", voice === "stale" && "is-stale"]
       .filter(Boolean).join(" ");
     const who = member ? `${member.name || "未命名"}，${VOICE_STATES[voice].label}\n` : "";
+    const bound = cap.shot ? project.shots.findIndex((s) => s.id === cap.shot) : -1;
+    const link = bound >= 0 ? `\n綁定 ${shotLabel(project.shots[bound], bound)}` : "";
     return html`<div key=${cap.id} class=${cls}
       style=${`left:${cur.start * pps}px;width:${Math.max(4, (cur.end - cur.start) * pps)}px`}
-      title=${`${who}${text}\n${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}，雙擊跳到開頭`}
+      title=${`${who}${text}\n${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}，雙擊跳到開頭${link}`}
       onPointerDown=${(e) => begin(e, cap, "move")} onDblClick=${() => setTime(cap.start)}>
+      ${bound >= 0 && html`<${Icon} name="link" size=${11} class="tl-cap-link" />`}
       ${member && html`<b class="tl-cap-who">${member.name || "未命名"}</b>`}
       <span class="tl-cap-text">${text}</span>
       <${Handles} onDown=${(e, side) => begin(e, cap, side)} />

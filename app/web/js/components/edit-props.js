@@ -4,8 +4,8 @@ import { html } from "../lib/h.js";
 import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
-import { clamp, fmtSeconds, round } from "../lib/format.js";
-import { audioLength, overlayHeight, fitFrame } from "../lib/sequence.js";
+import { clamp, fmtSeconds, round, shotLabel } from "../lib/format.js";
+import { audioLength, overlayHeight, fitFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
 import { VOICE_STATES, voiceState, voiceClip, generateVoices } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openCaptionStyleDialog } from "../dialogs/caption-style-dialog.js";
@@ -255,6 +255,25 @@ function VoiceField({ project, cap }) {
   <//>`;
 }
 
+function ShotField({ project, cap }) {
+  const shots = project.shots || [];
+  const clips = buildSequence(project);
+  const under = clips[clipIndexAt(clips, cap.start)];
+  const options = [
+    { value: null, label: "不綁定" },
+    ...shots.map((s, i) => ({ value: s.id, label: `${shotLabel(s, i)}${under && under.shot.id === s.id ? "（字幕開頭所在）" : ""}` })),
+  ];
+  const bind = (shot) => {
+    const others = shot ? (project.captions || []).filter((c) => c.shot === shot && c.id !== cap.id) : [];
+    ops([{ op: "caption.update", id: cap.id, patch: { shot } },
+      ...others.map((c) => ({ op: "caption.update", id: c.id, patch: { shot: null } }))],
+    { label: shot ? "綁定鏡頭" : "解除綁定鏡頭" });
+  };
+  return html`<${Field} label="對應鏡頭" hint="綁定後分鏡卡會顯示這句字幕，兩邊改文字會同步；時間與長度不受影響，一個鏡頭只對應一句">
+    <${Select} value=${cap.shot || null} options=${options} title="這句字幕顯示在哪個分鏡" onChange=${bind} />
+  <//>`;
+}
+
 function StyleField({ project, cap }) {
   const legacy = useStore((s) => legacySize(s.settings));
   const def = styleById(project, defaultStyleId(project));
@@ -319,6 +338,7 @@ function CaptionPanel({ project, cap }) {
           onCommit=${(v) => updateCaption(cap.id, { text: v }, "修改字幕", `caption-text:${cap.id}`)} />
       <//>
       <${VoiceField} project=${project} cap=${cap} />
+      <${ShotField} project=${project} cap=${cap} />
       <div class="row-2">
         <${Field} label="開始">
           <${Seconds} value=${cap.start} max=${cap.end - MIN_LEN} onCommit=${(v) => updateCaption(cap.id, { start: v }, "調整字幕時間")} />
