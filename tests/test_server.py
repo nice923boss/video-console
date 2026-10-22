@@ -212,9 +212,21 @@ def test_script_parse_then_apply(client: Client, project: dict) -> None:
     applied = client.json("POST", f"/api/projects/{pid}/script/apply", {"shots": parsed["shots"]})
     assert applied["added"] == 3 and applied["captions"] == 1
     saved = client.json("GET", f"/api/projects/{pid}")["project"]
-    assert [s["id"] for s in saved["shots"][1:]] == applied["shotIds"]
+    # the untouched 鏡頭 1 a new project starts with gives way to the script
+    assert [s["id"] for s in saved["shots"]] == applied["shotIds"]
     assert [c["text"] for c in saved["captions"]] == ["爸爸回來了！"]
     client.json("POST", f"/api/projects/{pid}/script/apply", {"shots": []}, status=400)
+    client.json("POST", f"/api/projects/{pid}/undo")
+    assert [s["name"] for s in client.json("GET", f"/api/projects/{pid}")["project"]["shots"]] == ["鏡頭 1"]
+
+
+def test_script_apply_keeps_a_shot_the_user_wrote(client: Client, project: dict) -> None:
+    pid, sid = project["id"], project["shots"][0]["id"]
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [{"op": "shot.update", "id": sid, "patch": {"prompt": "日出"}}]})
+    parsed = client.json("POST", "/api/script/parse", {"text": SCRIPT})
+    applied = client.json("POST", f"/api/projects/{pid}/script/apply", {"shots": parsed["shots"]})
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    assert [s["id"] for s in saved["shots"]] == [sid, *applied["shotIds"]]
 
 
 def test_word_script_is_read_as_text(client: Client) -> None:

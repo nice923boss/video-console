@@ -25,6 +25,7 @@ _SUBDIRS = ("media/takes", "media/import", "media/thumbs", "media/cache", "expor
 UNDO_LIMIT = 200
 COALESCE_SEC = 2.5
 
+BLANK_SHOT_NAME = "鏡頭 1"
 STARTER_SHOTS = [
     ("清晨海港", "清晨的海邊小鎮，薄霧籠罩，金色陽光灑在濕潤的石板路上，電影感構圖，寬景", "鏡頭緩慢推近，海鷗從畫面上方飛過"),
     ("黃色雨衣", "穿黃色雨衣的小女孩站在白色燈塔前，回頭微笑，柔和逆光，淺景深", "她轉身朝燈塔跑去，雨衣隨風擺動"),
@@ -187,7 +188,7 @@ class ProjectStore:
                 settings[key] = conv(settings_patch[key])
         settings["width"], settings["height"] = opsmod.snap8(settings["width"]), opsmod.snap8(settings["height"])
         shots = []
-        seeds = (STARTER_SHOTS if starter else [("鏡頭 1", "", "")])
+        seeds = (STARTER_SHOTS if starter else [(BLANK_SHOT_NAME, "", "")])
         for i, (shot_name, prompt, motion) in enumerate(seeds):
             shot = opsmod.blank_shot(new_id("s"), defaults)
             shot.update({"name": shot_name, "prompt": prompt, "motion": motion, "seed": random_seed()})

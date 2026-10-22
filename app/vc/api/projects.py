@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from ..ops import apply_ops
 from ..script import MAX_SHOTS, docx_to_text, normalize_shot, parse_script
 from ..sequence import build_sequence
+from ..store import BLANK_SHOT_NAME
 from ..unpack import unpack_package
 from ..server import Request, Router
 from ..util import AppError, new_id, random_seed
@@ -21,6 +22,21 @@ MAX_DOCX = 50 * 1024 ** 2
 
 def _short(value: Any, limit: int) -> str | None:
     return str(value)[:limit] if value else None
+
+
+def untouched_blank_shot(project: dict) -> str | None:
+    """Id of the empty 鏡頭 1 a new project starts with, while it is still the only shot and nobody has used it."""
+    if len(project["shots"]) != 1 or project.get("captions"):
+        return None
+    shot = project["shots"][0]
+    if shot.get("name") != BLANK_SHOT_NAME:
+        return None
+    if any(shot.get(k) for k in ("prompt", "imagePrompt", "motion", "camera", "notes", "activeImage", "activeVideo",
+                                  "ref", "extraRefs")):
+        return None
+    if any(t.get("shot") == shot["id"] for t in project["takes"].values()):
+        return None
+    return shot["id"]
 
 
 def script_ops(project: dict, defaults: dict, shots: list[dict], index: int, captions: bool) -> list[dict]:
@@ -193,12 +209,18 @@ def register(router: Router, app: App) -> None:
         if not shots:
             raise AppError("沒有可以匯入的鏡頭")
         project = store.get(pid)
+        # the script replaces an untouched starting shot instead of leaving it blank in front; one undo brings it back
+        lead: list[dict] = []
+        blank = untouched_blank_shot(project)
+        if blank:
+            lead = [{"op": "shot.delete", "id": blank}]
+            project = {**project, "shots": []}
         count = len(project["shots"])
         index = data.get("index")
         index = count if not isinstance(index, int) or isinstance(index, bool) else max(0, min(count, index))
-        ops = script_ops(project, app.settings.section("defaults"), shots, index,
-                         captions=data.get("captions", True) is not False)
+        ops = lead + script_ops(project, app.settings.section("defaults"), shots, index,
+                                captions=data.get("captions", True) is not False)
         result = store.apply(pid, ops, label="匯入劇本")
         shot_ids = [op["shot"]["id"] for op in ops if op["op"] == "shot.add"]
-        return {"rev": result["rev"], "added": len(shot_ids), "captions": len(ops) - len(shot_ids),
+        return {"rev": result["rev"], "added": len(shot_ids), "captions": sum(op["op"] == "caption.add" for op in ops),
                 "shotIds": shot_ids}
