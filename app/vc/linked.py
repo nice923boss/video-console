@@ -24,7 +24,7 @@ def _clip_at(clips: list[dict], t: float) -> int:
 
 def _starts(project: dict) -> dict[tuple[str, str], float]:
     out: dict[tuple[str, str], float] = {}
-    for key in ("captions", "audio", "overlays"):
+    for key in ("captions", "audio", "overlays", "adjustments"):
         for item in project.get(key) or []:
             out[(key, item["id"])] = float(item.get("start") or 0.0)
     return out
@@ -95,7 +95,7 @@ def follow_ops(before: dict, after: dict) -> list[dict]:
         ops.append({"op": "caption.update", "id": cap["id"],
                     "patch": {"start": new_start, "end": round(new_start + length, 3)}})
 
-    for key, name in (("audio", "audio"), ("overlays", "overlay")):
+    for key, name in (("audio", "audio"), ("overlays", "overlay"), ("adjustments", "adjust")):
         for item in after.get(key) or []:
             start = float(item.get("start") or 0.0)
             if old_starts.get((key, item["id"])) != start:

@@ -1,6 +1,6 @@
-// Edit timeline: ruler, then lanes from the top layer down (captions, picture-in-picture tracks,
-// the picture), the picture clips' own sound when any has some, then voice-overs and one lane per soundtrack item. A higher lane covers the ones below
-// it, in the preview and in the export. Zoom (px per second) and snapping are per-viewer preferences;
+// Edit timeline: ruler, then lanes from the top layer down (captions, adjustment layers, picture-in-picture
+// tracks, the picture), the picture clips' own sound when any has some, then voice-overs and one lane per soundtrack item. A higher lane covers the ones below
+// it, in the preview and in the export; an adjustment layer grades every picture lane below it. Zoom (px per second) and snapping are per-viewer preferences;
 // the playhead follows the shared playback clock directly, without re-rendering.
 import { html, useState, useEffect, useRef, useLayoutEffect } from "../lib/h.js";
 import { useStore, setState } from "../lib/store.js";
@@ -21,6 +21,7 @@ import {
   VideoTrack, CaptionTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H,
   CAPTION_H, AUDIO_H, PIP_H, ADD_H,
 } from "./tl-tracks.js";
+import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
 
 const LABEL_W = 176;
 const RULER_H = 26;
@@ -54,6 +55,7 @@ function deleteSelection(sel) {
   else if (sel.type === "caption") ops([{ op: "caption.delete", id: sel.id }], { label: "刪除字幕" });
   else if (sel.type === "audio") ops([{ op: "audio.delete", id: sel.id }], { label: "移除音軌" });
   else if (sel.type === "overlay") ops([{ op: "overlay.delete", id: sel.id }], { label: "移除片段" });
+  else if (sel.type === "adjust") ops([{ op: "adjust.delete", id: sel.id }], { label: "刪除調整圖層" });
   else return false;
   return true;
 }
@@ -133,6 +135,7 @@ function contentSpan(project, clips) {
     end = Math.max(end, Number(a.start || 0) + audioLength(a, (project.media || {})[a.mediaId]));
   }
   for (const o of project.overlays || []) end = Math.max(end, Number(o.start || 0) + Number(o.length || 0));
+  for (const j of project.adjustments || []) end = Math.max(end, Number(j.start || 0) + Number(j.length || 0));
   return Math.max(1, end);
 }
 
@@ -143,6 +146,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const [linkOn, setLinkOn] = usePref(LINK_PREF, true, isBool);
   const [viewW, setViewW] = useState(0);
   const [drop, setDrop] = useState(null);
+  const [adjGhost, setAdjGhost] = useState(null);
   const scrollRef = useRef(null);
   const headRef = useRef(null);
   const fileRef = useRef(null);
@@ -254,6 +258,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
       pts.push(start, start + audioLength(a, (d.project.media || {})[a.mediaId]));
     }
     for (const o of d.project.overlays || []) if (o.id !== exclude.overlay) pts.push(o.start, o.start + o.length);
+    for (const j of d.project.adjustments || []) if (j.id !== exclude.adjust) pts.push(j.start, j.start + j.length);
     return makeSnap(pts, ppsRef.current);
   };
 
@@ -330,6 +335,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const tracks = project.tracks || {};
   const layers = project.layers || [];
   const overlays = project.overlays || [];
+  const adjustments = project.adjustments || [];
   const audio = project.audio || [];
   const music = audio.filter((a) => !a.captionId);
   const voiceRows = packVoiceRows(project, audio.filter((a) => a.captionId));
@@ -379,6 +385,13 @@ export function Timeline({ project, clips, hotkeys = true }) {
             () => setTrack("captionsHidden", tracks.captionsHidden ? "顯示字幕軌" : "隱藏字幕軌")))}
           ${lane("tl-lane-caption", html`<${CaptionTrack} project=${project} ctx=${ctx} editSel=${editSel} />`)}`,
           { hidden: !!tracks.captionsHidden })}
+        ${(adjustments.length > 0 || adjGhost) && row("adjust", ADJUST_H, html`
+          ${label("palette", "調整圖層", eyeBtn(!!tracks.adjustHidden,
+            () => setTrack("adjustHidden", tracks.adjustHidden ? "顯示調整圖層軌" : "隱藏調整圖層軌")))}
+          ${lane("tl-lane-adjust", html`<${AdjustTrack} project=${project} ctx=${ctx} editSel=${editSel} />
+            ${adjGhost && html`<div class="tl-adj-ghost" style=${`left:${adjGhost.start * pps}px;width:${Math.max(4, adjGhost.length * pps)}px`}>
+              <${Icon} name="plus" size=${12} /><span>放開加入調整圖層</span></div>`}`)}`,
+          { hidden: !!tracks.adjustHidden })}
         ${row("add-layer", ADD_H, html`
           <div class="tl-label"><button type="button" class="tl-add-track" title="在最上層新增一條畫面軌" onClick=${addLayer}>
             <${Icon} name="plus" size=${14} /><span>新增軌道</span></button></div>
@@ -401,6 +414,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
         })}
         ${row("video", VIDEO_H, html`
           ${label("film", "畫面", html`
+            <${AdjustAddButton} clips=${clips} pps=${pps} onGhost=${setAdjGhost} />
             ${eyeBtn(!!tracks.videoHidden, () => setTrack("videoHidden", tracks.videoHidden ? "顯示畫面軌" : "隱藏畫面軌"))}
             ${muteBtn(!!tracks.videoMuted, () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲")}`)}
           ${lane("tl-lane-video", html`<${VideoTrack} project=${project} clips=${clips} ctx=${ctx} editSel=${editSel} focus=${focus} />

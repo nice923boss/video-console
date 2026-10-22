@@ -1,5 +1,5 @@
-// Right-hand panel of the edit view. A selected soundtrack item, caption or picture-in-picture clip
-// gets its own property panel; anything else falls back to the shot inspector.
+// Right-hand panel of the edit view. A selected soundtrack item, caption, picture-in-picture clip or
+// adjustment layer gets its own property panel; anything else falls back to the shot inspector.
 import { html } from "../lib/h.js";
 import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
@@ -15,6 +15,7 @@ import {
 import { Button, IconButton, Field, DraftText, NumberInput, Slider, Segmented, Toggle, Select, Badge } from "./ui.js";
 import { Icon } from "./icons.js";
 import { Inspector } from "./inspector.js";
+import { GradePanel } from "./grade-panel.js";
 
 const MAX_TIME = 36000;
 const MIN_LEN = 0.1;
@@ -378,6 +379,10 @@ export function EditProps({ project, sel }) {
   if (sel && sel.type === "overlay") {
     const item = (project.overlays || []).find((o) => o.id === sel.id);
     if (item) return html`<aside class="inspector" aria-label="片段屬性"><${OverlayPanel} project=${project} item=${item} /></aside>`;
+  }
+  if (sel && sel.type === "adjust") {
+    const item = (project.adjustments || []).find((j) => j.id === sel.id);
+    if (item) return html`<aside class="inspector" aria-label="調整圖層屬性"><${GradePanel} project=${project} item=${item} /></aside>`;
   }
   return html`<${Inspector} />`;
 }

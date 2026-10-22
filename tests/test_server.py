@@ -420,6 +420,42 @@ def test_upload_onto_a_track_becomes_picture_in_picture_and_exports(app: App, cl
 
 
 @needs_ffmpeg
+def test_adjustment_layer_grades_only_its_span_in_export(app: App, client: Client, project: dict) -> None:
+    pid, sid = project["id"], project["shots"][0]["id"]
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [
+        {"op": "shot.update", "id": sid, "patch": {"duration": 2.0}},
+        {"op": "adjust.add", "item": {"id": "adj_warm00000", "start": 1.0, "length": 1.0, "hidden": False,
+                                      "grade": {"temp": 10000}}},
+    ]})
+    job = client.json("POST", f"/api/projects/{pid}/upload?name=gray.png&target=shot&shot={sid}",
+                      png_bytes(rgb=(128, 128, 128)))["job"]
+    assert client.wait_job(job["id"])["status"] == "done"
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    w, h = int(saved["settings"]["width"]), int(saved["settings"]["height"])
+
+    def center(t: float) -> tuple[int, ...]:
+        job = client.json("POST", "/api/jobs", {"kind": "export", "pid": pid, "payload": {}})["job"]
+        done = client.wait_job(job["id"])
+        assert done["status"] == "done", done["error"]
+        video = app.store.project_dir(pid) / done["result"]["file"]
+        proc = subprocess.run([find_ffmpeg(), "-v", "error", "-ss", f"{t}", "-i", str(video), "-frames:v", "1",
+                               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True)
+        i = (h // 2 * w + w // 2) * 3
+        return tuple(proc.stdout[i:i + 3])
+
+    before, during = center(0.5), center(1.5)
+    assert max(before) - min(before) < 12  # still gray before the layer starts
+    assert during[0] - during[2] > 60  # warm while it runs
+    cache = app.store.project_dir(pid) / "media" / "cache"
+    assert not [f for f in cache.iterdir() if f.suffix == ".cube"]
+
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [
+        {"op": "project.update", "patch": {"tracks": {"adjustHidden": True}}}]})
+    graded_off = center(1.5)
+    assert max(graded_off) - min(graded_off) < 12
+
+
+@needs_ffmpeg
 def test_video_picture_in_picture_keeps_its_sound(app: App, client: Client, project: dict, tmp_path: Path) -> None:
     pid, sid = project["id"], project["shots"][0]["id"]
     clip = tmp_path / "pip.mp4"

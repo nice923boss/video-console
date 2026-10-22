@@ -102,7 +102,7 @@ export function makeSnap(points, pps) {
 }
 
 // Snap whichever edge of [start, start + len] lands closer to a point.
-function snapRange(start, len, snap, ev) {
+export function snapRange(start, len, snap, ev) {
   const a = snap(start, ev) - start;
   const b = snap(start + len, ev) - (start + len);
   if (!a) return start + b;
@@ -115,12 +115,12 @@ const laneTime = (e, pps) => {
   return lane ? Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / pps) : 0;
 };
 
-function Tip({ tip, pps }) {
+export function Tip({ tip, pps }) {
   if (!tip) return null;
   return html`<div class="tl-drag-tip mono" style=${`left:${tip.t * pps}px`}>${tip.text}</div>`;
 }
 
-function Handles({ onDown }) {
+export function Handles({ onDown }) {
   return html`<i class="tl-handle is-left" onPointerDown=${(e) => onDown(e, "l")}></i>
     <i class="tl-handle is-right" onPointerDown=${(e) => onDown(e, "r")}></i>`;
 }

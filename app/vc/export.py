@@ -18,6 +18,7 @@ from typing import Callable
 from .captions import ass_text as _ass_text
 from .captions import ass_time as _ass_time
 from .captions import caption_ass
+from .grade import build_cube, clean_grade, is_neutral
 from .media import Media
 from .sequence import XFADE_NAMES, build_sequence, total_duration
 from .util import AppError, safe_filename
@@ -192,8 +193,27 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
     return label, sounds
 
 
-def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict, ass_rel: str | None = None) -> dict:
-    """Build ffmpeg inputs and the filtergraph text for already prepared clips."""
+def active_adjustments(project: dict, total: float) -> list[tuple[float, float, dict]]:
+    """(start, end, grade) of each adjustment layer that changes the picture, in timeline order."""
+    if (project.get("tracks") or {}).get("adjustHidden"):
+        return []
+    out = []
+    for item in project.get("adjustments") or []:
+        start = float(item.get("start") or 0.0)
+        end = min(start + float(item.get("length") or 0.0), total)
+        grade = clean_grade(item.get("grade"))
+        if item.get("hidden") or end - start <= 0.01 or is_neutral(grade):
+            continue
+        out.append((start, end, grade))
+    return sorted(out, key=lambda span: span[0])
+
+
+def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict, ass_rel: str | None = None,
+                luts: list[tuple[float, float, str]] | None = None) -> dict:
+    """Build ffmpeg inputs and the filtergraph text for already prepared clips.
+
+    luts holds (start, end, cube file) per adjustment layer; each grades the picture with its upper
+    tracks during its span, before captions are burnt in."""
     total = total_duration(clips)
     w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), int(project["settings"]["fps"])
     inputs: list[list[str]] = []
@@ -246,6 +266,9 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         graph.append(f"[{joined}]drawbox=c=black:t=fill[vhide]")
         joined = "vhide"
     joined, pip_sounds = _plan_overlays(project, project_dir, joined, total, opts, inputs, graph)
+    for i, (start, end, rel) in enumerate(luts or []):
+        graph.append(f"[{joined}]lut3d=file={rel}:interp=tetrahedral:enable='between(t,{start:.3f},{end:.3f})'[adj{i}]")
+        joined = f"adj{i}"
 
     post: list[str] = []
     if ass_rel:
@@ -374,7 +397,13 @@ def render(
     ass = build_ass(project, clips, opts, int(project["settings"]["width"]), int(project["settings"]["height"]))
     if ass:
         ass_path.write_text(ass, encoding="utf-8")
-    plan = plan_export(project, project_dir, clips, opts, f"media/cache/{ass_path.name}" if ass else None)
+    lut_paths: list[Path] = []
+    luts: list[tuple[float, float, str]] = []
+    for i, (start, end, grade) in enumerate(active_adjustments(project, total_duration(clips))):
+        lut_paths.append(cache / f"{stamp}-adj{i}.cube")
+        lut_paths[-1].write_text(build_cube(grade), encoding="utf-8")
+        luts.append((start, end, f"media/cache/{lut_paths[-1].name}"))
+    plan = plan_export(project, project_dir, clips, opts, f"media/cache/{ass_path.name}" if ass else None, luts)
     graph_path.write_text(plan["graph"], encoding="utf-8")
 
     def args_for(encoder: str) -> list[str]:
@@ -400,7 +429,7 @@ def render(
             media.run_progress(args_for(encoder), plan["total"], on_progress, cancelled, cwd=project_dir)
         work_path.replace(out_path)
     finally:
-        for tmp in (ass_path, graph_path, work_path):
+        for tmp in (ass_path, graph_path, work_path, *lut_paths):
             tmp.unlink(missing_ok=True)
     log.info("Exported %s in %.1fs with %s", out_path.name, time.time() - started, encoder)
     return {

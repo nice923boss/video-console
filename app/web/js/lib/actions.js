@@ -23,7 +23,7 @@ export function pruneSelection(s, project) {
   const focus = s.focus && ids.has(s.focus) ? s.focus : null;
   let editSel = s.editSel;
   if (editSel) {
-    const list = { shot: project.shots, audio: project.audio, overlay: project.overlays }[editSel.type] || project.captions;
+    const list = { shot: project.shots, audio: project.audio, overlay: project.overlays, adjust: project.adjustments }[editSel.type] || project.captions;
     if (!(list || []).some((x) => x.id === editSel.id)) editSel = null;
   }
   return { selected: selected.length === s.selected.length ? s.selected : selected, focus, editSel };

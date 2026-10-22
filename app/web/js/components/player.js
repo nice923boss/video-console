@@ -148,6 +148,7 @@ function step(seconds) {
 
 export function Player({ project, clips, hotkeys = true }) {
   const legacy = useStore((s) => legacySize(s.settings));
+  const gradeDraft = useStore((s) => s.gradeDraft);
   const [view, setView] = usePref("vc.player.view", DEFAULT_VIEW, validView);
   const [volume, setVolume] = usePref("vc.player.volume", DEFAULT_VOLUME, validVolume);
   const [loop, setLoop] = usePref("vc.player.loop", false, isBool);
@@ -199,6 +200,10 @@ export function Player({ project, clips, hotkeys = true }) {
   useEffect(() => {
     engineRef.current.setVolume(volume.level, volume.muted);
   }, [volume]);
+
+  useEffect(() => {
+    engineRef.current.setGradeDraft(gradeDraft);
+  }, [gradeDraft]);
 
   const fps = Math.max(1, Number(project.settings.fps) || 24);
   const toggleFull = () => {

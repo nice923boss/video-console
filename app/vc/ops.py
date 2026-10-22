@@ -10,6 +10,7 @@ import copy
 import re
 from typing import Any, Callable
 
+from .grade import clean_grade
 from .linked import follow_ops
 from .util import AppError
 
@@ -241,7 +242,7 @@ SETTINGS_FIELDS = {
 STYLE_FIELDS = {"prompt": _str(4000), "negative": _str(4000), "preset": _str(40)}
 # Switches on the fixed timeline rows; picture-in-picture tracks carry their own in project["layers"].
 TRACK_FIELDS = {"videoHidden": _bool, "videoMuted": _bool, "captionsHidden": _bool, "voiceMuted": _bool,
-                "musicMuted": _bool}
+                "musicMuted": _bool, "adjustHidden": _bool}
 LAYER_FIELDS = {"name": _str(40), "hidden": _bool, "muted": _bool}
 OVERLAY_FIELDS = {
     "name": _str(120),
@@ -254,6 +255,14 @@ OVERLAY_FIELDS = {
     "w": _float(0.05, 1),  # width as a fraction of the frame width; height follows the file's aspect
     "opacity": _float(0, 1),
     "volume": _float(0, 4),
+}
+# Adjustment layers: a span of the timeline whose grade applies to every picture underneath it.
+ADJUST_FIELDS = {
+    "name": _str(40),
+    "start": _float(0, 36000),
+    "length": _float(0.1, 36000),
+    "hidden": _bool,
+    "grade": clean_grade,
 }
 
 
@@ -561,7 +570,7 @@ def _list_delete(key: str) -> Callable[[dict, dict], dict | None]:
 
 
 _SINGULAR = {"audio": "audio", "captions": "caption", "cast": "cast", "overlays": "overlay",
-             "captionStyles": "captionStyle"}
+             "captionStyles": "captionStyle", "adjustments": "adjust"}
 
 
 def _caption_style_add(p: dict, op: dict) -> dict | None:
@@ -718,6 +727,9 @@ HANDLERS: dict[str, Callable[..., dict | None]] = {
     "overlay.add": _list_add("overlays", OVERLAY_FIELDS),
     "overlay.update": _list_update("overlays", OVERLAY_FIELDS),
     "overlay.delete": _list_delete("overlays"),
+    "adjust.add": _list_add("adjustments", ADJUST_FIELDS),
+    "adjust.update": _list_update("adjustments", ADJUST_FIELDS),
+    "adjust.delete": _list_delete("adjustments"),
 }
 
 

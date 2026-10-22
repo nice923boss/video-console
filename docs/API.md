@@ -54,6 +54,8 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot}`，時間是序列上的秒數 |
 | `audio` | 音樂、音效、配音 |
 | `overlays`、`layers` | 上層畫面與軌道 |
+| `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
+| `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用） |
 | `media` | 素材庫 |
 
 鏡頭常用欄位：
@@ -80,6 +82,19 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `#4fd18b` | 綠色 |
 | `#6ea8ff` | 藍色 |
 | `#b28cff` | 紫色 |
+
+調整圖層的 `grade`（缺的欄位用中性值補上，超出範圍會被夾住）：
+
+| 欄位 | 範圍 | 中性值 | 說明 |
+|---|---|---|---|
+| `global`、`shadows`、`midtones`、`highlights` | 物件 | | 四個色輪，各有下面五個欄位 |
+| 　`r`、`g`、`b` | -1~1 | 0 | 色輪色點的顏色偏移 |
+| 　`sat` | 0~2 | 1 | 飽和度 |
+| 　`bright` | -1~1 | 0 | 亮度 |
+| `temp` | 2500~10000 | 5000 | 色溫，越高越暖 |
+| `tint` | -100~100 | 0 | 色調，正值偏洋紅、負值偏綠 |
+| `hue` | -180~180 | 0 | 色相旋轉（度） |
+| `mix` | 0~1 | 1 | 混合比例 |
 
 鏡頭在序列上的位置：依 `shots` 順序把 `inSequence` 的鏡頭接起來，每段長度是 `trimOut - trimIn`（影片）或 `duration`（圖片），有轉場時與下一段重疊轉場長度。
 
@@ -108,6 +123,9 @@ POST /api/projects/{pid}/ops
 | `caption.update` | `{"id": "c_...", "patch": {"text": "...", "start": 1.0}}` |
 | `caption.delete` | `{"id": "c_..."}` |
 | `audio.*`、`overlay.*`、`cast.*` | 同 caption 的 add／update／delete 格式 |
+| `adjust.add` | `{"item": {"id": "adj_...", "start": 0, "length": 6, "grade": {"temp": 6500}}}` |
+| `adjust.update` | `{"id": "adj_...", "patch": {"start": 1.5, "grade": {...}}}`；`grade` 整組取代，沒給的欄位回到中性值 |
+| `adjust.delete` | `{"id": "adj_..."}` |
 | `captionStyle.*`、`take.*`、`media.*`、`layer.*` | 樣式庫、版本、素材、軌道 |
 | `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks"}}` |
 | `batch` | `{"op": "batch", "ops": [...]}`：多個 op 包成一組 |
@@ -117,7 +135,7 @@ POST /api/projects/{pid}/ops
 
 ### 3.2 連動（linked）
 
-介面上「連動上下軌」開著時，鏡頭的修剪、移動、刪除都用 `linked` 包起來送出。後端會依鏡頭前後的位置變化，把字幕、配音、音樂、上層畫面一起平移；刪除鏡頭時，整句落在該鏡頭範圍內的字幕（與它的配音）一起刪除。只把鏡頭移出序列（`inSequence: false`）不會刪字幕。
+介面上「連動上下軌」開著時，鏡頭的修剪、移動、刪除都用 `linked` 包起來送出。後端會依鏡頭前後的位置變化，把字幕、配音、音樂、上層畫面、調整圖層一起平移（調整圖層只移開始時間，長度不變）；刪除鏡頭時，整句落在該鏡頭範圍內的字幕（與它的配音）一起刪除。只把鏡頭移出序列（`inSequence: false`）不會刪字幕。
 
 程式操作時，凡是會改變鏡頭位置或長度的 op（trim、delete、move、add），都建議用 `linked` 包起來，否則字幕會停在原本的時間。
 

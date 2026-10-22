@@ -31,6 +31,7 @@ const INITIAL = {
   wfCheck: null,            // {sid, at}: ask the workflows tab to run a compatibility check
   voice: null,              // Audio8Voice for the cast editor: {loading, status, voices, presets, error}
   captionDragScope: null,   // "one" | "style" once picked; null: the viewer's saved choice
+  gradeDraft: null,         // {id, grade}: an adjustment layer's grade while its panel control is dragged
 };
 
 let state = { ...INITIAL };

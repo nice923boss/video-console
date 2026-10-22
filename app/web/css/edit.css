@@ -58,6 +58,7 @@
 .player.is-full .pl-stage { border-radius: 0; box-shadow: none; }
 
 .pl-host,
+.pl-graded,
 .pl-layers,
 .pl-slot,
 .pl-flash,
@@ -105,6 +106,7 @@
 /* Picture-in-picture clips: placed by player-engine.js in frame fractions, shown only while on */
 .pl-pip { position: absolute; inset: 0; overflow: hidden; pointer-events: none; isolation: isolate; } /* track order stays inside, captions and fades paint on top as in the export */
 .pl-pip-item { position: absolute; display: none; max-width: none; object-fit: contain; }
+.pl-grade-defs { position: absolute; width: 0; height: 0; overflow: hidden; } /* adjustment layer filters (lib/grade.js) */
 
 .pl-caps { display: none; pointer-events: none; }
 .pl-stage.show-caps .pl-caps { display: block; }
@@ -371,9 +373,9 @@
 .tl-handle.is-left { left: 0; border-radius: var(--r-sm) 0 0 var(--r-sm); }
 .tl-handle.is-right { right: 0; border-radius: 0 var(--r-sm) var(--r-sm) 0; }
 
-:is(.tl-clip, .tl-cap, .tl-audio):hover > .tl-handle,
-:is(.tl-clip, .tl-cap, .tl-audio).is-selected > .tl-handle { opacity: 1; }
-:is(.tl-clip, .tl-cap, .tl-audio).is-dragging > .tl-handle { opacity: 0; }
+:is(.tl-clip, .tl-cap, .tl-audio, .tl-adj):hover > .tl-handle,
+:is(.tl-clip, .tl-cap, .tl-audio, .tl-adj).is-selected > .tl-handle { opacity: 1; }
+:is(.tl-clip, .tl-cap, .tl-audio, .tl-adj).is-dragging > .tl-handle { opacity: 0; }
 
 .tl-trans {
   position: absolute;
@@ -516,6 +518,99 @@
 
 .tl-add-track:hover,
 .tl-add-track:focus-visible { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent-text); }
+
+/* Adjustment layers (components/tl-adjust.js) and the colour-wheel button on the picture lane's label that adds one */
+
+.tl-lane-adjust { background: color-mix(in srgb, var(--text-2) 3%, transparent); }
+
+.tl-adj {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, rgb(255 92 92 / .16), rgb(255 196 64 / .16), rgb(84 204 124 / .16), rgb(72 152 255 / .16), rgb(188 104 255 / .16));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-2) 35%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  cursor: grab;
+  transition: box-shadow var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+/* A thin hue stripe along the top tells an adjustment layer from a clip at a glance. */
+.tl-adj::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #ff5c5c, #ffc440, #54cc7c, #4898ff, #bc68ff);
+  opacity: .85;
+  pointer-events: none;
+}
+
+.tl-adj:hover { box-shadow: inset 0 0 0 1px var(--text-2); }
+.tl-adj.is-selected { box-shadow: inset 0 0 0 2px var(--accent-line); }
+.tl-adj.is-off { opacity: .45; }
+.tl-adj.is-dragging { z-index: 4; box-shadow: var(--shadow-2), inset 0 0 0 2px var(--accent-line); cursor: grabbing; }
+.tl-adj-icon { flex: none; color: var(--text-2); pointer-events: none; }
+.tl-adj-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.tl-adj-note { flex: none; margin-left: auto; color: var(--muted); font-size: 10px; pointer-events: none; }
+
+.tl-adj-ghost {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1.5px dashed var(--accent-line);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.tl-adjust-add {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: conic-gradient(#ff5c5c, #ffc440, #b8e04a, #54cc7c, #44c8d8, #4898ff, #bc68ff, #ff5cb0, #ff5c5c);
+  color: var(--text);
+  cursor: grab;
+  touch-action: none;
+}
+
+.tl-adjust-add::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--surface-1);
+  transition: inset var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.tl-adjust-add > svg.icon { position: relative; }
+.tl-adjust-add:hover::before,
+.tl-adjust-add:focus-visible::before { inset: 4px; background: var(--surface-3); }
+.tl-adjust-add:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.tl-adjust-add:active { cursor: grabbing; }
 
 .tl-row.is-hidden > .tl-lane { opacity: .35; }
 .tl-row.is-hidden > .tl-label > span { color: var(--muted); text-decoration: line-through; }

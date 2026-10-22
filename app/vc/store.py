@@ -84,7 +84,8 @@ class ProjectStore:
     def _upgrade(self, project: dict) -> dict:
         project.setdefault("schema", SCHEMA)
         for key, default in (("takes", {}), ("audio", []), ("captions", []), ("media", {}), ("notes", ""),
-                             ("cast", []), ("tracks", {}), ("layers", []), ("overlays", []), ("captionStyles", [])):
+                             ("cast", []), ("tracks", {}), ("layers", []), ("overlays", []), ("captionStyles", []),
+                             ("adjustments", [])):
             project.setdefault(key, default)
         project.setdefault("style", {"prompt": "", "negative": "", "preset": ""})
         project["settings"].setdefault("fadeIn", 0.0)
@@ -215,6 +216,7 @@ class ProjectStore:
             "layers": [],
             "overlays": [],
             "captionStyles": [],
+            "adjustments": [],
         }
         write_json_atomic(d / "project.json", project)
         with self._lock:

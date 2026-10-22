@@ -26,6 +26,7 @@ function targetAt(project, clips, sel, t) {
   const overlay = sel && sel.type === "overlay" && (project.overlays || []).find((o) => o.id === sel.id);
   const audio = sel && sel.type === "audio" && (project.audio || []).find((a) => a.id === sel.id);
   const caption = sel && sel.type === "caption" && (project.captions || []).some((c) => c.id === sel.id);
+  const adjust = sel && sel.type === "adjust" && (project.adjustments || []).some((j) => j.id === sel.id);
   const missing = { missing: "選取的軌道在播放頭位置沒有片段" };
   if (overlay) {
     const span = (o) => [Number(o.start || 0), Number(o.length || MIN_ITEM)];
@@ -49,6 +50,13 @@ function targetAt(project, clips, sel, t) {
     if (!item) return missing;
     const [start, length] = span(item);
     return { type: "caption", item, start, length, min: MIN_ITEM };
+  }
+  if (adjust) {
+    const span = (j) => [Number(j.start || 0), Number(j.length || MIN_ITEM)];
+    const item = pick(project.adjustments || [], sel, span, t);
+    if (!item) return missing;
+    const [start, length] = span(item);
+    return { type: "adjust", item, start, length, min: MIN_ITEM };
   }
   const clip = clips[clipIndexAt(clips, t)];
   if (!clip) return { missing: "播放頭下方沒有片段" };
@@ -106,6 +114,11 @@ export function splitAtPlayhead(project, clips, sel) {
       { op: "audio.update", id: item.id, patch: { out: cut, fadeOut: 0 } },
       { op: "audio.add", item: { ...item, id: newId("a"), start: t, in: cut, fadeIn: 0 } },
     ], { label: "分割音軌" });
+  } else if (g.type === "adjust") {
+    ops([
+      { op: "adjust.update", id: item.id, patch: { length: round(local, 3) } },
+      { op: "adjust.add", item: { ...item, id: newId("adj"), start: t, length: round(g.length - local, 3) } },
+    ], { label: "分割調整圖層" });
   } else {
     ops([
       { op: "caption.update", id: item.id, patch: { end: t } },
@@ -139,6 +152,8 @@ export function trimAtPlayhead(project, clips, sel, side) {
   } else if (g.type === "audio") {
     const cut = round(Number(item.in || 0) + local, 3);
     patch = left ? { start: t, in: cut } : { out: cut };
+  } else if (g.type === "adjust") {
+    patch = left ? { start: t, length: round(g.length - local, 3) } : { length: round(local, 3) };
   } else {
     patch = left ? { start: t } : { end: t };
   }

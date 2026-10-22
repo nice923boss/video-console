@@ -8,6 +8,7 @@ import { fileUrl } from "../lib/format.js";
 import { clipIndexAt, audioLength, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad } from "../lib/caption-style.js";
 import { releaseFocus } from "../lib/keys.js";
+import { filterMarkup, isNeutral } from "../lib/grade.js";
 
 const DRIFT_PLAYING = 0.15;
 const DRIFT_PAUSED = 0.02;
@@ -18,6 +19,7 @@ const DRAG_START_PX = 3;
 const HOLD_MS = 2000;
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
+let engineSeq = 0; // keeps SVG filter ids unique when more than one player exists
 
 function el(tag, cls, parent) {
   const node = document.createElement(tag);
@@ -144,10 +146,22 @@ function hide(slot) {
 // hooks.onCaptionMove(caption, {x, y}): a caption was dragged to a new anchor (frame fractions); it returns
 // the ops promise. hooks.captionDragLabel(caption): the text shown on the caption while it is dragged.
 export function createEngine(host, hooks = {}) {
-  const layers = el("div", "pl-layers", host);
+  // Adjustment layers grade the composed picture (clips, flashes, picture-in-picture) as export.py does
+  // with lut3d, so captions and the project fade stay outside the graded box.
+  const graded = el("div", "pl-graded", host);
+  const layers = el("div", "pl-layers", graded);
   let slots = [];
-  const flash = el("div", "pl-flash", host);
-  const pip = el("div", "pl-pip", host);
+  const flash = el("div", "pl-flash", graded);
+  const pip = el("div", "pl-pip", graded);
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  defs.setAttribute("class", "pl-grade-defs");
+  defs.setAttribute("aria-hidden", "true");
+  host.appendChild(defs);
+  const filterPrefix = `vc-grade-${++engineSeq}`;
+  const filters = new Map(); // adjustment id -> {key, fid, node}
+  let filterSeq = 0;
+  let filterCss = "";
+  let gradeDraft = null; // {id, grade} while the grade panel is being dragged
   const caps = el("div", "pl-caps", host);
   const zones = Object.fromEntries(ZONES.map((z) => [z, el("div", `pl-cap-zone pos-${z}`, caps)]));
   const fade = el("div", "pl-fade", host);
@@ -431,6 +445,47 @@ export function createEngine(host, hooks = {}) {
     }
   }
 
+  // The SVG filter of one adjustment's grade, rebuilt under a new id whenever the grade changes.
+  function filterFor(id, grade) {
+    const key = JSON.stringify(grade);
+    let f = filters.get(id);
+    if (f && f.key === key) return f.fid;
+    if (f) f.node.remove();
+    const fid = `${filterPrefix}-${++filterSeq}`;
+    defs.insertAdjacentHTML("beforeend", filterMarkup(fid, grade));
+    f = { key, fid, node: defs.lastElementChild };
+    filters.set(id, f);
+    return fid;
+  }
+
+  function dropUnusedFilters() {
+    const ids = new Set((project.adjustments || []).map((a) => a.id));
+    for (const [id, f] of filters) {
+      if (ids.has(id)) continue;
+      f.node.remove();
+      filters.delete(id);
+    }
+  }
+
+  // Every adjustment layer over t, earliest start first (the order export.py chains its LUTs in).
+  function drawGrade(t) {
+    const refs = [];
+    if (!(project.tracks || {}).adjustHidden) {
+      const active = (project.adjustments || [])
+        .filter((a) => !a.hidden && t >= Number(a.start || 0) && t < Number(a.start || 0) + Number(a.length || 0))
+        .sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+      for (const a of active) {
+        const grade = gradeDraft && gradeDraft.id === a.id ? gradeDraft.grade : a.grade;
+        if (!isNeutral(grade)) refs.push(`url(#${filterFor(a.id, grade)})`);
+      }
+    }
+    const css = refs.join(" ");
+    if (css !== filterCss) {
+      filterCss = css;
+      graded.style.filter = css;
+    }
+  }
+
   // A hidden track keeps its sound and a muted one its picture, as in the export.
   function drawOverlays(t, playing, g) {
     for (const ov of pips.values()) {
@@ -489,6 +544,7 @@ export function createEngine(host, hooks = {}) {
     drawPicture(t, playing, flags.videoMuted ? 0 : g);
     layers.style.opacity = flags.videoHidden ? "0" : "";
     drawOverlays(t, playing, g);
+    drawGrade(t);
     caps.style.visibility = flags.captionsHidden ? "hidden" : "";
     drawCaptions(t);
     drawAudio(t, playing, g);
@@ -507,6 +563,12 @@ export function createEngine(host, hooks = {}) {
       held = false;
       syncTracks();
       syncOverlays();
+      dropUnusedFilters();
+      rerender();
+    },
+    // draft: {id, grade} shown in place of that adjustment's saved grade while it is being edited; null ends it.
+    setGradeDraft(draft) {
+      gradeDraft = draft;
       rerender();
     },
     setVolume(nextLevel, nextMuted) {
