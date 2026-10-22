@@ -34,7 +34,8 @@
 ### 執行中的行為
 
 - 已經在執行時，再開一次會另開一個視窗連到同一個伺服器，不會啟動第二份。
-- 關掉視窗後，背景伺服器會把佇列裡的工作跑完；沒有視窗、也沒有工作超過 2 分鐘，就會自己結束。執行檔版要立刻停止，在命令列執行 `"Video Console.exe" --stop`。
+- 關掉視窗後，Video Console 留在系統托盤，佇列裡的工作繼續跑。點兩下托盤圖示重開視窗，右鍵選單的「結束 Video Console」完全結束。
+- 用 `--no-window` 在背景啟動（Claude 或工具操作時）沒有托盤圖示；沒有視窗、也沒有工作超過 2 分鐘，就會自己結束。這時從桌面開啟會補上托盤圖示。執行檔版要立刻停止，在命令列執行 `"Video Console.exe" --stop`。
 - 連接埠從 8790 開始找，被占用就往後找到 8799。實際位址記在 `data/run/server.json`。
 
 命令列參數（`"Video Console.exe" ...` 或 `python app/main.py ...`）：
@@ -127,6 +128,17 @@ Google 在 2026-10-22 停用 Gemini API 上的所有 Veo 模型，原本的「Go
 
 `Ctrl+K` 開指令面板，`?` 顯示所有快捷鍵，`Ctrl+Z` 復原。快捷鍵可以在「設定 › 快捷鍵」改鍵、新增，或切換成 Final Cut Pro 鍵位，對照表見 `docs/fcpx-shortcuts.md`。
 
+詳細操作（匯入、分割修剪、標記顏色、字幕、輸出）見 [docs/使用說明.md](docs/使用說明.md)。
+
+## 讓 Claude Code 操作 Video Console
+
+Video Console 的功能都能透過本機 API 操作，Claude Code 可以直接幫你建專案、匯入、轉字幕、剪輯與輸出。
+
+- 新電腦設置：把「請讀 `<Video Console 資料夾>\docs\CLAUDE_SETUP.md`，照著幫我設置」這句話交給 Claude Code，它會檢查元件、設定路徑、安裝 SKILL。
+- API 說明：[docs/API.md](docs/API.md)
+- Python 用戶端：`tools/vc_client.py`（只用標準庫）。`python tools/vc_client.py status` 檢查 VC 與語音轉字幕是否就緒。
+- Claude SKILL：`claude/skills/`，例如 `interview-video-edit` 指定訪談影片資料夾就能轉檔、開專案、轉字幕並標記或剪掉不要的段落。
+
 ## 資料夾
 
 ```
@@ -142,6 +154,9 @@ Video Console/
     workflows/         匯入的 ComfyUI 範本
     trash/             刪除的專案先移到這裡
     logs/app.log       記錄檔
+  docs/                使用說明、API 說明、Claude 設置指南
+  tools/vc_client.py   API 的 Python 用戶端
+  claude/skills/       Claude Code SKILL
   tests/               後端測試（pytest）
   packaging/           打包執行檔的腳本與圖示
 ```

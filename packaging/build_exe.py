@@ -23,7 +23,7 @@ from vc import APP_NAME, VERSION  # noqa: E402
 
 DIST = ROOT / "dist"
 WORK = ROOT / "build"
-EXTRAS = ("README.md", "LICENSE")  # copied beside the exe
+EXTRAS = ("README.md", "LICENSE", "docs", "tools", "claude")  # copied beside the exe
 
 
 def build() -> Path:
@@ -36,7 +36,10 @@ def build() -> Path:
     ], check=True)
     folder = DIST / APP_NAME
     for name in EXTRAS:
-        shutil.copy2(ROOT / name, folder / name)
+        if (ROOT / name).is_dir():
+            shutil.copytree(ROOT / name, folder / name, dirs_exist_ok=True)
+        else:
+            shutil.copy2(ROOT / name, folder / name)
     return folder
 
 

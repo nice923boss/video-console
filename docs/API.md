@@ -1,0 +1,296 @@
+# Video Console 本機 API 說明
+
+給程式與 AI 助理（例如 Claude Code）直接操作 Video Console（以下簡稱 VC）用。網頁介面做得到的事，幾乎都能透過這組 API 完成：建專案、匯入影片、分割與修剪、語音轉字幕、改字幕、標色、匯出。
+
+配套檔案：
+
+- `tools/vc_client.py`：Python 用戶端（只用標準庫），本文的範例都用它。
+- `docs/CLAUDE_SETUP.md`：新電腦交給 Claude 設置的步驟。
+- `claude/skills/interview-video-edit/`：用這組 API 剪訪談影片的 Claude SKILL。
+
+## 1. 連線
+
+| 項目 | 說明 |
+|---|---|
+| 位址 | 只聽 `127.0.0.1`，連接埠 8790；被占用時往後找到 8799 |
+| 目前連接埠 | `data/run/server.json` 的 `port` 欄位（VC 執行中才有） |
+| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.4.0"}` |
+| 必要標頭 | POST、PUT、DELETE 一律加 `X-VC: 1`，否則 403 |
+| 主機檢查 | `Host` 必須是 `127.0.0.1:<port>` 或 `localhost:<port>`，跨站請求一律 403 |
+| 資料格式 | JSON 本文，UTF-8；上傳檔案用原始位元組本文（不是 multipart） |
+| 錯誤格式 | `{"error": "中文訊息", "status": 409}`，HTTP 狀態碼同 `status` |
+
+### 1.1 啟動方式
+
+```bash
+pythonw app/main.py --no-window        # 不開視窗，只跑伺服器
+python app/main.py --stop              # 關閉正在執行的 VC
+```
+
+其他參數：`--port <n>` 指定起始連接埠、`--data <資料夾>` 指定資料位置（也可用環境變數 `VC_DATA_DIR`）、`--verbose` 詳細日誌。日誌在 `data/logs/app.log`。
+
+打包版（`Video Console.exe`）一樣接受這些參數。
+
+### 1.2 自動關閉與保活
+
+用 `--no-window` 啟動的 VC 沒有托盤圖示，沒有任何視窗連著、也沒有工作在跑時，120 秒後自動關閉。程式操作時要保持一條 `GET /api/events`（SSE）連線，VC 會把它當成開著的視窗。`tools/vc_client.py` 會在背景自動做這件事，斷線也會重連。
+
+從桌面開啟的 VC 會顯示系統托盤圖示，關閉視窗後留在托盤，不會自動關閉，要從托盤右鍵選單或 `POST /api/shutdown` 結束。使用者之後從桌面開啟背景那一份時，啟動程式會呼叫 `POST /api/tray` 補上托盤圖示。
+
+### 1.3 id 規則
+
+所有 id 必須符合 `^[a-z]{1,3}_[a-z0-9]{6,24}$`。VC 自己用的前綴：專案 `p_`、鏡頭 `s_`、版本 `t_`、字幕 `c_`、聲音 `a_`、工作 `j_`。用 `shot.add`、`caption.add` 新增項目時由呼叫端產生 id，例如 `"s_" + 10 碼小寫英數`。
+
+## 2. 專案資料結構
+
+`GET /api/projects/{pid}` 回 `{"project": {...}}`，重點欄位：
+
+| 欄位 | 內容 |
+|---|---|
+| `id`、`name`、`rev` | `rev` 每次修改加 1 |
+| `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（整數 1~60，29.97 素材用 30）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
+| `shots` | 鏡頭陣列，順序就是時間軸順序 |
+| `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本 |
+| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot}`，時間是序列上的秒數 |
+| `audio` | 音樂、音效、配音 |
+| `overlays`、`layers` | 上層畫面與軌道 |
+| `media` | 素材庫 |
+
+鏡頭常用欄位：
+
+| 欄位 | 說明 |
+|---|---|
+| `name` | 鏡頭名稱 |
+| `activeVideo` / `activeImage` | 使用中的版本 id |
+| `trimIn` / `trimOut` | 入點／出點，原始影片的秒數；`trimOut: null` 代表播到結尾 |
+| `inSequence` | `false` 時預覽與匯出都跳過 |
+| `transition` | `{"type": "cut", "duration": 0.5}`；type 可用 `cut`、`crossfade`、`fade_black`、`fade_white`、`wipe_left`、`slide_left`，長度 0.1~5 秒 |
+| `color` | 標籤顏色，時間軸片段整段染色；見下表 |
+| `notes` | 備註（4000 字內），滑鼠停在片段上會顯示 |
+| `duration` | 只有圖片或空白鏡頭時使用的長度 |
+
+標籤顏色（介面上的 7 個選項）：
+
+| 值 | 介面名稱 |
+|---|---|
+| `null` | 無顏色 |
+| `#ff6b6b` | 紅色 |
+| `#f5b14c` | 橘色 |
+| `#c6f24e` | 萊姆綠 |
+| `#4fd18b` | 綠色 |
+| `#6ea8ff` | 藍色 |
+| `#b28cff` | 紫色 |
+
+鏡頭在序列上的位置：依 `shots` 順序把 `inSequence` 的鏡頭接起來，每段長度是 `trimOut - trimIn`（影片）或 `duration`（圖片），有轉場時與下一段重疊轉場長度。
+
+## 3. 修改專案：ops
+
+```
+POST /api/projects/{pid}/ops
+{"ops": [...], "label": "分割片段", "undoable": true}
+→ {"rev": 12, "changed": [...]}
+```
+
+- 一次呼叫是一個復原步驟（介面上的 Ctrl+Z 會整批收回）。
+- 回應不含整個專案，要最新內容請再 `GET /api/projects/{pid}`。
+- 一批最多 2000 個 op。
+- 其他本文欄位：`undoable: false` 不進復原堆疊；`coalesce`（64 字內字串，短時間內相同字串的連續修改合併成一個復原步驟，例如連續打字）；`batch`（64 字內字串，原樣附在這次修改的 `project` 事件上，供呼叫端辨認自己送出的修改）。
+
+### 3.1 op 一覽
+
+| op | 參數 |
+|---|---|
+| `shot.add` | `{"shot": {"id": "s_...", ...}, "index": 3}` |
+| `shot.update` | `{"id": "s_...", "patch": {...}}` |
+| `shot.delete` | `{"id": "s_..."}` |
+| `shot.move` | `{"id": "s_...", "index": 0}` |
+| `caption.add` | `{"item": {"id": "c_...", "start": 1.2, "end": 3.4, "text": "..."}}` |
+| `caption.update` | `{"id": "c_...", "patch": {"text": "...", "start": 1.0}}` |
+| `caption.delete` | `{"id": "c_..."}` |
+| `audio.*`、`overlay.*`、`cast.*` | 同 caption 的 add／update／delete 格式 |
+| `captionStyle.*`、`take.*`、`media.*`、`layer.*` | 樣式庫、版本、素材、軌道 |
+| `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks"}}` |
+| `batch` | `{"op": "batch", "ops": [...]}`：多個 op 包成一組 |
+| `linked` | `{"op": "linked", "ops": [...]}`：鏡頭變動時字幕、配音、上層畫面跟著移動 |
+
+字幕文字上限 500 字。
+
+### 3.2 連動（linked）
+
+介面上「連動上下軌」開著時，鏡頭的修剪、移動、刪除都用 `linked` 包起來送出。後端會依鏡頭前後的位置變化，把字幕、配音、音樂、上層畫面一起平移；刪除鏡頭時，整句落在該鏡頭範圍內的字幕（與它的配音）一起刪除。只把鏡頭移出序列（`inSequence: false`）不會刪字幕。
+
+程式操作時，凡是會改變鏡頭位置或長度的 op（trim、delete、move、add），都建議用 `linked` 包起來，否則字幕會停在原本的時間。
+
+### 3.3 範例：在原始影片第 12.5 秒分割鏡頭
+
+分割就是「前段改出點」加上「複製一份當後段」：
+
+```python
+shot = next(s for s in project["shots"] if s["id"] == sid)
+index = project["shots"].index(shot)
+tail = {**shot, "id": new_shot_id(), "trimIn": 12.5, "trimOut": shot["trimOut"]}
+vc.ops(pid, [{"op": "linked", "ops": [
+    {"op": "shot.update", "id": sid, "patch": {"trimOut": 12.5, "transition": {"type": "cut", "duration": 0.5}}},
+    {"op": "shot.add", "shot": tail, "index": index + 1},
+]}], label="分割片段")
+```
+
+### 3.4 範例：標色加備註（不刪）
+
+```python
+vc.ops(pid, [{"op": "shot.update", "id": sid,
+              "patch": {"color": "#f5b14c", "notes": "停頓 3.2 秒，評估是否刪除"}}], label="標記")
+```
+
+### 3.5 範例：刪除鏡頭（字幕跟著刪）
+
+```python
+vc.ops(pid, [{"op": "linked", "ops": [{"op": "shot.delete", "id": sid}]}], label="刪除鏡頭")
+```
+
+### 3.6 復原與版本紀錄
+
+| 端點 | 說明 |
+|---|---|
+| `POST /api/projects/{pid}/undo`、`/redo` | 等同 Ctrl+Z／Ctrl+Shift+Z |
+| `GET /api/projects/{pid}/history` | 伺服器端快照列表 |
+| `POST /api/projects/{pid}/history/{rev}/restore` | 還原到某個快照（可再復原） |
+
+## 4. 匯入檔案
+
+```
+POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
+本文：檔案原始位元組，需帶 Content-Length
+→ {"job": {...}}   # ingest 工作，用 GET /api/jobs/{jid} 等它完成
+```
+
+| 參數 | 說明 |
+|---|---|
+| `name` | 必填，副檔名決定類型 |
+| `target` | `library`（素材庫，預設）或 `shot`（成為該鏡頭使用中的版本） |
+| `shot` | `target=shot` 時指定鏡頭 |
+| `track`、`start`、`layer` | 放到時間軸的音軌或上層軌，`start` 為序列秒數 |
+
+支援格式：影片 .mp4 .webm .mov .mkv .m4v .avi；圖片 .png .jpg .jpeg .webp .bmp .gif；聲音 .mp3 .wav .m4a .aac .flac .ogg .opus。聲音不能放進鏡頭。不是 h264／vp8／vp9／av1 的 .mp4、.m4v、.webm，以及其他容器，會自動轉成瀏覽器可播放的格式（4K 或高位元率素材建議先轉成 1080p，速度差很多）。
+
+新專案會有一個空白鏡頭，把第一支影片 `target=shot` 上傳到它即可；多支影片時先 `shot.add` 新鏡頭再上傳。
+
+## 5. 背景工作
+
+| 端點 | 說明 |
+|---|---|
+| `POST /api/jobs` | `{"kind", "pid", "shotId", "payload"}` → `{"job": {...}}` |
+| `POST /api/jobs/batch` | 一次送多個 |
+| `GET /api/jobs?pid=<pid>` | 列出工作 |
+| `GET /api/jobs/{jid}` | 狀態、進度 `progress`（0~1）、`message`、`error`、`result` |
+| `POST /api/jobs/{jid}/cancel`、`/retry`、`/top` | 取消、重試、移到最前 |
+| `DELETE /api/jobs/{jid}` | 移除已結束的工作 |
+| `POST /api/jobs/clear`、`/cancel-all`、`/pause` | 清除已結束、全部取消、暫停佇列 |
+
+狀態：`queued`、`running`，結束時是 `done`、`failed`、`canceled`、`interrupted` 其中之一。
+
+| kind | 用途 | payload |
+|---|---|---|
+| `ingest` | 匯入檔案 | 由 upload 端點建立，不要直接送 |
+| `transcribe` | 語音轉字幕 | `{}`，需要 `shotId` |
+| `export` | 輸出影片 | 見第 7 節 |
+| `package` | 打包 ZIP | `{"includeVideos", "includeExport", "fullBackup"}` |
+| `voice` | 文字轉配音 | 依配音引擎設定 |
+| `image`、`video` | ComfyUI 或雲端生成 | 依工作流程設定 |
+| `upscale`、`upscalevideo` | 放大 | 需要 video2x |
+| `kenburns`、`lastframe` | 圖片推拉、擷取最後一格 | |
+
+同時執行數量：ComfyUI 與語音轉字幕共用 1 個、雲端服務 2 個、ffmpeg 類 2 個、輸出 1 個。
+
+## 6. 語音轉字幕
+
+```python
+job = vc.job("transcribe", pid, shot_id)
+vc.wait(job["id"])
+```
+
+- 辨識該鏡頭修剪範圍內的原聲，字幕直接加在鏡頭在時間軸上的位置。鏡頭必須在序列裡、影片要有聲音。
+- 已有字幕時新字幕會另外加入，不會取代。整批可用一次 undo 收回。
+- 引擎是另一個專案 Speech-to-subtitle（faster-whisper large-v3，選用 MFA 精準對齊）。設定在 `settings.stt`：`{"folder": "", "python": ""}`。留白時找 VC 同一層的 `Speech-to-subtitle` 資料夾，Python 用它 `pyvenv.cfg` 指向的直譯器。
+- 自我檢查：`POST /api/stt/check`（最多 180 秒），回 `{"ok", "cuda", "model", "ffmpeg", "mfa", "opencc", "folder", "python"}`，`ok` 需要 CUDA 與模型都就緒。
+- 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；沒有字幕時 409）。
+
+## 7. 輸出
+
+```python
+path = vc.export(pid, quality="high", burnCaptions=False)
+```
+
+`POST /api/jobs` 的 `{"kind": "export", "pid": pid, "payload": {"options": {...}}}`，options：
+
+| 欄位 | 值 |
+|---|---|
+| `quality` | `high`、`standard`、`draft` |
+| `encoder` | `auto`、`libx264`、`h264_nvenc`、`h264_amf`、`h264_qsv` |
+| `burnCaptions` | 字幕燒進畫面 |
+| `captionSize` | 燒入字幕大小 16~160 px（預設 52） |
+| `fadeIn`、`fadeOut` | 開頭淡入、結尾淡出秒數 |
+| `clipAudio` | 保留影片片段本身的聲音 |
+| `fit` | 畫面比例不同時 `contain`（完整顯示）或 `cover`（填滿） |
+
+完成後 `job["result"]["file"]` 是相對專案資料夾的路徑（`exports/...mp4`），專案資料夾在 `data/projects/<pid>/`。也可用 `GET /api/projects/{pid}/exports` 列出輸出檔。
+
+## 8. 即時事件（SSE）
+
+`GET /api/events`，每則格式 `data: {"type": "...", "data": {...}}`。第一則是 `hello`，緩衝溢位時送 `resync`（重新抓全部狀態），閒置時送 `: ping` 註解行。
+
+type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`notify`、`settings`、`project`、`projects`。
+
+## 9. 端點總表
+
+| 方法 | 路徑 | 說明 |
+|---|---|---|
+| GET | `/api/ping` | 健康檢查 |
+| GET | `/api/bootstrap` | 介面啟動所需的全部狀態 |
+| GET | `/api/events` | SSE 事件串流 |
+| GET | `/api/system` | 系統資訊 |
+| GET | `/api/system/fonts` | 可用字型 |
+| POST | `/api/system/ffmpeg` | 重新偵測 ffmpeg |
+| POST | `/api/system/reveal` | 在檔案總管開啟資料夾 `{"what": ...}` |
+| GET | `/api/system/deps` | 相依套件狀態 `{"items": [{id, required, ready, path, version}]}` |
+| POST | `/api/system/deps/install` | 安裝相依套件 `{"id": ...}` |
+| POST | `/api/shutdown` | 關閉 VC |
+| POST | `/api/tray` | 顯示系統托盤圖示，回傳 `{"tray": bool}`（從桌面啟動時由啟動程式呼叫） |
+| GET／PUT | `/api/settings` | 設定 |
+| GET／PUT | `/api/secrets` | API 金鑰（只回是否已設定與遮罩後的值） |
+| GET／POST | `/api/projects` | 專案列表／新增 `{"name", "settings", "starter"}` |
+| POST | `/api/projects/import?name=x.zip` | 匯入打包的 ZIP（本文為檔案） |
+| GET／DELETE | `/api/projects/{pid}` | 讀取／移到垃圾桶（有工作時 409） |
+| POST | `/api/projects/{pid}/open` | 設為最近開啟的專案 |
+| POST | `/api/projects/{pid}/duplicate` | 複製專案，回傳 `{"project": {...}}`，鏡頭與字幕代號和原專案相同 |
+| POST | `/api/projects/{pid}/ops` | 修改（第 3 節） |
+| POST | `/api/projects/{pid}/undo`、`/redo` | 復原、重做 |
+| GET | `/api/projects/{pid}/history` | 版本紀錄 |
+| POST | `/api/projects/{pid}/history/{rev}/restore` | 還原版本 |
+| POST | `/api/projects/{pid}/upload` | 上傳檔案（第 4 節） |
+| GET | `/api/projects/{pid}/file?path=...` | 讀取專案內的檔案 |
+| GET | `/api/projects/{pid}/exports` | 輸出檔列表 |
+| DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔 |
+| GET | `/api/projects/{pid}/captions.srt` | 字幕 SRT |
+| GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |
+| GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
+| POST | `/api/projects/{pid}/reveal` | 在檔案總管開啟專案資料夾 |
+| GET | `/api/projects/{pid}/usage` | 檔案使用量 |
+| POST | `/api/projects/{pid}/purge` | 清除沒用到的檔案 |
+| POST | `/api/projects/{pid}/script/apply` | 套用劇本 |
+| POST | `/api/script/parse`、`/api/script/docx` | 解析劇本文字、Word 檔 |
+| GET／DELETE | `/api/trash` | 垃圾桶列表／清空 |
+| POST | `/api/trash/{folder}/restore` | 從垃圾桶還原 |
+| | `/api/jobs...` | 背景工作（第 5 節） |
+| POST | `/api/stt/check` | 語音轉字幕自我檢查 |
+| | `/api/comfy...`、`/api/workflows...` | ComfyUI 伺服器與工作流程 |
+| | `/api/providers...`、`/api/llm/...` | 雲端生成服務、提示詞潤飾 |
+| | `/api/voice/...` | 配音引擎 |
+| POST | `/api/notify/test` | 測試完成通知 |
+
+## 10. 注意事項
+
+- VC 會把專案存成 `data/projects/<pid>/project.json`，請只透過 API 修改，不要直接改檔（伺服器有記憶體快取，直接改會被覆蓋）。
+- 介面開著時程式也能同時操作，畫面會即時更新；使用者按 Ctrl+Z 會收回程式送出的修改。
+- 時間都用秒（浮點數）。鏡頭的 `trimIn`／`trimOut` 是原始影片的時間，字幕的 `start`／`end` 是序列上的時間，兩者不同。
+- 長工作（ingest 4K 檔、transcribe、export）可能要數分鐘到數十分鐘，請用 `GET /api/jobs/{jid}` 輪詢或聽 SSE 的 `job` 事件。
