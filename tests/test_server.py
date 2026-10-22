@@ -272,6 +272,10 @@ def test_export_listing_skips_partial_files(app: App, client: Client, project: d
 def test_captions_shot_list_and_storyboard(client: Client, project: dict) -> None:
     pid = project["id"]
     assert client.request("GET", f"/api/projects/{pid}/captions.srt")[0] == 409
+    # The export dialog hides its SRT buttons by the same rule: blank captions alone give nothing to download.
+    blank = {"id": new_id("c"), "start": 3.0, "end": 4.0, "text": "  ", "position": "bottom"}
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [{"op": "caption.add", "item": blank}]})
+    assert client.request("GET", f"/api/projects/{pid}/captions.srt")[0] == 409
     cap = {"id": new_id("c"), "start": 0.0, "end": 2.0, "text": "你好，世界", "position": "bottom"}
     client.json("POST", f"/api/projects/{pid}/ops", {"ops": [{"op": "caption.add", "item": cap}]})
 

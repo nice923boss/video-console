@@ -38,6 +38,13 @@ function queued(job) {
   });
 }
 
+// The server answers with an attachment, so the app window stays on this page.
+function downloadSrt(pid) {
+  const a = document.createElement("a");
+  a.href = `/api/projects/${encodeURIComponent(pid)}/captions.srt`;
+  a.click();
+}
+
 function Summary({ project, clips }) {
   const s = project.settings;
   return html`<div class="exp-summary">
@@ -58,6 +65,7 @@ function useVideoForm(project, clips, close) {
   const [quality, setQuality] = useState(defaults.quality || "high");
   const [encoder, setEncoder] = useState("auto");
   const [burn, setBurn] = useState(!!defaults.burnCaptions);
+  const [srt, setSrt] = useState(false);
   const [captionSize, setCaptionSize] = useState(defaults.captionSize || 52);
   const [fadeIn, setFadeIn] = useState(project.settings.fadeIn || 0);
   const [fadeOut, setFadeOut] = useState(project.settings.fadeOut || 0);
@@ -65,7 +73,8 @@ function useVideoForm(project, clips, close) {
   const [fit, setFit] = useState("contain");
   const [keep, setKeep] = useState(false);
   const [busy, setBusy] = useState(false);
-  const hasCaptions = (project.captions || []).length > 0;
+  // Same rule as the SRT endpoint, which answers 409 when every caption is blank.
+  const hasCaptions = (project.captions || []).some((c) => (c.text || "").trim());
   const noClips = "序列裡沒有任何鏡頭，請確認鏡頭有勾選「放入序列」";
   const blocked = !clips.length ? noClips : !ffmpegOk ? "找不到 ffmpeg" : "";
 
@@ -81,12 +90,19 @@ function useVideoForm(project, clips, close) {
     }, { quiet: true });
     setBusy(false);
     if (!job) return;
+    if (!burn && srt && hasCaptions) downloadSrt(project.id);
     queued(job);
     close(job);
+  };
+  const srtOnly = () => {
+    downloadSrt(project.id);
+    toast("已下載 SRT 字幕檔");
   };
 
   const footer = html`
     <span class="modal-foot-note dim"><${Icon} name="folder" size=${14} />存到專案的 exports 資料夾</span>
+    <${Button} icon="captions" disabled=${!hasCaptions}
+      title=${hasCaptions ? "不輸出影片，直接下載目前的字幕" : "這個專案還沒有字幕"} onClick=${srtOnly}>只下載 SRT<//>
     <${Button} onClick=${() => close(null)}>取消<//>
     <${Button} kind="primary" icon="film" busy=${busy} disabled=${!!blocked} title=${blocked || undefined}
       onClick=${submit}>開始輸出<//>`;
@@ -125,6 +141,8 @@ function useVideoForm(project, clips, close) {
     ${burn && html`<${Field} label="內建字幕大小" inline hint="沒有套用字幕樣式的字幕使用；外框、陰影等樣式在字幕屬性的「編輯樣式」設定">
       <${NumberInput} value=${captionSize} onCommit=${setCaptionSize} min=${16} max=${160} step=${2} suffix="px" />
     <//>`}
+    ${!burn && hasCaptions && html`<${Toggle} checked=${srt} onChange=${setSrt} label="同時下載 SRT 字幕檔"
+      hint="按「開始輸出」時一併下載到「下載」資料夾" />`}
     <${Toggle} checked=${clipAudio} onChange=${setClipAudio} label="保留影片片段本身的聲音"
       hint="關掉時只會有音軌上的音樂與旁白" />
     <${Toggle} checked=${keep} onChange=${setKeep} label="把畫質與字幕設定存成之後的預設" />`;

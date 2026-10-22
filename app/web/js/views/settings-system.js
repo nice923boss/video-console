@@ -99,7 +99,7 @@ export function OutputSection() {
       <//>
     </div>
     <${Toggle} checked=${draft.burnCaptions} onChange=${(burnCaptions) => set({ burnCaptions })} label="預設把字幕燒進畫面"
-      hint="關閉時，字幕另存成 captions.srt 放在影片旁邊" />
+      hint="關閉時影片不含字幕，SRT 字幕檔可在輸出對話框另外下載" />
     <${DraftFoot} form=${form} invalid=${!!pathError} onSave=${save} />
   </div>`;
 }

@@ -5,6 +5,7 @@ import { html, useState, useEffect, useRef } from "../lib/h.js";
 import { useStore, setState } from "../lib/store.js";
 import { ops, updateShot, moveShot, focusShot } from "../lib/actions.js";
 import { setTime } from "../lib/clock.js";
+import { releaseFocus } from "../lib/keys.js";
 import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/format.js";
 import { buildSequence, audioLength } from "../lib/sequence.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
@@ -50,6 +51,7 @@ export function dragPointer(e, { onMove, onEnd, threshold = 3, axis = "x" }) {
   if (e.button !== 0) return;
   e.preventDefault();
   e.stopPropagation();
+  releaseFocus();
   const x0 = e.clientX;
   const y0 = e.clientY;
   let moved = false;

@@ -6,6 +6,7 @@ import { navigate } from "../lib/actions.js";
 import { buildSequence } from "../lib/sequence.js";
 import { clamp } from "../lib/format.js";
 import { usePref } from "../lib/prefs.js";
+import { releaseFocus } from "../lib/keys.js";
 import { Button, Empty } from "../components/ui.js";
 import { Player } from "../components/player.js";
 import { Timeline } from "../components/timeline.js";
@@ -35,6 +36,7 @@ export function EditView() {
   const startDrag = (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
+    releaseFocus();
     const handle = e.currentTarget;
     const main = mainRef.current;
     const startY = e.clientY;

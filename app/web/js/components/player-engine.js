@@ -7,6 +7,7 @@
 import { fileUrl } from "../lib/format.js";
 import { clipIndexAt, audioLength, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad } from "../lib/caption-style.js";
+import { releaseFocus } from "../lib/keys.js";
 
 const DRIFT_PLAYING = 0.15;
 const DRIFT_PAUSED = 0.02;
@@ -282,6 +283,7 @@ export function createEngine(host, hooks = {}) {
     if (e.button !== 0 || !hooks.onCaptionMove || drag) return;
     e.stopPropagation();
     e.preventDefault();
+    releaseFocus();
     const box = caps.getBoundingClientRect();
     const r = node.getBoundingClientRect();
     const edge = { left: r.left, right: r.right }[look.s.align] ?? (r.left + r.right) / 2;

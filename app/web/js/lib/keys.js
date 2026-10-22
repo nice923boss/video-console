@@ -58,6 +58,13 @@ function onKeyDown(e) {
 
 document.addEventListener("keydown", onKeyDown);
 
+// A pointer press that calls preventDefault keeps focus where it was, so a button clicked earlier would
+// take the next Space or Enter instead of the shortcuts. Drop that focus the way a plain click would.
+export function releaseFocus() {
+  const el = document.activeElement;
+  if (el && el !== document.body && typeof el.blur === "function") el.blur();
+}
+
 // map: {"mod+z": fn, "escape": {fn, allowInInput: true}}; a handler returning false lets the key through.
 export function useHotkeys(map, { active = true, modal = false } = {}) {
   const ref = useRef(map);
