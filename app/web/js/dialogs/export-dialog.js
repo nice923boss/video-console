@@ -131,10 +131,10 @@ function useVideoForm(project, clips, close) {
   return { body, footer };
 }
 
-function usePackageForm(project, close) {
+function usePackageForm(project, close, fullBackup) {
   const [videos, setVideos] = useState(true);
   const [latest, setLatest] = useState(true);
-  const [full, setFull] = useState(false);
+  const [full, setFull] = useState(fullBackup);
   const [busy, setBusy] = useState(false);
   const submit = async () => {
     setBusy(true);
@@ -165,11 +165,11 @@ function usePackageForm(project, close) {
   return { body, footer };
 }
 
-function ExportBody({ project, initial, close }) {
+function ExportBody({ project, initial, fullBackup, close }) {
   const [mode, setMode] = useState(initial);
   const clips = useMemo(() => buildSequence(project), [project]);
   const video = useVideoForm(project, clips, close);
-  const pack = usePackageForm(project, close);
+  const pack = usePackageForm(project, close, fullBackup);
   const form = mode === "package" ? pack : video;
   return html`<${Modal} title="輸出" width=${600} backdropClose=${false} onClose=${() => close(null)} footer=${form.footer} class="export-dialog">
     <${Tabs} class="exp-modes" value=${mode} tabs=${MODES} onChange=${setMode} />
@@ -177,13 +177,14 @@ function ExportBody({ project, initial, close }) {
   <//>`;
 }
 
-// mode: "video" or "package". Resolves with the submitted job, or null when canceled.
-export function openExportDialog(mode = "video") {
+// mode: "video" or "package"; fullBackup starts the package as a restorable backup (匯出專案).
+// Resolves with the submitted job, or null when canceled.
+export function openExportDialog(mode = "video", { fullBackup = false } = {}) {
   const project = getState().project;
   if (!project) {
     toast("請先開啟專案", { level: "warn" });
     return Promise.resolve(null);
   }
   const initial = mode === "package" ? "package" : "video";
-  return openModal((close) => html`<${ExportBody} project=${project} initial=${initial} close=${close} />`);
+  return openModal((close) => html`<${ExportBody} project=${project} initial=${initial} fullBackup=${fullBackup} close=${close} />`);
 }

@@ -1,6 +1,8 @@
 """Caption styles: project ops with undo, the app-wide library, ASS output and a real libass render."""
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,6 +16,15 @@ from vc.settings import SettingsStore
 from vc.util import AppError
 
 needs_ffmpeg = pytest.mark.skipif(find_ffmpeg() is None, reason="ffmpeg is not installed")
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+PRESETS_JS = Path(__file__).resolve().parents[1] / "app" / "web" / "js" / "lib" / "caption-presets.js"
+
+
+def _presets() -> list[dict]:
+    script = "const m = await import(process.argv[1]); console.log(JSON.stringify(m.PRESET_STYLES));"
+    proc = subprocess.run(["node", "--input-type=module", "-e", script, PRESETS_JS.as_uri()],
+                          capture_output=True, check=True, text=True, encoding="utf-8")
+    return json.loads(proc.stdout)
 
 
 def _project() -> dict:
@@ -170,3 +181,36 @@ def test_burnt_in_box_lands_where_the_caption_was_dragged(tmp_path: Path) -> Non
     assert near(pixel(0.25, 0.25 - 50 / 1080), (0, 255, 0)), pixel(0.25, 0.25 - 50 / 1080)
     assert near(pixel(0.25, 0.92), (0, 0, 255))
     assert near(pixel(0.75, 0.25), (0, 0, 255))
+
+
+@needs_node
+def test_every_preset_is_a_valid_style_with_a_unique_name() -> None:
+    presets = _presets()
+    assert len(presets) >= 5
+    assert len({p["name"] for p in presets}) == len(presets)
+    for i, preset in enumerate(presets):
+        style = ops.clean_caption_style({**preset, "id": f"cs_preset{i:03d}"})
+        assert {k: style[k] for k in preset} == preset  # nothing clamped or dropped
+
+
+@needs_node
+@needs_ffmpeg
+def test_common_preset_matches_the_reference_frame(tmp_path: Path) -> None:
+    # Reference: the owner's usual captions, glyphs 54px high with their bottom at y=1025 on a 1080p frame.
+    preset = _presets()[0]
+    p = _project()
+    ops.apply_ops(p, [
+        {"op": "captionStyle.add", "item": {**preset, "id": "cs_aaaaaa01"}},
+        {"op": "project.update", "patch": {"settings": {"captionStyle": "cs_aaaaaa01"}}},
+        {"op": "caption.update", "id": "c_aaaaaa01", "patch": {"text": "第 31 條第 6 項"}},
+    ], {})
+    w, h = 1920, 1080
+    (tmp_path / "t.ass").write_text(build_ass(p, [], {"burnCaptions": True, "captionSize": 52}, w, h), encoding="utf-8")
+    proc = subprocess.run([find_ffmpeg(), "-v", "error", "-f", "lavfi", "-i", f"color=c=0x808080:s={w}x{h}:d=1",
+                           "-vf", "ass=filename=t.ass", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                          cwd=tmp_path, capture_output=True, check=True)
+    frame = proc.stdout
+    rows = [y for y in range(h // 2, h)
+            if any(min(frame[(y * w + x) * 3:(y * w + x) * 3 + 3]) > 235 for x in range(w // 4, w * 3 // 4))]
+    assert 50 <= rows[-1] - rows[0] + 1 <= 58, (rows[0], rows[-1])
+    assert 1020 <= rows[-1] <= 1030, rows[-1]

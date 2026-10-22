@@ -13,6 +13,7 @@ import { openMenu, promptDialog, confirmDialog } from "../components/overlay.js"
 import { toast, toastError } from "../components/toast.js";
 import { openNewProject } from "../dialogs/new-project.js";
 import { openScriptImport } from "../dialogs/script-import.js";
+import { openExportDialog } from "../dialogs/export-dialog.js";
 
 const enc = encodeURIComponent;
 const SORTS = [
@@ -45,6 +46,11 @@ async function renameProject(p, currentPid) {
   }
 }
 
+// Packaging works on the open project, so make this one current (staying on the home page) first.
+async function exportProject(pid) {
+  if (await openProject(pid, "home")) openExportDialog("package", { fullBackup: true });
+}
+
 function projectMenu(e, p, currentPid) {
   e.preventDefault();
   e.stopPropagation();
@@ -54,6 +60,7 @@ function projectMenu(e, p, currentPid) {
     { divider: true },
     { label: "重新命名…", icon: "pencil", onClick: () => renameProject(p, currentPid) },
     { label: "建立副本", icon: "copy", onClick: () => duplicateProject(p.id) },
+    { label: "匯出專案…", icon: "download", onClick: () => exportProject(p.id) },
     { divider: true },
     { label: "移到垃圾桶", icon: "trash", danger: true, onClick: () => deleteProject(p.id, p.name) },
   ]);

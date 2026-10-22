@@ -11,6 +11,7 @@ import {
   DEFAULT_STYLE, MAX_STYLES, legacySize, styleById, defaultStyleId, resolveStyle, textCss, blockCss, zonePad,
   anchorOf, editStyleOps, addStyleOps, setDefaultOps, useForAllOps,
 } from "../lib/caption-style.js";
+import { PRESET_STYLES } from "../lib/caption-presets.js";
 import { openModal, Modal, confirmDialog } from "../components/overlay.js";
 import { Button, IconButton, Field, DraftText, NumberInput, Select, Toggle, Segmented, Badge } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
@@ -18,6 +19,7 @@ import { toast } from "../components/toast.js";
 
 const NONE = [];
 const SAMPLE_TEXT = "字幕樣式預覽 Caption 123";
+const PRESETS = PRESET_STYLES.map((p) => ({ ...DEFAULT_STYLE, ...p }));
 const ALIGNS = [{ value: "left", label: "靠左" }, { value: "center", label: "置中" }, { value: "right", label: "靠右" }];
 const cx = (...parts) => parts.filter(Boolean).join(" ");
 
@@ -225,6 +227,7 @@ function StyleBody({ close, styleId, text, row }) {
   const addNew = () => create(addStyleOps(project, { ...DEFAULT_STYLE, size: legacy }, `樣式 ${styles.length + 1}`), "新增字幕樣式");
   const duplicate = () => create(addStyleOps(project, current, `${current.name} 複本`.slice(0, 40)), "複製字幕樣式");
   const addFromLibrary = (lib) => create(addStyleOps(project, lib, lib.name), "加入樣式庫的字幕樣式");
+  const addPreset = (preset) => create(addStyleOps(project, preset, preset.name), "加入預設字幕樣式");
 
   const remove = async () => {
     const n = counts[sel] || 0;
@@ -292,6 +295,13 @@ function StyleBody({ close, styleId, text, row }) {
           <${Button} size="sm" icon="copy" disabled=${pending || full} onClick=${duplicate}>複製<//>
           <${Button} size="sm" icon="trash" kind="danger-ghost" disabled=${pending || !sel} onClick=${remove}>刪除<//>
         </div>
+        <div class="cs-side-head cs-lib-head"><span>預設樣式</span><span class="dim">加入後可再調整</span></div>
+        <ul class="cs-list">${PRESETS.map((preset) => html`<li key=${preset.name} class="cs-lib-item">
+            <span class="cs-swatch" style=${swatchCss(preset)}>字</span>
+            <span class="cs-item-name">${preset.name}</span>
+            <${IconButton} icon="plus" size=${15} title=${full ? `最多 ${MAX_STYLES} 個樣式` : "加入這個專案"} disabled=${full}
+              onClick=${() => addPreset(preset)} />
+          </li>`)}</ul>
         <div class="cs-side-head cs-lib-head"><span>樣式庫</span><span class="dim">所有專案共用</span></div>
         ${library.length
           ? html`<ul class="cs-list">${library.map((lib) => html`<li key=${lib.id} class="cs-lib-item">
