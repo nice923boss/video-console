@@ -307,8 +307,7 @@
 .tl-clip.is-dragging { z-index: 4; opacity: .9; box-shadow: var(--shadow-2); cursor: grabbing; }
 
 .tl-tiles { position: absolute; inset: 0; background-position: left center; background-repeat: repeat-x; }
-.tl-tiles.is-strip { display: flex; overflow: hidden; }
-.tl-tile { flex: none; height: 100%; background-repeat: no-repeat; background-size: 800% 100%; }
+.tl-tiles.is-strip { width: 100%; height: 100%; }
 
 .tl-clip-label {
   position: absolute;

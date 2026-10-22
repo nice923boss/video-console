@@ -26,7 +26,7 @@ const MIN_STILL = 0.2;
 const MAX_STILL = 600;
 const MIN_ITEM = 0.1;
 const MAX_TIME = 36000;
-const MAX_TILES = 24;
+const TILE_H = VIDEO_H - 11; // the row's 1px bottom border, then .tl-clip sits 5px in from top and bottom
 const STRIP_FRAMES = 8;
 const WAVE_MAX_PX = 8000;
 const SOURCE_ICON = { video: "video", image: "image", empty: "film" };
@@ -155,28 +155,35 @@ function selectShot(id, additive) {
   focusShot(id, { additive });
 }
 
+// Tiles always keep the picture's own aspect, however long the clip. Consecutive tiles that show the same
+// strip frame become one rect filled with a repeating pattern, so a long clip costs at most STRIP_FRAMES rects.
 function Tiles({ clip, geo, pid, pps, ar }) {
   const take = clip.take;
   if (!take) return html`<div class="tl-tiles"></div>`;
-  const width = geo.length * pps;
-  const tileW = Math.max(VIDEO_H * ar, width / MAX_TILES);
   if (clip.source === "video" && take.strip) {
     const url = fileUrl(pid, take.strip);
     const dur = Number(take.duration) || 1;
-    const count = Math.max(1, Math.ceil(width / tileW));
-    const tiles = [];
+    const tileW = TILE_H * (take.width && take.height ? take.width / take.height : ar);
+    const count = Math.max(1, Math.ceil((geo.length * pps) / tileW));
+    const runs = [];
     for (let k = 0; k < count; k += 1) {
       const t = geo.in + ((k + 0.5) * tileW) / pps;
       const frame = clamp(Math.floor((t / dur) * STRIP_FRAMES), 0, STRIP_FRAMES - 1);
-      const pos = ((frame / (STRIP_FRAMES - 1)) * 100).toFixed(2);
-      tiles.push(html`<i key=${k} class="tl-tile"
-        style=${`width:${tileW}px;background-image:url("${url}");background-position:${pos}% 0`}></i>`);
+      const last = runs[runs.length - 1];
+      if (last && last.frame === frame) last.n += 1;
+      else runs.push({ frame, k, n: 1 });
     }
-    return html`<div class="tl-tiles is-strip">${tiles}</div>`;
+    const pat = (frame) => `tlp-${clip.shot.id}-${frame}`;
+    return html`<svg class="tl-tiles is-strip">
+      <defs>${runs.map((r) => html`<pattern key=${r.frame} id=${pat(r.frame)} patternUnits="userSpaceOnUse" width=${tileW} height=${TILE_H}>
+        <image href=${url} x=${-r.frame * tileW} width=${tileW * STRIP_FRAMES} height=${TILE_H} preserveAspectRatio="none" />
+      </pattern>`)}</defs>
+      ${runs.map((r) => html`<rect key=${r.frame} x=${r.k * tileW} width=${r.n * tileW} height=${TILE_H} fill=${`url(#${pat(r.frame)})`} />`)}
+    </svg>`;
   }
   const path = take.thumb || (clip.source === "image" ? take.file : "");
   if (!path) return html`<div class="tl-tiles"></div>`;
-  return html`<div class="tl-tiles" style=${`background-image:url("${fileUrl(pid, path)}");background-size:${tileW}px 100%`}></div>`;
+  return html`<div class="tl-tiles" style=${`background-image:url("${fileUrl(pid, path)}");background-size:auto 100%`}></div>`;
 }
 
 export function VideoTrack({ project, clips, ctx, editSel, focus }) {
