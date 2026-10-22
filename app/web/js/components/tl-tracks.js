@@ -1,5 +1,5 @@
-// Lane contents of the edit timeline: picture clips (trim and reorder), captions, soundtrack items and
-// picture-in-picture clips, plus the pointer-drag and snapping helpers they share. A drag previews in local state and writes a
+// Lane contents of the edit timeline: picture clips (trim and reorder) and their own sound, captions,
+// soundtrack items and picture-in-picture clips, plus the pointer-drag and snapping helpers they share. A drag previews in local state and writes a
 // single op on release, so every drag is one undo step.
 import { html, useState, useEffect, useRef } from "../lib/h.js";
 import { useStore, setState } from "../lib/store.js";
@@ -472,6 +472,34 @@ export function AudioClip({ project, item, ctx, selected }) {
     <${Handles} onDown=${begin} />
     <${Tip} tip=${drag && drag.tip ? { ...drag.tip, t: drag.tip.t - cur.start } : null} pps=${pps} />
   </div>`;
+}
+
+// The picture clips' own sound, one block per clip whose video take has sound, with its waveform when the
+// take has one (takes imported before waveforms were made for videos have none). It only shows the
+// sound: trims and moves happen on the picture lane, and its mute switch silences this lane too.
+// A click selects the shot, whose edit tab holds "轉成字幕".
+export function hasSourceAudio(clips) {
+  return clips.some((c) => c.source === "video" && c.take.hasAudio);
+}
+
+export function SourceAudioTrack({ project, clips, ctx, editSel }) {
+  const { pps } = ctx;
+  return clips.filter((c) => c.source === "video" && c.take.hasAudio).map((c) => {
+    const width = Math.max(4, c.length * pps);
+    const name = shotLabel(c.shot, c.index);
+    const sel = !!editSel && editSel.type === "shot" && editSel.id === c.shot.id;
+    return html`<div key=${c.shot.id} class=${`tl-audio tl-source${sel ? " is-selected" : ""}`}
+      style=${`left:${c.start * pps}px;width:${width}px`}
+      title=${`${name} 的原聲\n${fmtSeconds(c.start, 2)} 開始，長 ${fmtSeconds(c.length, 2)}，雙擊跳到開頭`}
+      onPointerDown=${(e) => e.stopPropagation()} onDblClick=${() => setTime(c.start)}
+      onClick=${() => {
+        setState({ editSel: { type: "shot", id: c.shot.id } });
+        focusShot(c.shot.id, { tab: "edit" });
+      }}>
+      <${Wave} pid=${project.id} media=${c.take} tIn=${c.in} len=${c.length} width=${width} />
+      <div class="tl-audio-label"><${Icon} name="volume" size=${12} /><span>${name}</span></div>
+    </div>`;
+  });
 }
 
 // ---------------------------------------------------------------- picture-in-picture lanes

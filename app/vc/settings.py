@@ -79,6 +79,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "history": {"keep": 50, "intervalSec": 120},
     "voice": {"url": "http://127.0.0.1:18301"},
+    "stt": {"folder": "", "python": ""},  # Speech-to-subtitle; empty: the sibling folder and its own Python
     "video2x": {"enabled": False, "method": "anime4k"},  # upscale ComfyUI videos to 1080P before they become takes
     "captionStyles": [],  # caption style library shared by every project; projects keep their own copies
 }
@@ -148,6 +149,8 @@ def _validate(cfg: dict) -> None:
     if not re.match(r"^https?://[^\s/]+", voice_url):
         raise AppError("Audio8Voice 位址格式不正確，例如 http://127.0.0.1:18301")
     voice["url"] = voice_url
+    stt = cfg["stt"]
+    stt.update(folder=str(stt.get("folder") or "").strip()[:500], python=str(stt.get("python") or "").strip()[:500])
     upscale = cfg["video2x"]
     upscale.update(enabled=bool(upscale.get("enabled")),
                    method=upscale.get("method") if upscale.get("method") in video2x.METHODS else "anime4k")

@@ -25,6 +25,7 @@ from .secrets import SecretStore
 from .sequence import compose_prompt
 from .settings import SettingsStore
 from .store import ProjectStore
+from .stt import SttClient, SttJobs
 from .takes import (TAKE_DIR, commit_takes, find_item, find_shot, item_path, new_take, reference_image,
                     shot_label, stage_file)
 from .util import AppError, clamp, kind_of, new_id, random_seed
@@ -107,6 +108,7 @@ class Runners:
         self._catalog = catalog
         self._local = LocalJobs(store, settings, media)
         self._voice = VoiceJobs(store, Audio8Voice(settings), media, VoAI(secrets))
+        self._stt = SttJobs(store, SttClient(settings), media)
         self._llm = LLMClient(settings, secrets)
 
     # ---------------------------------------------------------------- executor protocol
@@ -116,6 +118,8 @@ class Runners:
             return self._local.prepare(kind, project, shot_id, payload)
         if kind == "voice":
             return self._voice.prepare(project, payload)
+        if kind == "transcribe":
+            return self._stt.prepare(project, shot_id)
         if kind == "upscale":
             return self._prepare_upscale(project, shot_id, payload)
         if kind == "upscalevideo":
@@ -129,6 +133,8 @@ class Runners:
             return self._local.execute(ctl)
         if ctl.kind == "voice":
             return self._voice.execute(ctl)
+        if ctl.kind == "transcribe":
+            return self._stt.execute(ctl)
         work = self._store.project_dir(ctl.pid) / "media" / "cache" / f"job-{ctl.id}"
         work.mkdir(parents=True, exist_ok=True)
         try:
@@ -141,7 +147,7 @@ class Runners:
             shutil.rmtree(work, ignore_errors=True)
 
     def after_restart(self, job: dict) -> str:
-        if job.get("kind") in (*LOCAL_KINDS, "voice"):
+        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe"):
             return "restart"
         remote = job.get("remote") or {}
         if remote.get("type") == "comfy":

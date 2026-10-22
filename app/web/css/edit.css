@@ -447,6 +447,8 @@
 .tl-cap.is-dragging,
 .tl-audio.is-dragging { z-index: 4; box-shadow: var(--shadow-2), inset 0 0 0 2px var(--accent-line); cursor: grabbing; }
 
+.tl-audio.tl-source { cursor: pointer; }
+
 .tl-wave { position: absolute; top: 13px; left: 0; width: 100%; height: calc(100% - 15px); max-width: none; color: var(--info); opacity: .8; pointer-events: none; }
 
 .tl-fade { position: absolute; top: 0; bottom: 0; pointer-events: none; }

@@ -119,6 +119,15 @@ def _stage_video(media: Media, path: Path, thumbs: Path, item_id: str, info: dic
             info["strip"] = f"{THUMB_DIR}/{strip.name}"
     except AppError as exc:
         log.warning("Video thumbnails failed for %s: %s", path.name, exc.message)
+    if info["hasAudio"]:
+        # drawn under the picture clip on the timeline; a failure only loses the drawing, not the import
+        wave = thumbs / f"{item_id}_wave.json"
+        try:
+            peaks, wave_duration = media.waveform(path)
+            wave.write_text(json.dumps({"peaks": peaks, "duration": wave_duration}), encoding="utf-8")
+            info["wave"] = f"{THUMB_DIR}/{wave.name}"
+        except AppError as exc:
+            log.warning("Video waveform failed for %s: %s", path.name, exc.message)
     return path
 
 
@@ -136,7 +145,7 @@ def _stage_audio(media: Media, path: Path, wave: Path, info: dict) -> None:
 def new_take(shot_id: str | None, staged: dict, *, source: dict, prompt: str = "", negative: str = "",
              seed: int | None = None, params: dict | None = None, parent: str | None = None,
              job_id: str | None = None, label: str = "", take_id: str | None = None) -> dict:
-    return {
+    take = {
         "id": take_id or new_id("t"),
         "shot": shot_id,
         **{k: staged.get(k) for k in ("kind", "file", "thumb", "strip", "width", "height", "duration", "fps",
@@ -154,6 +163,9 @@ def new_take(shot_id: str | None, staged: dict, *, source: dict, prompt: str = "
         "label": label,
         "jobId": job_id,
     }
+    if staged.get("wave"):
+        take["wave"] = staged["wave"]
+    return take
 
 
 def new_media(staged: dict, name: str, media_id: str) -> dict:

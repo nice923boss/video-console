@@ -1,5 +1,5 @@
 // Edit timeline: ruler, then lanes from the top layer down (captions, picture-in-picture tracks,
-// the picture), then voice-overs and one lane per soundtrack item. A higher lane covers the ones below
+// the picture), the picture clips' own sound when any has some, then voice-overs and one lane per soundtrack item. A higher lane covers the ones below
 // it, in the preview and in the export. Zoom (px per second) and snapping are per-viewer preferences;
 // the playhead follows the shared playback clock directly, without re-rendering.
 import { html, useState, useEffect, useRef, useLayoutEffect } from "../lib/h.js";
@@ -18,7 +18,8 @@ import { splitAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
 import { Button, IconButton } from "./ui.js";
 import { Icon } from "./icons.js";
 import {
-  VideoTrack, CaptionTrack, AudioClip, OverlayClip, dragPointer, makeSnap, VIDEO_H, CAPTION_H, AUDIO_H, PIP_H, ADD_H,
+  VideoTrack, CaptionTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H,
+  CAPTION_H, AUDIO_H, PIP_H, ADD_H,
 } from "./tl-tracks.js";
 
 const LABEL_W = 176;
@@ -405,6 +406,11 @@ export function Timeline({ project, clips, hotkeys = true }) {
           ${lane("tl-lane-video", html`<${VideoTrack} project=${project} clips=${clips} ctx=${ctx} editSel=${editSel} focus=${focus} />
             ${drop && drop.row === "video" && drop.at != null && html`<i class="tl-insert" style=${`left:${drop.at * pps}px`}></i>`}`)}`,
           { drop: "video", hidden: !!tracks.videoHidden, muted: !!tracks.videoMuted })}
+        ${hasSourceAudio(clips) && row("source-audio", AUDIO_H, html`
+          ${label("volume", "原聲", muteBtn(!!tracks.videoMuted,
+            () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲"))}
+          ${lane("tl-lane-audio", html`<${SourceAudioTrack} project=${project} clips=${clips} ctx=${ctx} editSel=${editSel} />`)}`,
+          { muted: !!tracks.videoMuted })}
         ${voiceRows.map((items, i) => row(`voice-${i}`, AUDIO_H, html`
           ${label("mic", voiceRows.length > 1 ? `配音 ${i + 1}` : "配音", muteBtn(!!tracks.voiceMuted,
             () => setTrack("voiceMuted", tracks.voiceMuted ? "取消配音靜音" : "配音全部靜音"), "所有配音"))}

@@ -40,7 +40,7 @@ const SORT_FN = {
   name: (a, b) => (a.name || "").localeCompare(b.name || "", "zh-Hant"),
   duration: (a, b) => (b.duration || 0) - (a.duration || 0),
 };
-const TAKE_KEYS = ["kind", "file", "thumb", "strip", "width", "height", "duration", "fps", "hasAudio"];
+const TAKE_KEYS = ["kind", "file", "thumb", "strip", "wave", "width", "height", "duration", "fps", "hasAudio"];
 
 const countBy = (list, key) => list.reduce((m, x) => (x[key] ? m.set(x[key], (m.get(x[key]) || 0) + 1) : m), new Map());
 

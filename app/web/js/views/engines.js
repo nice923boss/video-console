@@ -1,6 +1,7 @@
 // Engines page: where images and videos come from. Routes pick a backend per shot, the other tabs set
 // up ComfyUI servers, workflow templates, cloud APIs, the text model behind prompt polishing and the
-// caption voice-over engines (the local Audio8Voice service and the VoAI cloud key).
+// caption voice-over engines (the local Audio8Voice service and the VoAI cloud key), and the local
+// Speech-to-subtitle that turns a clip's own sound into captions.
 import { html } from "../lib/h.js";
 import { useStore, setState } from "../lib/store.js";
 import { Tabs } from "../components/ui.js";
@@ -11,6 +12,7 @@ import { WorkflowsTab } from "./engines-workflows.js";
 import { ProvidersTab } from "./engines-providers.js";
 import { LlmTab } from "./engines-llm.js";
 import { VoiceTab } from "./engines-voice.js";
+import { SttTab } from "./engines-stt.js";
 
 const TABS = [
   { id: "routes", label: "路由", icon: "route", title: "每個鏡頭用哪個引擎生圖、生影片", view: RoutesTab },
@@ -19,6 +21,7 @@ const TABS = [
   { id: "providers", label: "雲端 API", icon: "cloud", title: "雲端生圖與生影片服務的金鑰和參數", view: ProvidersTab },
   { id: "llm", label: "文字模型", icon: "bot", title: "潤飾提示詞、劇本拆解與 LTX 提示詞翻譯用的語言模型", view: LlmTab },
   { id: "voice", label: "配音", icon: "mic", title: "AI 配音用的 VoAI 雲端與 Audio8Voice 本機服務", view: VoiceTab },
+  { id: "stt", label: "語音轉字幕", icon: "captions", title: "把影片原聲轉成字幕的本機 Speech-to-subtitle", view: SttTab },
 ];
 
 const TONE_TEXT = { ok: "全部在線", warn: "部分離線", danger: "全部離線", neutral: "沒有啟用的伺服器" };

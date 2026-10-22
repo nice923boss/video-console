@@ -4,6 +4,7 @@
 import { html, useMemo } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { updateShot } from "../lib/actions.js";
+import { submitJob } from "../lib/jobs-actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { fmtTime, fmtDuration, round } from "../lib/format.js";
 import { buildSequence, clipBounds, videoTake, imageTake } from "../lib/sequence.js";
@@ -148,7 +149,22 @@ function SourceInfo({ vid, img }) {
   </div>`;
 }
 
-export function EditTab({ project, shot }) {
+// Speech-to-subtitle turns the clip's own sound into captions at the clip's place on the timeline.
+function TranscribeSection({ project, shot, vid, clip, busy }) {
+  if (!vid || !vid.hasAudio) return null;
+  const job = busy.find((j) => j.kind === "transcribe");
+  const end = clip ? clip.start + clip.length : 0;
+  const overlap = clip ? project.captions.filter((c) => c.end > clip.start && c.start < end).length : 0;
+  const label = !job ? "轉成字幕" : job.status === "running" ? `轉錄中 ${Math.round((job.progress || 0) * 100)}%` : "排隊中";
+  return html`<${Section} title="語音轉字幕" icon="captions">
+    <${Button} icon="captions" busy=${!!job} disabled=${!clip || !!job} onClick=${() => submitJob("transcribe", shot.id)}>${label}<//>
+    ${!clip && html`<${Hint} icon="alert" tone="warn-text">這個鏡頭不在序列裡，放回序列後才能轉成字幕。<//>`}
+    ${clip && overlap > 0 && html`<${Hint} icon="alert" tone="warn-text">片段範圍內已有 ${overlap} 句字幕，轉出的字幕會另外加入，不會取代。<//>`}
+    ${clip && !overlap && html`<${Hint}>辨識修剪範圍內的原聲，字幕直接加到時間軸；不滿意可以按復原整批收回。<//>`}
+  <//>`;
+}
+
+export function EditTab({ project, shot, busy = NONE }) {
   const transitions = useStore((s) => s.presets.transitions || NONE);
   const clips = useMemo(() => buildSequence(project), [project]);
   const pos = clips.findIndex((c) => c.shot.id === shot.id);
@@ -162,5 +178,6 @@ export function EditTab({ project, shot }) {
     ${vid
       ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />`
       : html`<${StillSection} shot=${shot} img=${img} />`}
-    <${TransitionSection} shot=${shot} clip=${clip} isLast=${pos >= 0 && pos === clips.length - 1} transitions=${transitions} />`;
+    <${TransitionSection} shot=${shot} clip=${clip} isLast=${pos >= 0 && pos === clips.length - 1} transitions=${transitions} />
+    <${TranscribeSection} project=${project} shot=${shot} vid=${vid} clip=${clip} busy=${busy} />`;
 }
