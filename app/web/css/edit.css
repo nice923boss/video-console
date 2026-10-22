@@ -293,7 +293,17 @@
 
 .tl-clip:hover::after { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 35%, transparent); }
 .tl-clip.is-selected::after { box-shadow: inset 0 0 0 2px var(--accent-line); }
-.tl-clip.has-color::before { content: ""; position: absolute; top: 0; left: 0; right: 0; z-index: 2; height: 3px; background: var(--shot-color); }
+/* A colour tag tints the whole clip, so marked clips (to review, to cut) stand out at any zoom. */
+.tl-clip.has-color::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1; /* under the name and length tags that follow it */
+  pointer-events: none;
+  background: linear-gradient(var(--shot-color) 0 5px, color-mix(in srgb, var(--shot-color) 38%, transparent) 5px);
+  box-shadow: inset 0 0 0 2px var(--shot-color);
+  border-radius: inherit;
+}
 .tl-clip.is-dragging { z-index: 4; opacity: .9; box-shadow: var(--shadow-2); cursor: grabbing; }
 
 .tl-tiles { position: absolute; inset: 0; background-position: left center; background-repeat: repeat-x; }

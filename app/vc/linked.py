@@ -54,19 +54,37 @@ def _shift(old_clips: list[dict], new_clips: list[dict], t: float) -> float:
     return gap + local - t
 
 
+def _inside_deleted(old_clips: list[dict], deleted: set[str], start: float, end: float) -> bool:
+    """True when the span start..end sat wholly on a clip whose shot was deleted."""
+    i = _clip_at(old_clips, start)
+    if i < 0 or old_clips[i]["shot"]["id"] not in deleted:
+        return False
+    return end <= old_clips[i]["start"] + old_clips[i]["length"] + EPS
+
+
 def follow_ops(before: dict, after: dict) -> list[dict]:
-    """Update ops that move the items of `after` to follow its shots, compared with `before`."""
+    """Update ops that move the items of `after` to follow its shots, compared with `before`.
+
+    Captions lying wholly on a deleted shot go with it (and so do their voice-overs), the way a ripple
+    delete clears the linked tracks; a shot only taken out of the sequence keeps them.
+    """
     old_clips = build_sequence(before)
     if not old_clips:
         return []
     new_clips = build_sequence(after)
     old_starts = _starts(before)
+    deleted = {s["id"] for s in before.get("shots") or []} - {s["id"] for s in after.get("shots") or []}
     ops: list[dict] = []
     caption_shift: dict[str, float] = {}
+    dropped: set[str] = set()
 
     for cap in after.get("captions") or []:
         start = float(cap.get("start") or 0.0)
         if old_starts.get(("captions", cap["id"])) != start:
+            continue
+        if deleted and _inside_deleted(old_clips, deleted, start, float(cap.get("end") or 0.0)):
+            dropped.add(cap["id"])
+            ops.append({"op": "caption.delete", "id": cap["id"]})
             continue
         d = _shift(old_clips, new_clips, start)
         caption_shift[cap["id"]] = d
@@ -84,6 +102,9 @@ def follow_ops(before: dict, after: dict) -> list[dict]:
                 continue
             # A voice-over keeps in step with its caption.
             cid = item.get("captionId") if key == "audio" else None
+            if cid in dropped:
+                ops.append({"op": "audio.delete", "id": item["id"]})
+                continue
             d = caption_shift[cid] if cid in caption_shift else _shift(old_clips, new_clips, start)
             if abs(d) > EPS:
                 ops.append({"op": f"{name}.update", "id": item["id"], "patch": {"start": round(max(0.0, start + d), 3)}})

@@ -262,7 +262,7 @@ export async function deleteShots(ids) {
     const i = shots.findIndex((x) => x.id === ids[0]);
     const ok = await confirmDialog({
       title: ids.length > 1 ? `刪除 ${ids.length} 個鏡頭？` : `刪除「${shotLabel(shots[i], i)}」？`,
-      message: "已生成的版本會留在專案裡，按 Ctrl+Z 可以復原。",
+      message: `${linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕會一起刪除，" : ""}已生成的版本會留在專案裡，按 Ctrl+Z 可以復原。`,
       confirmLabel: "刪除",
       danger: true,
     });

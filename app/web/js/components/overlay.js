@@ -145,7 +145,8 @@ export function promptDialog(opts) {
 
 // ---------------------------------------------------------------- menus
 // target: a contextmenu event (opens at the pointer), a click event or element (opens below it),
-// or {x, y}. items: [{label, icon, onClick, danger, disabled, hint, checked, divider, header}]
+// or {x, y}. items: [{label, icon, onClick, danger, disabled, hint, checked, divider, header, swatch}]
+// swatch: a colour dot in place of the icon (null draws the "no colour" dot); checked then shows on the right.
 export function openMenu(target, items) {
   let x = 8;
   let y = 8;
@@ -257,11 +258,14 @@ function MenuView({ m }) {
       return html`<button type="button" key=${i} class=${cls} role="menuitem" disabled=${it.disabled}
           title=${it.title || undefined} onMouseEnter=${() => setActive(i)} onClick=${() => run(it)}>
         <span class="menu-icon">
-          ${it.checked != null ? it.checked && html`<${Icon} name="check" size=${15} />`
+          ${it.swatch !== undefined
+            ? html`<i class=${`swatch menu-swatch ${it.swatch ? "" : "swatch-none"}`} style=${it.swatch ? `--swatch:${it.swatch}` : undefined}></i>`
+            : it.checked != null ? it.checked && html`<${Icon} name="check" size=${15} />`
             : it.icon && html`<${Icon} name=${it.icon} size=${15} />`}
         </span>
         <span class="menu-label">${it.label}</span>
         ${it.hint && html`<span class="menu-hint">${it.hint}</span>`}
+        ${it.swatch !== undefined && it.checked && html`<${Icon} name="check" size=${15} />`}
       </button>`;
     })}
   </div>`;

@@ -10,6 +10,8 @@ import { buildSequence, audioLength } from "../lib/sequence.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
 import { takeFromMedia } from "../views/library.js";
 import { Icon } from "./icons.js";
+import { openMenu } from "./overlay.js";
+import { SHOT_COLORS } from "./insp-content.js";
 
 // Row heights in CSS pixels; timeline.js uses the same numbers for the label column.
 export const VIDEO_H = 60;
@@ -28,6 +30,18 @@ const MAX_TILES = 24;
 const STRIP_FRAMES = 8;
 const WAVE_MAX_PX = 8000;
 const SOURCE_ICON = { video: "video", image: "image", empty: "film" };
+
+// Right-click on a picture clip: tag it with a colour, e.g. to mark a long pause for review before cutting it.
+function clipMenu(e, shot, label) {
+  setState({ editSel: { type: "shot", id: shot.id } });
+  focusShot(shot.id, { tab: "edit" });
+  const current = shot.color ?? null;
+  openMenu(e, [
+    { header: `${label}：標籤顏色` },
+    ...SHOT_COLORS.map((c) => ({ label: c.label, swatch: c.value, checked: current === c.value,
+      onClick: () => current !== c.value && updateShot(shot.id, { color: c.value }, { label: "修改標籤顏色" }) })),
+  ]);
+}
 
 // Left-button drag tracked on window. onMove(dx, ev) starts once the pointer passed `threshold` px
 // sideways (or in any direction with axis "xy"); onEnd(moved, ev, cancelled) always runs. Escape
@@ -270,8 +284,9 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
       + (clip.shot.color ? `;--shot-color:${clip.shot.color}` : "")
       + (moving ? `;transform:translateX(${drag.dx}px)` : "");
     return html`<div key=${id} class=${cls} style=${style}
-      title=${`${label}，${fmtSeconds(clip.length, 2)}\n拖曳左右邊緣修剪，拖曳中間調整順序，雙擊跳到該處`}
-      onPointerDown=${(e) => beginMove(e, clip)} onDblClick=${(e) => setTime(laneTime(e, pps))}>
+      title=${`${label}，${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n拖曳左右邊緣修剪，拖曳中間調整順序，雙擊跳到該處，右鍵標記顏色`}
+      onPointerDown=${(e) => beginMove(e, clip)} onDblClick=${(e) => setTime(laneTime(e, pps))}
+      onContextMenu=${(e) => clipMenu(e, clip.shot, label)}>
       <${Tiles} clip=${clip} geo=${geo} pid=${project.id} pps=${pps} ar=${ctx.ar} />
       <div class="tl-clip-label"><${Icon} name=${SOURCE_ICON[clip.source]} size=${12} /><span>${label}</span></div>
       ${clip.source === "empty" && geo.length * pps > 90 && html`<span class="tl-clip-empty">尚未產生畫面</span>`}

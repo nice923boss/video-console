@@ -9,7 +9,8 @@ import { clock, setTime } from "../lib/clock.js";
 import { fmtTime, fmtDuration, round } from "../lib/format.js";
 import { buildSequence, clipBounds, videoTake, imageTake } from "../lib/sequence.js";
 import { Icon } from "./icons.js";
-import { Field, NumberInput, Select, Toggle, Section, Button, Badge } from "./ui.js";
+import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText } from "./ui.js";
+import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
 
 const NONE = [];
@@ -149,6 +150,20 @@ function SourceInfo({ vid, img }) {
   </div>`;
 }
 
+// Colour tag and note, to mark a clip for review (a long pause, a retake) without cutting it yet.
+function MarkSection({ shot }) {
+  return html`<${Section} title="標記" icon="palette">
+    <${Field} label="標籤顏色" hint="時間軸上的片段會整段染色；在時間軸片段上按右鍵也能設定">
+      <${ColorSwatches} value=${shot.color ?? null}
+        onChange=${(color) => updateShot(shot.id, { color }, { label: "修改標籤顏色" })} />
+    <//>
+    <${Field} label="備註">
+      <${DraftText} multiline rows=${2} value=${shot.notes || ""} maxLength=${4000} placeholder="例如：停頓 3 秒，評估是否刪除"
+        onCommit=${(notes) => updateShot(shot.id, { notes }, { coalesce: `${shot.id}:notes`, label: "修改鏡頭備註" })} />
+    <//>
+  <//>`;
+}
+
 // Speech-to-subtitle turns the clip's own sound into captions at the clip's place on the timeline.
 function TranscribeSection({ project, shot, vid, clip, busy }) {
   if (!vid || !vid.hasAudio) return null;
@@ -175,6 +190,7 @@ export function EditTab({ project, shot, busy = NONE }) {
   return html`
     <${SourceInfo} vid=${vid} img=${img} />
     <${SequenceSection} shot=${shot} clip=${clip} position=${pos + 1} total=${clips.length} />
+    <${MarkSection} shot=${shot} />
     ${vid
       ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />`
       : html`<${StillSection} shot=${shot} img=${img} />`}

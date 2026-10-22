@@ -54,8 +54,32 @@ def test_deleted_shot_items_land_where_it_began() -> None:
     p = make_project()
     linked(p, {"op": "shot.delete", "id": "s_bbbbbbbb"})  # A 0..4, C 4..8
     s = starts(p)
-    assert s["c_onb0000a"] == 5.0 and s["a_sfx0000a"] == 4.5  # offset kept from where B began
+    assert "c_onb0000a" not in s and "a_vo00000a" not in s  # its caption and voice-over went with it
+    assert s["a_sfx0000a"] == 4.5  # offset kept from where B began
     assert s["o_onc0000a"] == 5.0
+
+
+def test_caption_running_past_a_deleted_shot_stays() -> None:
+    p = make_project()
+    p["captions"][0]["end"] = 9.0  # runs on into C
+    linked(p, {"op": "shot.delete", "id": "s_bbbbbbbb"})
+    assert starts(p)["c_onb0000a"] == 5.0
+
+
+def test_shot_out_of_sequence_keeps_its_captions() -> None:
+    p = make_project()
+    linked(p, {"op": "shot.update", "id": "s_bbbbbbbb", "patch": {"inSequence": False}})
+    s = starts(p)
+    assert s["c_onb0000a"] == 5.0 and s["a_vo00000a"] == 5.0
+
+
+def test_undo_restores_deleted_captions() -> None:
+    p = make_project()
+    before = starts(p)
+    inverse = linked(p, {"op": "shot.delete", "id": "s_bbbbbbbb"})
+    apply_ops(p, inverse, {})
+    assert starts(p) == before
+    assert next(a for a in p["audio"] if a["id"] == "a_vo00000a")["captionId"] == "c_onb0000a"
 
 
 def test_split_leaves_items_in_place() -> None:

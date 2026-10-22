@@ -52,7 +52,7 @@ def test_deleting_the_shot_unbinds_and_undo_rebinds() -> None:
 def test_linked_delete_undo_rebinds() -> None:
     p = make_project()
     inverse = apply_ops(p, [{"op": "linked", "ops": [{"op": "shot.delete", "id": "s_bbbbbbbb"}]}], {})
-    assert p["captions"][0]["shot"] is None
+    assert p["captions"] == []  # it lay wholly on B, so the linked delete took it along
     apply_ops(p, inverse, {})
     assert p["captions"][0]["shot"] == "s_bbbbbbbb" and p["captions"][0]["start"] == 4.5
 
