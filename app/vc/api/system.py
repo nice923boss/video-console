@@ -108,6 +108,13 @@ def register(router: Router, app: App) -> None:
         threading.Thread(target=later, name="shutdown", daemon=True).start()
         return {"ok": True}
 
+    @router.route("POST", "/api/tray")
+    def show_tray(req: Request) -> dict:
+        """A copy started without a window shows its tray icon once the user opens a window onto it."""
+        if app.tray is not None:
+            app.tray.start()
+        return {"tray": bool(app.tray and app.tray.running)}
+
     @router.route("GET", "/api/settings")
     def get_settings(req: Request) -> dict:
         return app.settings.get()

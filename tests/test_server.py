@@ -464,6 +464,24 @@ def test_queue_controls_while_paused(app: App, client: Client, project: dict) ->
     assert client.json("POST", "/api/jobs/pause", {"paused": False})["paused"] is False
 
 
+class FakeTray:
+    def __init__(self) -> None:
+        self.running = False
+
+    def start(self) -> None:
+        self.running = True
+
+
+def test_tray_keeps_a_windowless_server_alive(app: App, client: Client) -> None:
+    assert client.json("POST", "/api/tray", {}) == {"tray": False}  # started without a tray: nothing to show
+    app.tray = FakeTray()
+    assert app._busy() is False
+    assert client.json("POST", "/api/tray", {}) == {"tray": True}  # a window opened onto a --no-window copy
+    assert app._busy() is True
+    app.tray = None
+    assert app._busy() is False
+
+
 def test_job_batch_reports_each_bad_item(client: Client, project: dict) -> None:
     items = [{"kind": "nope", "pid": project["id"]}, "junk", {"kind": "export", "pid": "p_missing000"}]
     result = client.json("POST", "/api/jobs/batch", {"jobs": items})

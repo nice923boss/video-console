@@ -27,6 +27,7 @@ from .secrets import SecretStore
 from .server import HttpServer, Router, serve_in_thread
 from .settings import SettingsStore
 from .store import ProjectStore
+from .tray import Tray
 from .util import new_id
 
 log = logging.getLogger("vc.app")
@@ -64,6 +65,7 @@ class App:
         self.router = Router()
         api.register(self.router, self)
         self.server: HttpServer | None = None
+        self.tray: Tray | None = None  # set by the launcher; shown for window launches or on POST /api/tray
         self._stop_lock = threading.Lock()
         self._stopping = False
         self._stopped = threading.Event()
@@ -137,6 +139,8 @@ class App:
     def _busy(self) -> bool:
         if self.bus.subscriber_count:
             return True  # a window is open
+        if self.tray is not None and self.tray.running:
+            return True  # closed windows leave it in the tray until the user quits from there
         state = self.jobs.state()
         counts = state["counts"]
         return bool(counts.get("running") or (counts.get("queued") and not state["paused"]))

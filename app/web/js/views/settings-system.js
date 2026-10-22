@@ -152,8 +152,8 @@ export function SystemSection() {
         onClick=${() => revealSystemFolder(f.what)}>${f.label}<//>`)}
     </div>
     <hr class="set-sep" />
-    <${Toggle} checked=${autoExit} onChange=${(autoExit) => saveSettings({ ui: { autoExit } })} label="關閉視窗後自動結束"
-      hint="所有視窗都關閉兩分鐘、而且佇列沒有工作時，背景伺服器自動結束；關閉這個選項，伺服器會一直在背景執行" />
+    <${Toggle} checked=${autoExit} onChange=${(autoExit) => saveSettings({ ui: { autoExit } })} label="背景啟動時自動結束"
+      hint="由 Claude 或工具在背景啟動（沒有托盤圖示）時，所有視窗都關閉兩分鐘、而且佇列沒有工作，背景伺服器自動結束；關閉這個選項，伺服器會一直在背景執行。從桌面啟動的 Video Console 關閉視窗後會留在系統托盤，要從托盤圖示的右鍵選單結束" />
     <div class="set-danger">
       <div>
         <b>結束程式</b>

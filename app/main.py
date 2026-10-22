@@ -1,4 +1,5 @@
 """Video Console launcher: one server per data folder, shown in a Chrome (or Edge) app window.
+A window launch also puts an icon in the system tray, so closing the window leaves it running there.
 
     pythonw app\\main.py             start (or bring up a window onto the running copy)
     python app\\main.py --stop       stop the running copy
@@ -17,11 +18,13 @@ import webbrowser
 from pathlib import Path
 from typing import IO, Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 
 from vc import APP_NAME, DEFAULT_PORT, VERSION  # noqa: E402
 from vc.logsetup import setup_logging  # noqa: E402
 from vc.paths import Paths  # noqa: E402
+from vc.tray import Tray  # noqa: E402
 
 log = logging.getLogger("vc.main")
 
@@ -30,6 +33,8 @@ BROWSERS = (("chrome.exe", "Google/Chrome/Application"), ("msedge.exe", "Microso
 # a system proxy must never see requests to our own loopback server
 LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 PROCESS = Path(sys.executable).name  # pythonw.exe from source, "Video Console.exe" when packaged
+# the tray icon: the packaged exe carries its own; from source, use the one the build embeds
+ICON = Path(sys.executable) if getattr(sys, "frozen", False) else ROOT.parent / "packaging" / "icon.ico"
 
 
 # ---------------------------------------------------------------- the running copy
@@ -73,6 +78,16 @@ def stop_running(paths: Paths) -> int:
         time.sleep(0.3)
     print(f"Video Console 沒有在 15 秒內結束，請從工作管理員結束 {PROCESS}。")
     return 1
+
+
+def request_tray(info: dict) -> None:
+    """Ask a copy started without a window (by Claude or a tool) to show its tray icon."""
+    req = urllib.request.Request(f"http://127.0.0.1:{info['port']}/api/tray", data=b"{}", method="POST",
+                                 headers={"X-VC": "1", "Content-Type": "application/json"})
+    try:
+        LOCAL.open(req, timeout=5).close()
+    except OSError as exc:
+        log.warning("Could not ask the running copy for its tray icon: %s", exc)
 
 
 def acquire_lock(path: Path) -> IO[bytes] | None:
@@ -158,6 +173,7 @@ def claim_instance(paths: Paths, no_window: bool, wait: float = 10.0) -> IO[byte
         info = read_server_info(paths)
         if alive(info):
             if not no_window:
+                request_tray(info)
                 open_window(f"http://127.0.0.1:{info['port']}/", paths)
             log.info("Already running on port %s", info["port"])
             return 0
@@ -165,6 +181,18 @@ def claim_instance(paths: Paths, no_window: bool, wait: float = 10.0) -> IO[byte
             return fail(f"另一個 Video Console 正在執行但沒有回應。請在工作管理員結束 {PROCESS} 後再試一次。",
                         no_window)
         time.sleep(0.3)
+
+
+def confirm_quit(app: Any) -> bool:
+    """Quitting from the tray interrupts running jobs, so ask first when there are any."""
+    counts = app.jobs.state()["counts"]
+    busy = (counts.get("running") or 0) + (counts.get("queued") or 0)
+    if not busy or sys.platform != "win32":
+        return True
+    import ctypes
+    message = (f"還有 {busy} 個工作在執行或排隊。結束後執行中的工作會中斷，排隊中的工作下次啟動後繼續。\n\n"
+               "確定要結束 Video Console？")
+    return ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x34) == 6  # MB_YESNO | MB_ICONWARNING, IDYES
 
 
 def serve(paths: Paths, port: int | None, no_window: bool) -> int:
@@ -185,13 +213,17 @@ def serve(paths: Paths, port: int | None, no_window: bool) -> int:
     info: dict[str, Any] = {"port": bound, "pid": os.getpid(), "instance": app.instance, "url": url,
                             "started": app.started}
     paths.pid_file.write_text(json.dumps(info), encoding="utf-8")
+    app.tray = Tray(APP_NAME, ICON, on_open=lambda: open_window(url, paths), on_quit=app.stop,
+                    can_quit=lambda: confirm_quit(app))
     try:
         if not no_window:
+            app.tray.start()
             open_window(url, paths)
         app.wait()
     except KeyboardInterrupt:
         app.stop()
     finally:
+        app.tray.stop()
         paths.pid_file.unlink(missing_ok=True)
     return 0
 
