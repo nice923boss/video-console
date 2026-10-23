@@ -256,7 +256,7 @@
 | 142 | 執行檔版預設只找解壓縮資料夾同層的 Speech-to-subtitle | 預設路徑取程式資料夾的上一層再找 `Speech-to-subtitle`；執行檔版的程式資料夾是解壓縮出來的 `Video Console`（1.4.0 實測） | STS 不在它旁邊時，要在「引擎 › 語音轉字幕」指定資料夾 | 有使用者回報時 | Claude |
 | 143 | 匯入影片多一次波形解碼 | 用 ffmpeg 解整段音訊算波形 | 匯入長片會多花時間；波形失敗只少了圖，不影響匯入 | 有使用者回報時 | Claude |
 | 144 | 語音轉字幕只在一部 30 秒影片上驗收 | 真實素材只跑了一次 | 長片段、多段影片、英文或混合語言片段的耗時與品質未實測；這次的字幕有 Whisper 誤聽（「我們綠菜」）與兩句併成一句的情況 | 實際用在專案時抽檢 | 黃政文操作，Claude 修正 |
-| 145 | 語音轉字幕要另外的 Speech-to-subtitle | Speech-to-subtitle 是作者另外的本機語音辨識程式，不在這個儲存庫，目前沒有公開下載 | 其他使用者無法使用語音轉字幕；原聲波形與其餘功能不受影響 | Speech-to-subtitle 公開或改接其他語音辨識服務時 | 黃政文決定 |
+| 145 | ~~語音轉字幕要另外的 Speech-to-subtitle，目前沒有公開下載~~（已解決） | 2026-10-23 Speech-to-subtitle 以 MIT 授權開源於 https://github.com/nice923boss/Speech-to-subtitle ，README「搭配工具」與 docs/CLAUDE_SETUP.md 步驟 4 改成 git clone 安裝 | 仍需要 NVIDIA 顯示卡（只走 CUDA），沒有 NVIDIA 顯示卡的電腦無法轉字幕；原聲波形與其餘功能不受影響 | 不處理 | 不適用 |
 
 ## 片段標色與連動刪除字幕
 

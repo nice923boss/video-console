@@ -6,6 +6,86 @@
 
 已知限制與未驗證的部分集中列在 [GAPS.md](GAPS.md)，使用前請先看一遍。
 
+## 介紹影片
+
+[![Video Console 介紹影片](https://img.youtube.com/vi/LozZDUHJzOg/maxresdefault.jpg)](https://youtu.be/LozZDUHJzOg)
+
+▶ [在 YouTube 觀看「Video Console AI 影片剪輯工具」](https://youtu.be/LozZDUHJzOg)
+
+## 畫面導覽
+
+![剪輯頁](docs/images/edit.png)
+
+**剪輯**：上方即時預覽，下方時間軸由上而下是字幕、多條畫面軌、配音與四條音訊軌；右側是選取鏡頭的屬性與生成設定。
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/home.png" alt="專案首頁"></td>
+    <td width="50%"><img src="docs/images/script-import.png" alt="從劇本建立鏡頭"></td>
+  </tr>
+  <tr>
+    <td><b>專案首頁</b>：新增專案、從劇本開始或匯入專案，上方顯示專案數、生成佇列與 ComfyUI 顯示卡狀態。</td>
+    <td><b>從劇本建立鏡頭</b>：貼上劇本或 Excel 分鏡表、開啟 Word 檔，選拆分方式（自動、段落、行、句子、文字模型）；也能下載空白 Word 腳本照欄位填寫。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/board.png" alt="分鏡"></td>
+    <td><img src="docs/images/generate.png" alt="生成"></td>
+  </tr>
+  <tr>
+    <td><b>分鏡</b>：每個鏡頭一張卡片，顯示畫面、描述、運鏡與秒數，拖曳調整順序；右側填鏡頭描述、景別、字幕與運鏡。</td>
+    <td><b>生成</b>：選路由（ComfyUI 或雲端 API）、範本、步數與提示詞，按「生圖」「生影片」排進佇列；可以勾選生圖後接著生影片、用 Video2X 放大到 1080P。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/grade.png" alt="調色"></td>
+    <td><img src="docs/images/caption-style.png" alt="字幕樣式"></td>
+  </tr>
+  <tr>
+    <td><b>調色</b>：在調整圖層上用四個色輪（全局、陰影、中間調、高光）、色溫、色調、色相與混合比例調色，預覽即時套用，輸出時烘成 LUT。</td>
+    <td><b>字幕樣式</b>：字型、大小、外框、陰影、半透明底框與位置，內建 7 組預設樣式；存進樣式庫後所有專案共用。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/export.png" alt="輸出"></td>
+    <td><img src="docs/images/library.png" alt="素材庫"></td>
+  </tr>
+  <tr>
+    <td><b>輸出</b>：選畫質、編碼器與淡入淡出，可以把字幕燒進畫面、同時下載 SRT，或只下載 SRT；「打包專案」分頁把整個專案打包成 ZIP。</td>
+    <td><b>素材庫</b>：圖片、影片、音訊分類篩選與搜尋，雙擊預覽、F 加入最愛、F2 重新命名；「輸出成品」分頁列出所有輸出檔。</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/engines-routes.png" alt="生成路由"></td>
+    <td><img src="docs/images/engines-providers.png" alt="雲端 API"></td>
+  </tr>
+  <tr>
+    <td><b>路由</b>：每條路由各自指定圖片與影片走 ComfyUI 範本或雲端 API；預設 A 走本機 ComfyUI、B 走雲端，鏡頭可以個別切換。</td>
+    <td><b>雲端 API</b>：OpenAI、Google Gemini、fal.ai、Replicate、Stability AI、Runway、可靈、MiniMax 與自訂 HTTP，各一張設定卡片，填金鑰後按「測試連線」。</td>
+  </tr>
+</table>
+
+## 搭配工具：Speech-to-subtitle 語音轉字幕
+
+[**Speech-to-subtitle**](https://github.com/nice923boss/Speech-to-subtitle) 是作者另一個開源專案（MIT），把影片或音檔批次轉成 SRT 字幕的 Windows 桌面工具。Video Console 剪輯頁的「轉成字幕」就是呼叫它辨識影片原聲；它也可以單獨開視窗批次轉檔。
+
+- 用 faster-whisper（Whisper large-v3）轉錄，語言自動偵測，或指定中、英、日、韓等語言。
+- 有 Montreal Forced Aligner（MFA）時做詞級對齊；沒有時用音訊能量把字幕開頭對到實際開口的時間。
+- 中文輸出經 OpenCC 轉成臺灣正體。
+- 偵測 Whisper 在音樂、歌唱段落反覆輸出同一句的情形，只重新解碼那一段。
+- 每個檔案在自己的子行程轉錄，顯示卡驅動崩潰只影響該檔，批次繼續跑下一個。
+- 需要 NVIDIA 顯示卡（只走 CUDA，沒有 CPU 模式）、Python 3.12 與 large-v3 模型（約 3 GB，安裝腳本可代為下載）。
+
+搭配 Video Console 的設定方式：
+
+1. 把 Speech-to-subtitle 下載到和 Video Console 同一層的資料夾，例如 `D:\Tools\Video Console` 旁邊的 `D:\Tools\Speech-to-subtitle`：
+
+   ```bash
+   git clone https://github.com/nice923boss/Speech-to-subtitle.git
+   ```
+
+   不用 git 的話，在 GitHub 頁面按 **Code › Download ZIP** 解壓縮，資料夾名稱改成 `Speech-to-subtitle`。
+2. 執行 Speech-to-subtitle 資料夾裡的 `安裝依賴.bat`，看到「可以執行 start.bat 開啟 App」即完成。
+3. 回到 Video Console「引擎」頁「語音轉字幕」分頁按「檢查」。放在同一層時，資料夾與 Python 兩欄都可以留白。
+
+![語音轉字幕設定](docs/images/engines-stt.png)
+
 ## 需求
 
 | 項目 | 說明 |
@@ -15,6 +95,7 @@
 | ffmpeg（必要） | 輸出影片、擷取畫面、產生縮圖。在 APP 內一鍵安裝（約 31 MB），或沿用電腦上已有的 ffmpeg |
 | ComfyUI（選用） | 本機或其他電腦上的 ComfyUI，預設連 `http://127.0.0.1:8000` |
 | Video2X（選用） | 把 ComfyUI 生的 480P 影片放大到 1080P。在 APP 內安裝 6.4 版可攜版（約 197 MB），或沿用裝在 `C:\Program Files\Video2X Qt6` 的版本 |
+| Speech-to-subtitle（選用） | 影片原聲轉字幕，需要 NVIDIA 顯示卡。另一個開源專案，安裝方式見上方「搭配工具」 |
 | Python（只有從原始碼執行才需要） | 3.10 以上（安裝時勾選 Add python.exe to PATH） |
 
 ## 安裝與啟動
@@ -107,7 +188,7 @@ Google 在 2026-10-22 停用 Gemini API 上的所有 Veo 模型，原本的「Go
 
 ### 語音轉字幕（選用）
 
-影片原聲轉字幕由 Speech-to-subtitle 產生：這是作者另外寫的本機語音辨識程式（faster-whisper，需要 NVIDIA 顯示卡），不在這個儲存庫裡，目前沒有公開下載。沒有它時，轉字幕以外的功能照常可用；有聲音的影片匯入後，時間軸「原聲」列一樣會顯示波形。
+影片原聲轉字幕由 [Speech-to-subtitle](https://github.com/nice923boss/Speech-to-subtitle) 產生：這是作者另外寫的本機語音辨識程式（faster-whisper，需要 NVIDIA 顯示卡），已開源，下載與安裝見上方「搭配工具」。沒有它時，轉字幕以外的功能照常可用；有聲音的影片匯入後，時間軸「原聲」列一樣會顯示波形。
 
 1. 「引擎」頁「語音轉字幕」分頁填 Speech-to-subtitle 資料夾與它的 Python，按「檢查」。資料夾留白時，找和 Video Console 資料夾同一層的 `Speech-to-subtitle`。
 2. 剪輯頁選取有聲音的鏡頭，在鏡頭屬性「剪輯」分頁按「轉成字幕」：辨識修剪範圍內的原聲，字幕直接加到時間軸，不滿意可以按復原整批收回。
@@ -123,7 +204,7 @@ Google 在 2026-10-22 停用 Gemini API 上的所有 Veo 模型，原本的「Go
 
 1. **專案**：新增專案，選畫面比例、尺寸、影格率與風格預設，可以附範例鏡頭。
 2. **分鏡**：貼上腳本或鏡頭表自動拆鏡（支援表格、編號清單、「畫面：」「旁白：」這類欄位），每個鏡頭填畫面描述、運鏡、秒數、旁白。選取鏡頭按 `G` 生圖、`V` 生影片，每次結果都保留成一個版本，可以比較、評分、切換。生影片的長度在「生成」分頁的「影片秒數」選，雲端模型的選單只列出該模型支援的秒數，選「自動」會取最接近鏡頭秒數的值；ComfyUI 的 LTX-Video 可選 1～10 秒，選「自動」跟鏡頭長度，超過 10.7 秒會截短並在工作紀錄說明。勾選「生影片後用 Video2X 放大到 1080P」時，ComfyUI 影片會先放大再放上時間軸（見「ComfyUI」一節）。
-3. **剪輯**：時間軸上排鏡頭、調整入點出點、轉場、字幕、配樂與音量，即時預覽。字幕可以指定人物，用 Audio8Voice 排隊生成配音。
+3. **剪輯**：時間軸上排鏡頭、調整入點出點、轉場、字幕、配樂與音量，即時預覽。字幕可以手動輸入、匯入 SRT，或用 Speech-to-subtitle 辨識影片原聲產生；字幕可以指定人物，用 Audio8Voice 排隊生成配音。
 4. **素材**：管理生成與匯入的圖片、影片、音訊，收藏、重新命名，指定給鏡頭、設成參考圖或加入音軌。
 5. **輸出**：輸出 MP4、SRT 字幕、鏡頭表 CSV，或把整個專案打包成 ZIP 交給別人。
 6. **佇列**：所有工作在這裡排隊，可以暫停整個佇列、把工作移到最前面、取消、重試，失敗時顯示原因。

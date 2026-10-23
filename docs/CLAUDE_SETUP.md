@@ -49,11 +49,17 @@ VC 也會自動找系統 PATH、imageio-ffmpeg 套件、WinGet 與 Scoop 安裝�
 
 ## 步驟 4：語音轉字幕（選用，剪訪談影片需要）
 
-語音轉字幕用的是另一個專案 **Speech-to-subtitle**，目前沒有公開下載，需要從原本的電腦整個資料夾複製過來。
+語音轉字幕用的是另一個開源專案 **Speech-to-subtitle**：https://github.com/nice923boss/Speech-to-subtitle
 
 需求：NVIDIA 顯示卡（辨識只跑 CUDA，沒有 NVIDIA 顯示卡無法使用）、Python 3.12。
 
-1. 把 `Speech-to-subtitle` 資料夾放在 VC 資料夾的**同一層**，例如 `D:\Tools\Video Console` 與 `D:\Tools\Speech-to-subtitle`。放別處也可以，之後在 VC「引擎」頁「語音轉字幕」分頁填路徑。
+1. 在 VC 資料夾的**上一層**下載，讓兩個資料夾在同一層，例如 `D:\Tools\Video Console` 與 `D:\Tools\Speech-to-subtitle`：
+
+   ```bash
+   git clone https://github.com/nice923boss/Speech-to-subtitle.git
+   ```
+
+   沒有 git 時，請使用者在 GitHub 頁面按 Code › Download ZIP，解壓縮後把資料夾改名成 `Speech-to-subtitle`。放別處也可以，之後在 VC「引擎」頁「語音轉字幕」分頁填路徑。
 2. 執行該資料夾裡的 `安裝依賴.bat`。它會：把虛擬環境重新指到這台電腦的 Python 3.12、用 pip 安裝套件（有 NVIDIA 顯示卡時加裝 GPU 套件）、可用 winget 安裝 ffmpeg、下載 faster-whisper large-v3 模型（約 3 GB）。
 3. 選用：MFA 精準對齊（字幕時間更準）。需要 Miniforge，裝在 `%USERPROFILE%\miniforge3`，然後：
 
