@@ -33,6 +33,31 @@ const SAMPLE = `1. 清晨的海港，薄霧中漁船緩緩出港，海鷗盤旋�
 
 3. 太陽躍出海平面，金色光芒灑滿甲板。（特寫轉全景，向上搖鏡）
 字幕：每一天，都是新的航程。`;
+// The blank Word script (app/web/assets): five columns the importer reads, one row per story beat.
+const TEMPLATE_URL = "/assets/script-template.docx";
+const TEMPLATE_COLUMNS = [
+  ["內容", "鏡頭名稱，例如【開場】"],
+  ["影部", "畫面描述；用 1. 2. 分行寫動作，細拆時每個動作一鏡，寫明（特寫）會保留特寫"],
+  ["聲部", "旁白、台詞，以「旁白：」「角色名：」開頭，匯入後變成字幕"],
+  ["長度", "秒數，例如 8秒；填了就維持一鏡，留白由 APP 依節奏與旁白長度安排"],
+  ["效果字＆備註", "存進鏡頭備註；運鏡指示（例如「鏡頭：用廣角拍全景」）細拆時另成一鏡"],
+];
+
+function TemplateGuide() {
+  return html`<div class="note note-info si-template">
+    <${Icon} name="file" size=${15} />
+    <div class="note-text">
+      <strong>用空白腳本寫劇本：</strong>下載 Word 範本，一列寫一段劇情（列不夠就在 Word 表格新增列），存檔後按左下「開啟檔案」匯入。
+      <dl class="si-cols">
+        ${TEMPLATE_COLUMNS.map(([col, use]) => html`<dt key=${col}>${col}</dt><dd>${use}</dd>`)}
+      </dl>
+      <span class="dim">表格外的段落標題（如【第一幕：】）與最上方的長度、製作表格只供撰寫參考，不會匯入。</span>
+    </div>
+    <a class="btn btn-primary" href=${TEMPLATE_URL} download="空白腳本.docx" title="下載 Word 分鏡表範本（.docx）">
+      <${Icon} name="download" size=${16} /><span class="btn-text">下載空白腳本</span>
+    </a>
+  </div>`;
+}
 
 // Text files from Windows tools are often Big5; fall back when UTF-8 decoding hits invalid bytes.
 async function readTextFile(file) {
@@ -202,6 +227,7 @@ function ScriptImportBody({ close }) {
     <${Button} onClick=${() => close(null)}>取消<//>
     <${Button} kind="primary" icon="split" busy=${busy} disabled=${!text.trim()} onClick=${parse}>拆解成鏡頭<//>`;
   return html`<${Modal} title="從劇本建立鏡頭" wide backdropClose=${false} onClose=${() => close(null)} footer=${footer} class="script-import">
+    <${TemplateGuide} />
     <${Field} label="劇本或分鏡文字" after=${html`<span class="mono dim">${text.length.toLocaleString()} / 100,000</span>`}
       hint="支援編號清單、空行分段、Excel 貼上的表格（第一列是標題，例如「畫面、運鏡、字幕、秒數」），也可開啟 Word 分鏡表（.docx，例如「內容、影部、聲部」）">
       <${TextArea} value=${text} rows=${14} maxlength=${MAX_TEXT} data-autofocus onChange=${setText}

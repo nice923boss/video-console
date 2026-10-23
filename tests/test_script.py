@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import zipfile
+from pathlib import Path
 from xml.sax.saxutils import escape
 
 import pytest
@@ -41,6 +42,7 @@ BRACKETED_SHOTS = [{"prompt": "清晨的海港，薄霧中漁船緩緩出港，�
                    {"prompt": "太陽躍出海平面，金色光芒灑滿甲板。（特寫轉全景）", "motion": "向上搖鏡"}]
 # Picture / sound shot table from a Word script (07-宜蘭縣政府-我們身邊的隱形圍牆-腳本.docx): 內容 names the
 # shot, 影部 is the picture, 聲部 holds the spoken lines with their speakers, music and sound effects.
+TEMPLATE = Path(__file__).resolve().parent.parent / "app" / "web" / "assets" / "script-template.docx"
 AV_HEAD = ["內容", "影部", "聲部", "長度", "效果字＆備註"]
 AV_ROWS = [
     ["教室\n午餐時間", "【生活情境】\n1. 中午鐘聲響起。\n2. 鏡頭橫搖，同學們併桌吃飯。", "音樂：輕快的校園日常配樂。", "",
@@ -390,3 +392,14 @@ def test_word_file_without_a_shot_table_gives_its_paragraphs():
 def test_bad_word_files_are_refused(data, message):
     with pytest.raises(AppError, match=message):
         docx_to_text(data)
+
+
+def test_blank_template_offered_in_the_import_dialog_is_a_shot_table():
+    result = docx_to_text(TEMPLATE.read_bytes())
+
+    assert result["text"] == "\t".join(AV_HEAD) + "\n"
+    assert result["notes"][0] == "讀入 7 個分鏡表，共 0 列"
+    filled = result["text"] + "【開場】\t清晨的漁港\t旁白：天還沒亮。\t8秒\t鏡頭：用廣角拍全景\n"
+    assert [brief(s) for s in parse_script(filled)["shots"]] == [
+        {"name": "【開場】", "prompt": "清晨的漁港", "caption": "天還沒亮", "duration": 8.0,
+         "notes": "說話者：旁白\n鏡頭：用廣角拍全景"}]

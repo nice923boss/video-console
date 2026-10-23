@@ -529,6 +529,11 @@ a.exp-doc:hover { border-color: var(--border-strong); background: var(--surface-
 .script-import .modal-body { gap: 12px; }
 .si-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-input); background: var(--surface-2); font-size: 12.5px; }
 .si-list { display: flex; flex-direction: column; gap: 8px; }
+.si-template > .btn { align-self: flex-start; margin: 0; }
+.si-template > a.btn:hover { text-decoration: none; }
+.si-cols { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 6px 0; }
+.si-cols > dt { font-weight: 600; }
+.si-cols > dd { margin: 0; }
 
 .si-row {
   display: grid;
