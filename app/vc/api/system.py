@@ -61,7 +61,9 @@ def register(router: Router, app: App) -> None:
     @router.route("GET", "/api/ping")
     def ping(req: Request) -> dict:
         running = app.jobs.state()["counts"].get("running") or 0
-        return {"ok": True, "instance": app.instance, "version": VERSION, "build": BUILD, "running": running}
+        tray = bool(app.tray and app.tray.running)  # a client that restarts this copy shows the icon again
+        return {"ok": True, "instance": app.instance, "version": VERSION, "build": BUILD, "running": running,
+                "tray": tray}
 
     @router.route("GET", "/api/bootstrap")
     def bootstrap(req: Request) -> dict:

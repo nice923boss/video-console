@@ -759,7 +759,7 @@ def test_launch_defers_to_the_copy_that_answers(app: App) -> None:
 
 def test_launch_replaces_a_copy_running_older_code(app: App, monkeypatch: pytest.MonkeyPatch) -> None:
     pong = Client(app.server.port).json("GET", "/api/ping")
-    assert pong["build"] == launcher.BUILD and pong["running"] == 0
+    assert pong["build"] == launcher.BUILD and pong["running"] == 0 and pong["tray"] is False
     assert not launcher.should_replace(pong, True)
     assert launcher.should_replace({"version": "1.4.0"}, True)  # a copy from before builds were reported
     assert not launcher.should_replace({"build": "old", "running": 2}, True)  # would interrupt jobs: keep it

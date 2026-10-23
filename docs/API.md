@@ -14,7 +14,7 @@
 |---|---|
 | 位址 | 只聽 `127.0.0.1`，連接埠 8790；被占用時往後找到 8799 |
 | 目前連接埠 | `data/run/server.json` 的 `port` 欄位（VC 執行中才有） |
-| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.6.0", "build": "1.6.0+...", "running": 0}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數） |
+| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.6.0", "build": "1.6.0+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
 | 必要標頭 | POST、PUT、DELETE 一律加 `X-VC: 1`，否則 403 |
 | 主機檢查 | `Host` 必須是 `127.0.0.1:<port>` 或 `localhost:<port>`，跨站請求一律 403 |
 | 資料格式 | JSON 本文，UTF-8；上傳檔案用原始位元組本文（不是 multipart） |
@@ -38,6 +38,8 @@ python app/main.py --stop              # 關閉正在執行的 VC
 從桌面開啟的 VC 會顯示系統托盤圖示，關閉視窗後留在托盤，不會自動關閉，要從托盤右鍵選單或 `POST /api/shutdown` 結束。使用者之後從桌面開啟背景那一份時，啟動程式會呼叫 `POST /api/tray` 補上托盤圖示。
 
 啟動時若發現執行中的那一份跑的是更新前的程式碼（`/api/ping` 的 `build` 不同），啟動程式會先關掉它再重新啟動。它還有工作在執行時，從桌面開啟會先詢問，`--no-window` 啟動則保留它不重啟。
+
+`tools/vc_client.py` 的 `VC()` 也會比對：用 VC 資料夾裡的原始碼算出 `build`，和執行中那一份不同時，用 `--no-window` 再啟動一次讓啟動程式換掉它，舊的那一份有托盤圖示時換好後補上。被保留時（有工作在執行）在 stderr 印出提示並沿用舊的那一份。只裝執行檔版沒有原始碼可比對，不檢查。
 
 ### 1.3 id 規則
 

@@ -3,6 +3,7 @@
 VC listens on 127.0.0.1 only; its address is in <vc>/data/run/server.json. State-changing requests
 need the `X-VC: 1` header. VC exits on its own after 120 s with no window and no job, so this client
 holds an SSE connection to /api/events while it is in use (that counts as an open window).
+A copy still running code from before an update is restarted, or kept with a warning while jobs run.
 Full API reference: docs/API.md.
 
     from vc_client import VC
@@ -22,6 +23,7 @@ VC folder: $VC_ROOT, else the folder this file sits in when it is <vc>/tools, el
 from __future__ import annotations
 
 import http.client
+import importlib.util
 import json
 import os
 import subprocess
@@ -49,6 +51,18 @@ def _default_root() -> Path:
 DEFAULT_ROOT = _default_root()
 
 
+def _source_build(root: Path) -> str | None:
+    """The build VC's source in root runs (BUILD in app/vc/__init__.py); None for the packaged exe,
+    which has no source to compare with."""
+    init = root / "app" / "vc" / "__init__.py"
+    if not init.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_vc_source", init)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.BUILD
+
+
 class VCError(RuntimeError):
     pass
 
@@ -58,28 +72,54 @@ class VC:
         self.root = Path(root)
         if not _is_vc(self.root):
             raise VCError(f"{self.root} 不是 Video Console 資料夾，請設定環境變數 VC_ROOT")
-        self.port = self._find_port()
-        if self.port is None:
+        found = self._find_server()
+        if found is None:
             if not start:
                 raise VCError("Video Console 沒有在執行")
             self.port = self._start()
+        else:
+            self.port = found[0]
+            self._check_build(found[1], restart=start)
         if keepalive:
             threading.Thread(target=self._hold_events, name="vc-keepalive", daemon=True).start()
 
     # ------------------------------------------------------------ server lifecycle
-    def _find_port(self) -> int | None:
+    def _find_server(self) -> tuple[int, dict] | None:
+        """The port and ping answer of the running VC."""
         info = self.root / "data" / "run" / "server.json"
         try:
             port = int(json.loads(info.read_text(encoding="utf-8"))["port"])
         except (OSError, ValueError, KeyError):
             return None
         try:
-            self._request("GET", "/api/ping", port=port, timeout=5)
+            return port, self._request("GET", "/api/ping", port=port, timeout=5)
         except (OSError, VCError):
             return None
-        return port
 
-    def _start(self) -> int:
+    def _check_build(self, pong: dict, restart: bool) -> None:
+        """A copy left running from before a code update answers with the old code. Launching VC again makes
+        the launcher restart it, unless that would interrupt running jobs; a copy kept running is reported."""
+        build = _source_build(self.root)
+        if build is None or pong.get("build") == build:
+            return
+        if restart:
+            tray = pong.get("tray")
+            self.port = self._start(build)
+            pong = self.get("/api/ping")
+            if pong.get("build") == build:
+                if tray:  # the replaced copy showed a tray icon; one started with --no-window does not
+                    self.post("/api/tray")
+                return
+        running = pong.get("running") or 0
+        why = ("沒有重新啟動（start=False）" if not restart
+               else f"還有 {running} 個工作在執行，重新啟動會中斷它們" if running
+               else f"重新啟動沒有成功，請看 {self.root / 'data' / 'logs' / 'app.log'}")
+        print(f"注意：執行中的 Video Console 是更新前的程式（{pong.get('version') or '舊版'}），{why}。"
+              "這次先沿用它，之後再建立 VC() 會再試著換成新版。", file=sys.stderr)
+
+    def _start(self, build: str | None = None) -> int:
+        """Launch VC without a window and wait until it answers. With build, wait for a copy running it, or for
+        the launcher to exit having kept the copy already running (it keeps one that is running jobs)."""
         if (self.root / "app" / "main.py").is_file():
             exe = Path(sys.executable)
             pyw = exe.with_name("pythonw.exe")
@@ -87,14 +127,14 @@ class VC:
         else:
             cmd = [str(self.root / EXE_NAME), "--no-window"]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-        subprocess.Popen(cmd, cwd=self.root, creationflags=flags, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        launcher = subprocess.Popen(cmd, cwd=self.root, creationflags=flags, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             time.sleep(1)
-            port = self._find_port()
-            if port:
-                return port
+            found = self._find_server()
+            if found and (build is None or found[1].get("build") == build or launcher.poll() is not None):
+                return found[0]
         raise VCError(f"Video Console 60 秒內沒有啟動，請看 {self.root / 'data' / 'logs' / 'app.log'}")
 
     def _hold_events(self) -> None:
