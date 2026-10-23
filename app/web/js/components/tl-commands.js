@@ -283,5 +283,30 @@ export function toggleKeyPanel(sel) {
   setState({ keyPanel: !getState().keyPanel });
 }
 
+// ---------------------------------------------------------------- copy and paste
+let copied = null; // the audio clip as it was when copied
+
+// Nothing selected: false lets the browser copy text as usual.
+export function copyItem(project, clips, sel) {
+  if (!sel) return false;
+  if (sel.type !== "audio") return warn("目前只能複製音訊片段");
+  const item = (project.audio || []).find((a) => a.id === sel.id);
+  if (!item) return warn("找不到選取的音訊片段");
+  copied = JSON.parse(JSON.stringify(item));
+  toast("已複製音訊片段", { id: "tl-copy", duration: 1500 });
+}
+
+// The copy starts at the playhead on a track of its own (a clip without `track` is its own track); it no longer
+// belongs to a caption or a shot, so it leaves the voice rows and the detached-sound pairing behind.
+export function pasteItem(project) {
+  if (!copied) return warn(`還沒有複製音訊片段，先選取音訊再按${keyHint("edit.copy")}`);
+  if (!audioMedia(project, copied)) return warn("複製的音訊素材不在這個專案裡");
+  const { captionId, shotId, track, ...rest } = copied;
+  const id = newId("a");
+  ops([{ op: "audio.add", item: { ...rest, id, start: round(clock.time, 3) } }], { label: "貼上音訊" }).then((res) => {
+    if (res) setState({ editSel: { type: "audio", id } });
+  });
+}
+
 // Keys from the shortcut table that have no feature behind them yet (GAPS.md).
 export const notYet = (what) => toast(`「${what}」還沒有支援`, { level: "warn" });

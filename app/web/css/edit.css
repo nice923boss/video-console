@@ -212,7 +212,12 @@
   pointer-events: none;
 }
 
-.tl-toolbar { display: flex; align-items: center; gap: 4px; flex: none; height: 40px; padding: 0 8px; border-bottom: 1px solid var(--border); }
+.tl-toolbar { display: flex; align-items: center; gap: 4px; flex: none; height: 40px; padding: 0 8px; border-bottom: 1px solid var(--border); container-type: inline-size; }
+/* Too narrow for every label: the text buttons show only their icons, and their tooltips still name them. */
+@container (max-width: 1180px) {
+  .tl-toolbar .btn-text { display: none; }
+  .tl-toolbar .btn-sm { width: 28px; padding: 0; }
+}
 .tl-total { margin-right: 6px; font-size: 11.5px; white-space: nowrap; }
 .tl-zoom { min-width: 72px; color: var(--muted); font-size: 11px; text-align: center; white-space: nowrap; }
 

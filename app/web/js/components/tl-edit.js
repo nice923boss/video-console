@@ -5,7 +5,7 @@
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { newId, round } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioMedia } from "../lib/sequence.js";
+import { clipIndexAt, audioLength, audioMedia, audioTrack } from "../lib/sequence.js";
 import { splitKeys, shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { toast } from "./toast.js";
 
@@ -39,7 +39,7 @@ function targetAt(project, clips, sel, t) {
   }
   if (audio) {
     const span = (a) => [Number(a.start || 0), audioLength(a, audioMedia(project, a))];
-    const track = audio.captionId ? (project.audio || []).filter((a) => a.captionId) : [audio];
+    const track = (project.audio || []).filter((a) => audioTrack(a) === audioTrack(audio));
     const item = pick(track, sel, span, t);
     if (!item) return missing;
     const [start, length] = span(item);
@@ -106,7 +106,8 @@ export function splitOps(g) {
     const cut = round(Number(item.in || 0) + local, 3);
     return [
       { op: "audio.update", id: item.id, patch: { out: cut, fadeOut: 0, ...keyPatch(item, head) } },
-      { op: "audio.add", item: { ...item, id: newId("a"), start: t, in: cut, fadeIn: 0, ...keyPatch(item, tail) } },
+      // The second half stays on the same track instead of opening one of its own.
+      { op: "audio.add", item: { ...item, id: newId("a"), track: audioTrack(item), start: t, in: cut, fadeIn: 0, ...keyPatch(item, tail) } },
     ];
   }
   if (g.type === "adjust") {

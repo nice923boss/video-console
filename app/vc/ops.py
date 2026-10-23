@@ -89,6 +89,11 @@ def _opt_id(v: Any) -> str | None:
     return v
 
 
+def _audio_track(v: Any) -> str | None:
+    """"voice" puts a clip on the voice-over rows; an id groups clips on one music track."""
+    return "voice" if v == "voice" else _opt_id(v)
+
+
 MAX_REFS = 10  # reference pictures one job may read (FLUX3-Klein): the shot's ref plus nine extras
 
 
@@ -216,6 +221,7 @@ AUDIO_FIELDS = {
     "captionId": _opt_id,  # set on voice-over clips: the caption they speak
     "shotId": _opt_id,  # detached sound of this shot ...
     "takeId": _opt_id,  # ... read from this take's file instead of a library item
+    "track": _audio_track,  # None: a music track of its own; an id: the music track it shares; "voice": voice rows
     "keyframes": _keyframes({"volume": _float(0, 4)}),
 }
 CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _str(500), "position": _str(10),

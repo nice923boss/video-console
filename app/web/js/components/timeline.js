@@ -1,5 +1,5 @@
 // Edit timeline: ruler, then lanes from the top layer down (captions, adjustment layers, picture-in-picture
-// tracks, the picture), the picture clips' own sound when any has some, then voice-overs and one lane per soundtrack item. A higher lane covers the ones below
+// tracks, the picture), the picture clips' own sound when any has some, then voice-overs and one lane per music track. A higher lane covers the ones below
 // it, in the preview and in the export; an adjustment layer grades every picture lane below it. Zoom (px per second) and snapping are per-viewer preferences;
 // the playhead follows the shared playback clock directly, without re-rendering.
 import { html, useState, useEffect, useRef, useLayoutEffect } from "../lib/h.js";
@@ -11,16 +11,17 @@ import { ops, undo, deleteShots, LINK_PREF } from "../lib/actions.js";
 import { setWatch, watchRefuses } from "../lib/watch.js";
 import { uploadFiles } from "../lib/jobs-actions.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
-import { sequenceDuration, audioLength, audioMedia } from "../lib/sequence.js";
+import { sequenceDuration, audioLength, audioMedia, audioTrack, VOICE_TRACK, musicTracks, mergeTracks } from "../lib/sequence.js";
 import { generateMissing } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
-import { toast } from "./toast.js";
+import { upload } from "../lib/api.js";
+import { toast, toastError } from "./toast.js";
 import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
 import {
   MARKER_COLORS, KEYABLE, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
-  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet,
+  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, copyItem, pasteItem, notYet,
 } from "./tl-commands.js";
-import { openMenu } from "./overlay.js";
+import { openMenu, openModal, Modal } from "./overlay.js";
 import { Button, IconButton } from "./ui.js";
 import { Icon } from "./icons.js";
 import {
@@ -70,6 +71,7 @@ function deleteSelection(sel) {
 
 const layerName = (layers, layer) => layer.name || `畫面 ${layers.indexOf(layer) + 2}`;
 const isVisual = (f) => ["image", "video"].includes(kindOfName(f.name));
+const isSrt = (f) => /\.srt$/i.test(f.name);
 const fileStem = (name) => name.replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 120);
 
 const addLayer = () => ops([{ op: "layer.add", layer: { id: newId("l") } }], { label: "新增畫面軌" });
@@ -102,8 +104,8 @@ async function addLayersWith(files, start) {
   for (let i = 0; i < files.length; i += 1) await uploadFiles([files[i]], { layer: ids[i], start });
 }
 
-// Timeline keys that only move the playhead, the I/O range, the zoom or the track height.
-const WATCH_KEYS = new Set(["edit.deselect", "edit.markerNext", "edit.markerPrev", "edit.markIn", "edit.markOut",
+// Timeline keys that only move the playhead, the I/O range, the zoom or the track height (or copy a clip).
+const WATCH_KEYS = new Set(["edit.deselect", "edit.copy", "edit.markerNext", "edit.markerPrev", "edit.markIn", "edit.markOut",
   "edit.playRange", "edit.clearRange", "edit.zoomIn", "edit.zoomOut", "edit.zoomFit", "edit.trackTaller", "edit.trackShorter"]);
 
 const markerHex = (color) => (MARKER_COLORS.find((c) => c.value === color) || MARKER_COLORS[0]).hex;
@@ -164,6 +166,37 @@ function packVoiceRows(project, items) {
   return rows;
 }
 
+function mergeAudioTracks(project) {
+  const merged = mergeTracks(project);
+  if (!merged.ops.length) {
+    toast("沒有可以合併的音軌：每條音軌都和其他音軌有同時出聲的地方", { level: "warn" });
+    return;
+  }
+  ops(merged.ops, { label: "合併音軌" }).then((res) => {
+    if (res) toast(`已合併成 ${merged.tracks} 條音軌`, { duration: 2200 });
+  });
+}
+
+// An .srt's subtitles at the times it gives; with captions already there, ask whether they stay.
+async function importSrt(project, file) {
+  const count = (project.captions || []).length;
+  const mode = !count ? "add" : await openModal((close) => html`<${Modal} title="匯入 SRT" width=${460} onClose=${() => close(null)}
+      footer=${html`
+        <button type="button" class="btn" onClick=${() => close(null)}>取消</button>
+        <button type="button" class="btn" onClick=${() => close("add")}>保留並加入</button>
+        <button type="button" class="btn btn-primary" onClick=${() => close("replace")}>取代現有字幕</button>`}>
+      <p class="modal-text">專案已有 ${count} 則字幕。「取代現有字幕」會先刪掉它們再匯入「${file.name}」；「保留並加入」兩邊都留著。
+        匯入是一個步驟，按復原${keyHint("app.undo")}可整批取消。</p>
+    </${Modal}>`);
+  if (!mode) return;
+  try {
+    const res = await upload(`/api/projects/${encodeURIComponent(project.id)}/captions.srt${mode === "replace" ? "?replace=1" : ""}`, file);
+    toast(`已匯入 ${res.added} 則字幕`, { level: "success" });
+  } catch (err) {
+    toastError(err, "無法匯入 SRT");
+  }
+}
+
 function contentSpan(project, clips) {
   let end = sequenceDuration(clips);
   for (const c of project.captions || []) end = Math.max(end, Number(c.end) || 0);
@@ -186,9 +219,11 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const [viewW, setViewW] = useState(0);
   const [drop, setDrop] = useState(null);
   const [adjGhost, setAdjGhost] = useState(null);
+  const [audioDrag, setAudioDrag] = useState(false);
   const scrollRef = useRef(null);
   const headRef = useRef(null);
   const fileRef = useRef(null);
+  const srtRef = useRef(null);
   const anchorRef = useRef(null);
   const ppsRef = useRef(pps);
   const dataRef = useRef(null);
@@ -315,6 +350,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const keys = {
     "edit.delete": () => deleteSelection(selRef.current),
     "edit.deselect": () => (selRef.current ? setState({ editSel: null }) : false),
+    "edit.copy": on(copyItem),
+    "edit.paste": () => pasteItem(dataRef.current.project),
     "edit.split": on(splitAtPlayhead),
     "edit.splitAll": on(splitAllAtPlayhead),
     "edit.trimStart": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "start"),
@@ -410,9 +447,10 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const onDragLeave = (e) => {
     if (!e.currentTarget.contains(e.relatedTarget)) setDrop(null);
   };
-  // Sound always goes on the soundtrack. Pictures and clips dropped on the picture lane become new shots
-  // in between, on an upper track they go on that track, on the new-track row each gets a new
-  // track; anywhere else they only go to the library.
+  // Sound always goes on the soundtrack: on the voice rows or the music track it is dropped on, anywhere
+  // else (or on the new-track row) each file on a track of its own. Pictures and clips dropped on the
+  // picture lane become new shots in between, on an upper track they go on that track, on the new-track
+  // row each gets a new track; anywhere else they only go to the library.
   const onDrop = (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
@@ -423,9 +461,12 @@ export function Timeline({ project, clips, hotkeys = true }) {
     const start = round(t, 2);
     const row = dropRow(e);
     const files = [...e.dataTransfer.files];
+    const srt = files.filter(isSrt);
+    if (srt.length) importSrt(project, srt[0]);
     const visual = files.filter(isVisual);
-    const rest = files.filter((f) => !isVisual(f));
-    if (rest.length) uploadFiles(rest, { track: true, start });
+    const rest = files.filter((f) => !isVisual(f) && !isSrt(f));
+    const sound = row.startsWith("audio:") && row !== "audio:new" ? row.slice(6) : null;
+    if (rest.length) uploadFiles(rest, { track: true, start, audioTrack: sound });
     if (!visual.length) return;
     if (row === "video") insertShots(visual, shotIndexAt(project, clips, t).index);
     else if (row === "new-layer") addLayersWith(visual, start);
@@ -440,18 +481,23 @@ export function Timeline({ project, clips, hotkeys = true }) {
     e.currentTarget.value = "";
     if (files.length) uploadFiles(files, { track: true, start: round(clock.time, 2) });
   };
+  const pickSrt = (e) => {
+    const file = e.currentTarget.files[0];
+    e.currentTarget.value = "";
+    if (file) importSrt(project, file);
+  };
 
   const ctx = {
     pid: project.id, pps, scale, ar: project.settings.width / project.settings.height, snapper,
-    insertAt: (t) => shotIndexAt(project, clips, t),
+    insertAt: (t) => shotIndexAt(project, clips, t), onAudioDrag: setAudioDrag,
   };
   const tracks = project.tracks || {};
   const layers = project.layers || [];
   const overlays = project.overlays || [];
   const adjustments = project.adjustments || [];
   const audio = project.audio || [];
-  const music = audio.filter((a) => !a.captionId);
-  const voiceRows = packVoiceRows(project, audio.filter((a) => a.captionId));
+  const voiceRows = packVoiceRows(project, audio.filter((a) => audioTrack(a) === VOICE_TRACK));
+  const music = musicTracks(audio);
   const total = sequenceDuration(clips);
   const lane = (cls, body) => html`<div class=${`tl-lane ${cls}`} style=${`width:${contentW}px`} onPointerDown=${onLaneDown}>${body}</div>`;
   const label = (icon, text, extra = null) => html`<div class="tl-label"><${Icon} name=${icon} size=${14} /><span>${text}</span>${extra}</div>`;
@@ -470,12 +516,17 @@ export function Timeline({ project, clips, hotkeys = true }) {
       ${watch ? html`<span class="tl-watch-note"><${Icon} name="eye" size=${14} />觀看模式：只能看，不會修改專案</span>
         <${Button} size="sm" icon="x" onClick=${() => setWatch(false)}>結束觀看<//>` : html`
       <${Button} size="sm" kind="ghost" icon="captions" onClick=${addCaption} title=${`在播放頭位置新增 2 秒字幕${keyHint("edit.addCaption")}`}>新增字幕<//>
+      <${Button} size="sm" kind="ghost" icon="upload" onClick=${() => srtRef.current && srtRef.current.click()}
+        title="匯入 SRT 字幕檔，字幕放在檔案記載的時間；也可以把 .srt 拖進時間軸">匯入 SRT<//>
+      <input ref=${srtRef} type="file" accept=".srt" hidden onChange=${pickSrt} />
       <${Button} size="sm" kind="ghost" icon="music" onClick=${() => fileRef.current && fileRef.current.click()}
         title="在播放頭位置加入音樂或旁白">加入音訊<//>
       <input ref=${fileRef} type="file" accept=${ACCEPT_AUDIO} multiple hidden onChange=${pickAudio} />
       <${Button} size="sm" kind="ghost" icon="users" onClick=${openCastDialog} title="人物與 Audio8Voice 配音聲音">人物表<//>
       <${Button} size="sm" kind="ghost" icon="mic" onClick=${generateMissing}
         title="替已指定人物、還沒配音或內容已改的字幕生成配音">生成配音<//>
+      <${Button} size="sm" kind="ghost" icon="rows" onClick=${() => mergeAudioTracks(project)} disabled=${music.length < 2}
+        title="把不會同時出聲的音軌併成同一條，同時出聲的才分開放">合併音軌<//>
       <span class="tl-tools">
         <${IconButton} icon="pointer" size=${16} active=${editTool !== "blade"} title=${`選擇模式${keyHint("edit.toolSelect")}`}
           onClick=${() => setState({ editTool: "select" })} />
@@ -555,15 +606,23 @@ export function Timeline({ project, clips, hotkeys = true }) {
             () => setTrack("voiceMuted", tracks.voiceMuted ? "取消配音靜音" : "配音全部靜音"), "所有配音"))}
           ${lane("tl-lane-audio", items.map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
             selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`))}`,
-          { muted: !!tracks.voiceMuted }))}
-        ${music.map((item, i) => html`<div key=${item.id} class="tl-row" style=${`height:${Math.round(AUDIO_H * scale)}px`}>
-          ${label("music", `音訊 ${i + 1}`, html`<${IconButton} icon=${item.muted ? "volume-x" : "volume"} size=${14}
-            active=${item.muted} title=${item.muted ? "取消靜音" : "這條音軌靜音"}
-            onClick=${() => ops([{ op: "audio.update", id: item.id, patch: { muted: !item.muted } }],
-              { label: item.muted ? "取消靜音" : "音軌靜音" })} />`)}
-          ${lane("tl-lane-audio", html`<${AudioClip} project=${project} item=${item} ctx=${ctx}
-            selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`)}
-        </div>`)}
+          { drop: `audio:${VOICE_TRACK}`, muted: !!tracks.voiceMuted }))}
+        ${music.map(({ key, items }, i) => {
+          // The track counts as muted when every clip on it is; the switch sets them all alike.
+          const muted = items.every((a) => a.muted);
+          return row(key, AUDIO_H, html`
+            ${label("music", `音訊 ${i + 1}`, html`<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
+              active=${muted} title=${muted ? "取消靜音" : "這條音軌靜音"}
+              onClick=${() => ops(items.filter((a) => !!a.muted === muted).map((a) => ({ op: "audio.update", id: a.id, patch: { muted: !muted } })),
+                { label: muted ? "取消靜音" : "音軌靜音" })} />`)}
+            ${lane("tl-lane-audio", items.map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
+              selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`))}`,
+            { drop: `audio:${key}` });
+        })}
+        ${!watch && audio.length > 0 && (audioDrag || drop) && row("add-audio", ADD_H, html`
+          ${label("plus", "新增音軌")}
+          ${lane("tl-lane-add", html`<span class="tl-lane-hint dim">放到這裡，開一條新的音軌</span>`)}`,
+          { drop: "audio:new" })}
         ${!audio.length && html`<div class="tl-row" style=${`height:${Math.round(AUDIO_H * scale)}px`}>
           ${label("music", "音訊")}
           ${lane("tl-lane-audio", html`<span class="tl-lane-hint dim">${watch ? "還沒有音訊" : "把音樂或旁白檔案拖到這裡，或按「加入音訊」"}</span>`)}

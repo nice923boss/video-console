@@ -55,6 +55,16 @@ def audio_media(project: dict, item: dict) -> dict | None:
     return project["media"].get(item.get("mediaId")) or project["takes"].get(item.get("takeId"))
 
 
+VOICE_TRACK = "voice"
+
+
+def audio_track(item: dict) -> str:
+    """Mirror of audioTrack in lib/sequence.js: "voice" for voice lines, else the music track the clip sits on."""
+    if item.get("captionId") or item.get("track") == VOICE_TRACK:
+        return VOICE_TRACK
+    return item.get("track") or item["id"]
+
+
 def build_sequence(project: dict, include_all: bool = False) -> list[dict[str, Any]]:
     """Return clips with start/length/in/out/speed and the transition into the next clip."""
     shots = [s for s in project["shots"] if include_all or s.get("inSequence", True)]

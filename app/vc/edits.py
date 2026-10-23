@@ -10,7 +10,7 @@ from typing import Any
 
 from .grade import clean_grade
 from .keyframes import value_at
-from .sequence import audio_media, build_sequence, total_duration, video_take
+from .sequence import VOICE_TRACK, audio_media, audio_track, build_sequence, total_duration, video_take
 from .util import AppError, new_id
 
 LISTS = {"overlay": "overlays", "audio": "audio", "caption": "captions", "adjust": "adjustments"}
@@ -66,6 +66,19 @@ def audio_length(project: dict, item: dict) -> float:
     full = float(media.get("duration") or 0.0)
     t_out = full if item.get("out") is None else float(item["out"])
     return max(0.1, t_out - float(item.get("in") or 0.0))
+
+
+def track_busy(project: dict, key: str, start: float, length: float) -> bool:
+    """Whether a clip on music track `key` plays somewhere in [start, start + length), so the track can't take
+    another clip there (mirror of trackBusy in components/tl-tracks.js). The voice rows never are."""
+    if key == VOICE_TRACK:
+        return False
+    return any(
+        audio_track(a) == key
+        and start < float(a.get("start") or 0.0) + audio_length(project, a) - 1e-3
+        and float(a.get("start") or 0.0) < start + length - 1e-3
+        for a in project.get("audio", [])
+    )
 
 
 def _span(project: dict, kind: str, item: dict) -> tuple[float, float]:
@@ -183,8 +196,8 @@ def split_ops(g: dict, t: float, local: float) -> list[dict]:
     if kind == "audio":
         cut = r3(float(item.get("in") or 0) + local)
         return [{"op": "audio.update", "id": item["id"], "patch": {"out": cut, "fadeOut": 0, **key_patch(item, head_keys)}},
-                {"op": "audio.add", "item": {**item, "id": new_id("a"), "start": t, "in": cut, "fadeIn": 0,
-                                             **key_patch(item, tail_keys)}}]
+                {"op": "audio.add", "item": {**item, "id": new_id("a"), "track": audio_track(item), "start": t, "in": cut,
+                                             "fadeIn": 0, **key_patch(item, tail_keys)}}]
     if kind == "adjust":
         return [{"op": "adjust.update", "id": item["id"], "patch": {"length": r3(local), **key_patch(item, head_keys)}},
                 {"op": "adjust.add", "item": {**item, "id": new_id("adj"), "start": t, "length": r3(g["length"] - local),

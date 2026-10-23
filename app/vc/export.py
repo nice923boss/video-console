@@ -25,7 +25,7 @@ from .grade import build_cube, clean_grade, is_neutral
 from .keyframes import expr as kf_expr
 from .keyframes import steps as kf_steps
 from .media import ALPHA_DECODERS, Media
-from .sequence import XFADE_NAMES, audio_media, build_sequence, total_duration
+from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, total_duration
 from .util import AppError, safe_filename
 
 log = logging.getLogger("vc.export")
@@ -360,8 +360,8 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         a_labels.append(f"pa{idx}")
     for k, track in enumerate(project.get("audio", [])):
         media = audio_media(project, track)
-        # Voice lines are the audio clips made for a caption; everything else sits on the music rows.
-        row_muted = tracks.get("voiceMuted" if track.get("captionId") else "musicMuted")
+        # Voice lines are the audio clips made for a caption or dragged onto the voice rows; everything else is music.
+        row_muted = tracks.get("voiceMuted" if audio_track(track) == VOICE_TRACK else "musicMuted")
         if track.get("muted") or row_muted or not media or not (project_dir / media["file"]).is_file():
             continue
         m_dur = float(media.get("duration") or 0.0)

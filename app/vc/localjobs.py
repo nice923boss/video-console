@@ -9,13 +9,14 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from .edits import track_busy
 from .export import export_options, render
 from .exportdir import ensure_root, export_root, record_export
 from .jobs import JobControl
 from .media import KENBURNS, KENBURNS_LABELS, Media
 from .ops import new_overlay, valid_id
 from .package import build_package
-from .sequence import build_sequence
+from .sequence import VOICE_TRACK, build_sequence
 from .settings import SettingsStore
 from .store import ProjectStore
 from .takes import (IMPORT_DIR, TAKE_DIR, commit_takes, find_item, find_shot, item_path, new_media, new_take,
@@ -254,6 +255,11 @@ class LocalJobs:
         elif kind == "audio" and payload.get("track"):
             out["track"] = True
             out["start"] = round(clamp(number(payload.get("start"), 0.0), 0.0, 36000.0), 3)
+            audio_track = payload.get("audioTrack")
+            if audio_track:
+                if audio_track != VOICE_TRACK and not valid_id(audio_track):
+                    raise AppError("音軌代號不正確")
+                out["audioTrack"] = audio_track
         elif kind in ("image", "video") and payload.get("layer"):
             if not valid_id(payload["layer"]):
                 raise AppError("畫面軌道代號不正確")
@@ -285,8 +291,13 @@ class LocalJobs:
             item = new_media(staged, p["name"], mid)
             ops = [{"op": "media.add", "media": item}]
             if staged["kind"] == "audio" and p.get("track"):
-                ops.append({"op": "audio.add", "item": {"id": new_id("a"), "mediaId": mid, "name": p["name"][:120],
-                                                        "start": p.get("start", 0.0), "volume": 1.0}})
+                clip = {"id": new_id("a"), "mediaId": mid, "name": p["name"][:120], "start": p.get("start", 0.0), "volume": 1.0}
+                # The track it was dropped on, unless that track already plays something there: then one of its own.
+                track = p.get("audioTrack")
+                length = max(0.1, float(item.get("duration") or 0.0))
+                if track and not track_busy(self._store.get(ctl.pid), track, clip["start"], length):
+                    clip["track"] = track
+                ops.append({"op": "audio.add", "item": clip})
             project = self._store.get(ctl.pid) if p.get("layer") else None
             if project and any(x.get("id") == p["layer"] for x in project.get("layers", [])):
                 frame = project["settings"]

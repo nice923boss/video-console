@@ -143,8 +143,8 @@ export async function cancelAll(pid = null) {
 
 // Upload files one after another; each becomes an ingest job on the server.
 // target: "library" (media library) or "shot" (a new take on `shot`). track: also add audio to the
-// soundtrack at `start` seconds.
-export async function uploadFiles(files, { target = "library", shot = null, track = false, start = null, layer = null } = {}) {
+// soundtrack at `start` seconds, on `audioTrack` ("voice" or a music track) when given and free there.
+export async function uploadFiles(files, { target = "library", shot = null, track = false, start = null, layer = null, audioTrack = null } = {}) {
   const { pid } = getState();
   if (!pid) return [];
   const list = [...files].filter((f) => {
@@ -163,6 +163,7 @@ export async function uploadFiles(files, { target = "library", shot = null, trac
     if (shot && !audio) params.set("shot", shot);
     if (layer && !audio) params.set("layer", layer);
     if (track || audio) params.set("track", track ? "1" : "0");
+    if (track && audio && audioTrack) params.set("audioTrack", audioTrack);
     if (start != null) params.set("start", String(start));
     try {
       const res = await upload(`/api/projects/${enc(pid)}/upload?${params}`, file, (p) => {

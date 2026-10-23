@@ -14,6 +14,7 @@ from ..export import captions_srt, export_filename, shots_csv
 from ..exportdir import file_ref, find_export, forget_export, project_exports
 from ..server import FileResponse, Request, Response, Router
 from ..storyboard import render_storyboard, shot_picture
+from ..stt import srt_ops, srt_text
 from ..util import AppError, kind_of, new_id
 from .system import open_folder
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("vc.api")
 
 MAX_UPLOAD = 4 * 1024 ** 3
+MAX_SRT = 10 * 1024 ** 2
 EXT_RE = re.compile(r"^\.[a-z0-9]{1,5}$")
 BOM = "\ufeff"  # Excel and many subtitle tools need it to read UTF-8 as UTF-8
 TRUE = ("1", "true", "yes")
@@ -81,7 +83,7 @@ def register(router: Router, app: App) -> None:
         req.save_body(dst, MAX_UPLOAD)
         payload = {"upload": rel, "name": name, "target": q.get("target") or "library",
                    "track": q.get("track") in TRUE, "start": q.get("start"),
-                   "layer": q.get("layer") or None}
+                   "audioTrack": q.get("audioTrack") or None, "layer": q.get("layer") or None}
         try:
             job = app.jobs.submit("ingest", pid, q.get("shot") or None, payload)
         except BaseException:
@@ -130,6 +132,17 @@ def register(router: Router, app: App) -> None:
             raise AppError("這個專案還沒有字幕可以匯出", 409)
         return Response(BOM + text, content_type="application/x-subrip; charset=utf-8",
                         download_name=download_stem(project) + ".srt")
+
+    @router.route("POST", "/api/projects/{pid}/captions.srt")
+    def captions_import(req: Request) -> dict:
+        """An .srt file's subtitles at their own times, as one undo step; replace=1 removes the old ones first."""
+        pid = req.params["pid"]
+        ops = srt_ops(store.get(pid), srt_text(req.body(MAX_SRT)), req.query.get("replace") in TRUE)
+        added = sum(op["op"] == "caption.add" for op in ops)
+        if not added:
+            raise AppError("檔案裡沒有可匯入的字幕，請確認是 SRT 格式")
+        result = store.apply(pid, ops, label="匯入 SRT")
+        return {"rev": result["rev"], "added": added}
 
     @router.route("GET", "/api/projects/{pid}/shots.csv")
     def shot_list(req: Request) -> Response:

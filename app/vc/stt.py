@@ -217,6 +217,31 @@ def caption_ops(cues: list[tuple[float, float, str]], clip: dict) -> list[dict]:
     return ops
 
 
+_SRT_TAG = re.compile(r"<[^>]*>|\{\\[^}]*\}")  # <i>, <font …>, {\an8}
+
+
+def srt_text(raw: bytes) -> str:
+    """An .srt file's text: UTF-16 with a BOM, UTF-8 (BOM optional), or else Big5 as older Taiwanese subtitles are."""
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return raw.decode("utf-16")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp950", errors="replace")
+
+
+def srt_ops(project: dict, text: str, replace: bool) -> list[dict]:
+    """caption.add ops putting an .srt's subtitles at their own times on the sequence; replace drops the old ones first."""
+    ops = [{"op": "caption.delete", "id": c["id"]} for c in project["captions"]] if replace else []
+    for start, end, body in parse_srt(text):
+        body = _SRT_TAG.sub("", body).strip()
+        if body:
+            ops.append({"op": "caption.add", "item": {"id": new_id("c"), "start": round(start, 3),
+                                                       "end": round(end, 3), "text": body[:500],
+                                                       "position": "bottom", "shot": None}})
+    return ops
+
+
 def venv_python(folder: Path) -> Path | None:
     """python.exe of the interpreter STS's launcher points at (the `home` line of its pyvenv.cfg)."""
     try:

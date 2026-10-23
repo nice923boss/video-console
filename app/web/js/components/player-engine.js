@@ -5,7 +5,7 @@
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
 // clock; nothing here re-renders through Preact.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioMedia, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { clipIndexAt, audioLength, audioMedia, audioTrack, VOICE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad } from "../lib/caption-style.js";
 import { releaseFocus } from "../lib/keys.js";
@@ -541,7 +541,7 @@ export function createEngine(host, hooks = {}) {
       const start = Number(item.start || 0);
       const len = Math.min(audioLength(item, media), total - start);
       const local = t - start;
-      const off = item.muted || flags[item.captionId ? "voiceMuted" : "musicMuted"];
+      const off = item.muted || flags[audioTrack(item) === VOICE_TRACK ? "voiceMuted" : "musicMuted"];
       if (!playing || off || len <= 0.05 || local < 0 || local >= len) {
         if (!audio.paused) audio.pause();
         continue;

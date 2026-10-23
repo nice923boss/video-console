@@ -78,6 +78,8 @@ const BUILT_IN = [
   cmd("edit", "edit.trackShorter", "降低軌道", ["_"], []),
   cmd("edit", "edit.snap", "開關磁吸對齊", ["n"]),
   cmd("edit", "edit.link", "開關連動上下軌", ["shift+n"]),
+  cmd("edit", "edit.copy", "複製選取的音訊片段", ["mod+c"]),
+  cmd("edit", "edit.paste", "在播放頭貼上（音訊片段放到新的音軌）", ["mod+v"]),
   cmd("edit", "edit.delete", "刪除選取的片段", ["delete", "backspace", "f2"], ["delete", "backspace"]),
   cmd("edit", "edit.deselect", "取消選取片段", ["escape"]),
 

@@ -44,6 +44,11 @@ export const clipSpeed = (shot, source) => (source === "video" ? Math.min(4, Mat
 export const audioMedia = (project, item) =>
   (project.media || {})[item.mediaId] || (item.takeId ? (project.takes || {})[item.takeId] : null) || null;
 
+// Voice lines (a caption's clip, or a clip dragged onto the voice rows) share the 配音 rows; every other clip sits
+// on its music track: its own, unless `track` names one it shares. A track lives only while a clip is on it.
+export const VOICE_TRACK = "voice";
+export const audioTrack = (item) => (item.captionId || item.track === VOICE_TRACK ? VOICE_TRACK : item.track || item.id);
+
 export function buildSequence(project, includeAll = false) {
   const shots = project.shots.filter((s) => includeAll || s.inSequence !== false);
   const clips = shots.map((shot) => {
@@ -106,6 +111,43 @@ export function audioLength(item, media) {
   const tIn = Number(item.in || 0);
   const tOut = item.out == null ? full : Number(item.out);
   return Math.max(0.1, tOut - tIn);
+}
+
+// One {key, items} per music track, in the order of each track's first clip (the server keeps audio sorted by start).
+export function musicTracks(audio) {
+  const music = [];
+  for (const a of audio) {
+    const key = audioTrack(a);
+    if (key === VOICE_TRACK) continue;
+    const found = music.find((m) => m.key === key);
+    if (found) found.items.push(a);
+    else music.push({ key, items: [a] });
+  }
+  return music;
+}
+
+// 合併音軌: each music track moves onto the first track above it that plays nothing while it does, so sounds that
+// never overlap share a row and only ones that play together keep rows of their own. Returns the audio.update ops
+// and how many music tracks are left.
+export function mergeTracks(project) {
+  const spans = (items) => items.map((a) => {
+    const start = Number(a.start || 0);
+    return [start, start + audioLength(a, audioMedia(project, a))];
+  });
+  const clash = (a, b) => a.some(([s, e]) => b.some(([bs, be]) => s < be - 1e-3 && bs < e - 1e-3));
+  const groups = [];
+  const ops = [];
+  for (const { key, items } of musicTracks(project.audio || [])) {
+    const mine = spans(items);
+    const into = groups.find((g) => !clash(mine, g.spans));
+    if (!into) {
+      groups.push({ key, spans: mine });
+      continue;
+    }
+    into.spans.push(...mine);
+    for (const a of items) ops.push({ op: "audio.update", id: a.id, patch: { track: into.key } });
+  }
+  return { ops, tracks: groups.length };
 }
 
 // Mirror of fit_frame in app/vc/ops.py: the largest size that shows the whole picture, centered.

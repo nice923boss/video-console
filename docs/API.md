@@ -52,7 +52,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
 | `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本 |
 | `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot}`，時間是序列上的秒數 |
-| `audio` | 音樂、音效、配音 |
+| `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查 |
 | `overlays`、`layers` | 上層畫面與軌道 |
 | `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用） |
@@ -265,6 +265,7 @@ POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
 | `target` | `library`（素材庫，預設）或 `shot`（成為該鏡頭使用中的版本） |
 | `shot` | `target=shot` 時指定鏡頭 |
 | `track`、`start`、`layer` | 放到時間軸的音軌或上層軌，`start` 為序列秒數 |
+| `audioTrack` | 聲音檔放到時間軸時指定音軌：`voice`（配音軌）或某條音軌的代號（該軌片段的 `track`）。那段時間該軌已有聲音就改成自成一條音軌；代號格式不對回 400「音軌代號不正確」 |
 
 支援格式：影片 .mp4 .webm .mov .mkv .m4v .avi；圖片 .png .jpg .jpeg .webp .bmp .gif；聲音 .mp3 .wav .m4a .aac .flac .ogg .opus。聲音不能放進鏡頭。不是 h264／vp8／vp9／av1 的 .mp4、.m4v、.webm，以及其他容器，會自動轉成瀏覽器可播放的格式（4K 或高位元率素材建議先轉成 1080p，速度差很多）。
 
@@ -313,6 +314,7 @@ vc.wait(job["id"])
 - 引擎是另一個專案 Speech-to-subtitle（faster-whisper large-v3，選用 MFA 精準對齊）。設定在 `settings.stt`：`{"folder": "", "python": ""}`。留白時找 VC 同一層的 `Speech-to-subtitle` 資料夾，Python 用它 `pyvenv.cfg` 指向的直譯器。
 - 自我檢查：`POST /api/stt/check`（最多 180 秒），回 `{"ok", "cuda", "model", "ffmpeg", "mfa", "opencc", "folder", "python"}`，`ok` 需要 CUDA 與模型都就緒。
 - 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；沒有字幕時 409）。
+- 匯入 SRT：`POST /api/projects/{pid}/captions.srt`，body 是 .srt 檔原始內容（最多 10 MB），回 `{"rev", "added"}`。字幕放在檔案記載的時間（序列秒數），位置 `bottom`、不綁鏡頭；`<...>` 與 `{\...}` 標記會拿掉，多行文字以空白併成一行，超過 500 字截斷。編碼依序判斷：有 BOM 的 UTF-16、UTF-8（BOM 可有可無）、其餘當 Big5。加 `?replace=1` 先刪掉專案現有字幕。整批是一個 undo 步驟（標籤「匯入 SRT」）。檔案裡沒有可用字幕時回 400 且不動現有字幕。
 
 ## 7. 輸出
 
@@ -373,6 +375,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | GET | `/api/projects/{pid}/exports` | 輸出檔列表：匯出資料夾裡這個專案輸出的檔案，加上專案資料夾的舊檔，`path` 可直接給 `file?path=` |
 | DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔（`name` 是檔名，只能刪這個專案輸出的檔） |
 | GET | `/api/projects/{pid}/captions.srt` | 字幕 SRT |
+| POST | `/api/projects/{pid}/captions.srt` | 匯入 SRT 字幕（第 6 節） |
 | GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |
 | GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
 | POST | `/api/projects/{pid}/reveal` | 在檔案總管開啟專案資料夾 |

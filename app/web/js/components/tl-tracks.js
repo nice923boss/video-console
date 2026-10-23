@@ -7,7 +7,7 @@ import { ops, updateShot, moveShot, focusShot } from "../lib/actions.js";
 import { setTime } from "../lib/clock.js";
 import { releaseFocus } from "../lib/keys.js";
 import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/format.js";
-import { buildSequence, audioLength, audioMedia } from "../lib/sequence.js";
+import { buildSequence, audioLength, audioMedia, audioTrack, VOICE_TRACK } from "../lib/sequence.js";
 import { shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
 import { takeFromMedia } from "../views/library.js";
@@ -435,6 +435,23 @@ function Wave({ pid, media, tIn, len, width }) {
   return url ? html`<canvas class="tl-wave" ref=${ref}></canvas>` : null;
 }
 
+// The audio lane under the pointer while a clip is dragged up or down: a music track, the voice rows or
+// the new-track row (timeline.js marks each row data-drop="audio:<track>", "audio:new" for the new one).
+function audioLaneAt(ev) {
+  const lane = document.elementsFromPoint(ev.clientX, ev.clientY).find((el) => el.classList.contains("tl-lane"));
+  const drop = (lane && lane.parentElement.dataset.drop) || "";
+  return drop.startsWith("audio:") ? { lane, track: drop.slice(6) } : null;
+}
+
+// Whether another clip on music track `key` plays somewhere in [start, start + length).
+function trackBusy(project, item, key, start, length) {
+  return (project.audio || []).some((a) => {
+    if (a.id === item.id || audioTrack(a) !== key) return false;
+    const s = Number(a.start || 0);
+    return start < s + audioLength(a, audioMedia(project, a)) - 1e-3 && s < start + length - 1e-3;
+  });
+}
+
 export function AudioClip({ project, item, ctx, selected }) {
   const [drag, setDrag] = useState(null);
   const { pps } = ctx;
@@ -443,24 +460,50 @@ export function AudioClip({ project, item, ctx, selected }) {
   const base = { start: Number(item.start || 0), in: Number(item.in || 0), out: item.out == null ? null : Number(item.out) };
   const cur = drag || base;
   const len = audioLength(cur, media);
+  // A caption's voice-over stays on the voice rows; every other clip can be dragged onto another track.
+  const free = !item.captionId;
 
   const begin = (e, mode) => {
     const snap = ctx.snapper({ audio: item.id });
     const a0 = base.in;
     const b0 = base.out == null ? a0 + audioLength(base, media) : base.out;
     const cap = full > 0 ? full : MAX_TIME;
+    const own = audioTrack(item);
+    const home = e.currentTarget.closest(".tl-lane");
+    const vertical = mode === "move" && free;
     let next = null;
     let patch = null;
+    let target = null;
+    let crowded = false;
+    let shown = false;
     dragPointer(e, {
       threshold: mode === "move" ? 3 : 1,
+      axis: vertical ? "xy" : "x",
       onMove: (dx, ev) => {
         const shift = dx / pps;
+        let dy = 0;
         let text;
         if (mode === "move") {
           const start = round(Math.max(0, snapRange(base.start + shift, b0 - a0, snap, ev)), 3);
           next = { ...base, start };
           patch = { start };
           text = `開始 ${start.toFixed(2)} 秒`;
+          if (vertical) {
+            if (!shown) {
+              shown = true;
+              ctx.onAudioDrag(true);
+            }
+            const hit = audioLaneAt(ev);
+            target = hit && hit.lane !== home && hit.track !== own ? hit.track : null;
+            if (target) dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
+            // A music track that already plays something in this stretch: the clip opens a new track instead.
+            const dest = target || own;
+            crowded = dest !== VOICE_TRACK && dest !== "new" && trackBusy(project, item, dest, start, b0 - a0);
+            if (crowded) text += "，這段時間已有音訊，放到新的音軌";
+            else if (target === "new") text += "，放到新的音軌";
+            else if (target === VOICE_TRACK) text += "，移到配音軌";
+            else if (target) text += "，合併到這條音軌";
+          }
         } else if (mode === "l") {
           const s = snap(base.start + shift, ev) - base.start;
           const tIn = round(clamp(a0 + s, Math.max(0, a0 - base.start), b0 - MIN_ITEM), 3);
@@ -475,17 +518,25 @@ export function AudioClip({ project, item, ctx, selected }) {
           text = `出點 ${tOut.toFixed(2)} 秒`;
         }
         const t = mode === "r" ? next.start + audioLength(next, media) : next.start;
-        setDrag({ ...next, mode, tip: { t, text } });
+        setDrag({ ...next, mode, dy, tip: { t, text } });
       },
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
+        if (shown) ctx.onAudioDrag(false);
         if (!moved) {
           setState({ editSel: { type: "audio", id: item.id } });
           return;
         }
         if (cancelled || !patch) return;
-        const label = mode === "move" ? "移動音軌" : mode === "l" ? "修改音軌入點" : "修改音軌出點";
+        let label = mode === "move" ? "移動音軌" : mode === "l" ? "修改音軌入點" : "修改音軌出點";
         if (mode === "l") Object.assign(patch, keyPatch(item, shiftKeys(item, patch.start - base.start)));
+        if (crowded || target === "new") {
+          patch.track = newId("t");
+          label = "移到新的音軌";
+        } else if (target) {
+          patch.track = target;
+          label = target === VOICE_TRACK ? "移到配音軌" : "合併音軌";
+        }
         ops([{ op: "audio.update", id: item.id, patch }], { label });
       },
     });
@@ -497,8 +548,9 @@ export function AudioClip({ project, item, ctx, selected }) {
     .filter(Boolean).join(" ");
   const fi = Math.min(Number(item.fadeIn || 0), len / 2) * pps;
   const fo = Math.min(Number(item.fadeOut || 0), len / 2) * pps;
-  return html`<div class=${cls} style=${`left:${cur.start * pps}px;width:${width}px`} data-sel=${`audio:${item.id}`}
-    title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(len, 2)}，雙擊跳到開頭，Shift+點擊加關鍵幀`}
+  const style = `left:${cur.start * pps}px;width:${width}px` + (drag && drag.dy ? `;transform:translateY(${drag.dy}px)` : "");
+  return html`<div class=${cls} style=${style} data-sel=${`audio:${item.id}`}
+    title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(len, 2)}${free ? "，上下拖曳換音軌" : ""}，雙擊跳到開頭，Shift+點擊加關鍵幀`}
     onPointerDown=${(e) => begin(e, "move")} onDblClick=${() => setTime(cur.start)}>
     ${media && html`<${Wave} pid=${project.id} media=${media} tIn=${cur.in} len=${len} width=${width} />`}
     ${fi > 1 && html`<i class="tl-fade is-in" style=${`width:${fi}px`}></i>`}
