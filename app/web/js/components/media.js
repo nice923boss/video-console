@@ -20,6 +20,7 @@ export function sourceLabel(source) {
   if (source.backend === "local") {
     if (source.tool === "kenburns") return `運鏡動畫：${source.presetName || source.preset || ""}`;
     if (source.tool === "lastframe") return "擷取影片畫面";
+    if (source.tool === "reverse") return "倒放";
   }
   return "";
 }

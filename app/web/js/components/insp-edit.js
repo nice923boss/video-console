@@ -12,10 +12,13 @@ import { Icon } from "./icons.js";
 import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText } from "./ui.js";
 import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
+import { keyHint } from "../lib/keymap.js";
+import { reverseClip, detachAudio, isReverse } from "./tl-commands.js";
 
 const NONE = [];
 const MIN_LEN = 0.1;
 const DEFAULT_TRANSITION = { type: "cut", duration: 0.5 };
+const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4];
 
 function Hint({ icon = "info", tone = "", children }) {
   return html`<p class=${`insp-hint ${tone}`}><${Icon} name=${icon} size=${14} /><span>${children}</span></p>`;
@@ -95,6 +98,39 @@ function TrimSection({ project, shot, vid, clip }) {
       <//>
     </div>
     <${Hint}>也可以在時間軸上拖曳片段的左右邊緣來修剪；出點留白代表播到影片結尾。<//>
+  <//>`;
+}
+
+// Speed, reverse and detached sound. The same commands sit on edit.speed, edit.reverseClip and
+// edit.detachAudio (tl-commands.js); edit.speed focuses the select here.
+function SpeedSection({ project, shot, vid, clips, busy }) {
+  const speed = Number(shot.speed || 1);
+  const detached = !!shot.audioDetached;
+  const reversed = isReverse(vid);
+  const rendering = busy.some((j) => j.kind === "reverse");
+  const sel = { type: "shot", id: shot.id };
+  const options = (SPEEDS.includes(speed) ? SPEEDS : [...SPEEDS, speed].sort((a, b) => a - b))
+    .map((v) => ({ value: v, label: `${v}x` }));
+  let note = null;
+  if (detached) note = `原聲已分離到音訊軌，要先還原原聲${keyHint("edit.detachAudio")}才能變速或倒放。`;
+  else if (speed !== 1 && vid.hasAudio) note = "變速鏡頭不能分離原聲；要分離，先把速度改回 1x。";
+
+  return html`<${Section} title="速度與方向" icon="clock">
+    <div class="row-2">
+      <${Field} label=${`速度${keyHint("edit.speed")}`}>
+        <${Select} class="insp-speed" value=${speed} options=${options} disabled=${detached}
+          onChange=${(v) => updateShot(shot.id, { speed: v }, { label: "變速" })} />
+      <//>
+      <${Field} label="方向">
+        <${Button} icon="undo" busy=${rendering} disabled=${detached || rendering}
+          title=${`倒放${keyHint("edit.reverseClip")}；第一次會先產生倒放的影片`}
+          onClick=${() => reverseClip(project, clips, sel)}>${rendering ? "產生中" : reversed ? "取消倒放" : "倒放"}<//>
+      <//>
+    </div>
+    ${vid.hasAudio && html`<${Button} icon="music" disabled=${!detached && speed !== 1}
+      title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、調音量"}${keyHint("edit.detachAudio")}`}
+      onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}
+    ${note && html`<${Hint}>${note}<//>`}
   <//>`;
 }
 
@@ -192,7 +228,8 @@ export function EditTab({ project, shot, busy = NONE }) {
     <${SequenceSection} shot=${shot} clip=${clip} position=${pos + 1} total=${clips.length} />
     <${MarkSection} shot=${shot} />
     ${vid
-      ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />`
+      ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />
+        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`
       : html`<${StillSection} shot=${shot} img=${img} />`}
     <${TransitionSection} shot=${shot} clip=${clip} isLast=${pos >= 0 && pos === clips.length - 1} transitions=${transitions} />
     <${TranscribeSection} project=${project} shot=${shot} vid=${vid} clip=${clip} busy=${busy} />`;

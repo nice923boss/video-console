@@ -236,6 +236,25 @@
 .tb-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .tb-history { display: flex; gap: 2px; padding-right: 8px; border-right: 1px solid var(--border); }
 
+/* Watch mode chip: this window only shows the open project */
+.tb-watch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 32px;
+  padding: 0 10px 0 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in srgb, var(--accent-line) 40%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tb-watch:hover { background: color-mix(in srgb, var(--accent-soft), var(--accent) 10%); }
+.tb-watch > svg.icon:last-child { opacity: 0.7; }
+
 /* Queue chip */
 
 .qchip {

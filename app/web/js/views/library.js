@@ -271,12 +271,14 @@ function MediaCard({ media, project, selected, uses, onSelect, onOpen, onMenu })
     <span class="lib-kind"><${Icon} name=${KIND_ICON[media.kind] || "file"} size=${12} /></span>
     <button type="button" class=${`lib-fav ${media.favorite ? "on" : ""}`} title=${media.favorite ? "取消最愛" : "加入最愛"}
       aria-label=${media.favorite ? "取消最愛" : "加入最愛"}
-      onClick=${(e) => { e.stopPropagation(); toggleFavorite(media); }}><${Icon} name="star" size=${14} /></button>
+      onClick=${(e) => { e.stopPropagation(); toggleFavorite(media); }} onDblClick=${(e) => e.stopPropagation()}>
+      <${Icon} name="star" size=${14} /></button>
     <div class="lib-body">
       <div class="lib-row">
         <span class="lib-name">${media.name || "未命名"}</span>
         <button type="button" class="icon-btn lib-more" title="更多動作" aria-label="更多動作"
-          onClick=${(e) => { onSelect(media.id); onMenu(e, media); }}><${Icon} name="more" size=${15} /></button>
+          onClick=${(e) => { onSelect(media.id); onMenu(e, media); }} onDblClick=${(e) => e.stopPropagation()}>
+          <${Icon} name="more" size=${15} /></button>
       </div>
       <div class="lib-meta">
         <span class="dim">${meta || KIND_NAME[media.kind]}</span>

@@ -3,7 +3,7 @@ import { html, useState, useEffect, useMemo } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { usePref } from "../lib/prefs.js";
-import { openProject, duplicateProject, deleteProject, updateProject, navigate, pickProjectZip } from "../lib/actions.js";
+import { openProject, duplicateProject, deleteProject, updateProject, navigate, pickProjectZip, revealSystemFolder } from "../lib/actions.js";
 import { fmtDuration, fmtRelTime, fmtDate } from "../lib/format.js";
 import { comfyTone } from "../components/shell.js";
 import { Icon } from "../components/icons.js";
@@ -232,6 +232,10 @@ export function HomeView() {
       ${projects.length
         ? html`<div class="home-toolbar">
             <h2>所有專案<span class="count">${projects.length}</span></h2>
+            <${Button} size="sm" kind="ghost" icon="folder-open" title="開啟存放所有專案的資料夾"
+              onClick=${() => revealSystemFolder("projects")}>專案資料夾<//>
+            <${Button} size="sm" kind="ghost" icon="film" title="開啟所有專案輸出的影片與 ZIP 所在的資料夾"
+              onClick=${() => revealSystemFolder("exports")}>匯出資料夾<//>
             <span class="grow"></span>
             <label class="search-box">
               <${Icon} name="search" size=${15} />

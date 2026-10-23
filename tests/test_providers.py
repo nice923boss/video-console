@@ -58,7 +58,7 @@ def client(app: App) -> Client:
 
 @pytest.fixture()
 def project(client: Client) -> dict:
-    return client.json("POST", "/api/projects", {"name": "雲端測試"})["project"]
+    return client.json("POST", "/api/projects", {"name": "雲端測試", "settings": {"width": 1280, "height": 720}})["project"]
 
 
 @pytest.fixture()
@@ -470,7 +470,7 @@ def test_each_vendor_offers_its_own_video_lengths() -> None:
     model = "fal-ai/x/image-to-video"
     detected = {"fields": {"model": {"durations": {model: ["4s", "6s", "8s"]}}}}
     assert lengths(FalVideo(), "i2v", {"model": f" {model}/"}, detected) == ["4s", "6s", "8s"]
-    assert lengths(FalVideo(), "i2v", {"model": model}) == ["5", "10"]  # never detected: the configured lengths
+    assert lengths(FalVideo(), "i2v", {"model": model}) == ["6", "8", "10"]  # never detected: the configured lengths
     assert lengths(FalVideo(), "t2v", {"durations": ""}, detected) == []
     assert lengths(providers.get("custom-video"), "t2v") is None  # the shot's seconds go out as they are
 

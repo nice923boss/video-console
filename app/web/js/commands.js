@@ -9,6 +9,7 @@ import { VIEWS } from "./components/shell.js";
 import { openNewProject } from "./dialogs/new-project.js";
 import { openExportDialog } from "./dialogs/export-dialog.js";
 import { openShortcuts } from "./dialogs/shortcuts.js";
+import { openEditHelp } from "./dialogs/edit-help.js";
 import { openHistory } from "./dialogs/history-dialog.js";
 import { openScriptImport } from "./dialogs/script-import.js";
 import { openCastDialog } from "./dialogs/cast-dialog.js";
@@ -41,6 +42,7 @@ defineCommands([
   { id: "queue:pause", label: "暫停或繼續佇列" },
   { id: "theme:flip", label: "切換深淺色主題" },
   { id: "help:keys", label: "快捷鍵一覽", keys: ["?"] },
+  { id: "help:edit", label: "剪輯功能說明" },
 ]);
 
 // Palette rows that show the key of a storyboard command.
@@ -123,6 +125,8 @@ function appCommands(s, commands) {
     { id: "theme:flip", group: "外觀", label: dark ? "切換成淺色主題" : "切換成深色主題", icon: dark ? "sun" : "moon",
       keywords: "theme 主題 dark light", run: () => saveSettings({ ui: { theme: dark ? "light" : "dark" } }) },
     { id: "help:keys", group: "說明", label: "快捷鍵一覽", icon: "keyboard", run: () => openShortcuts() },
+    { id: "help:edit", group: "說明", label: "剪輯功能說明", icon: "book", keywords: "help 說明 分割 標記 關鍵幀 變速 倒放 定格 原聲 音量",
+      run: () => openEditHelp() },
   ];
 }
 

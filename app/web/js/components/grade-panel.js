@@ -9,7 +9,10 @@ import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round } from "../lib/format.js";
 import { WHEELS, defaultGrade, fullGrade, isWheelNeutral, neutralWheel, puckOf, withPuck } from "../lib/grade.js";
+import { hasKeys, valueAt } from "../lib/keyframes.js";
 import { adjustName } from "./tl-adjust.js";
+import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
+import { addKeyframe } from "./tl-commands.js";
 import { Button, IconButton, Field, DraftText, NumberInput, Slider, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
 
@@ -159,11 +162,14 @@ function RangeNumbers({ name, wheel, onCommit }) {
 
 export function GradePanel({ project, item }) {
   const draft = useStore((s) => s.gradeDraft);
-  const saved = fullGrade(item.grade);
-  const grade = draft && draft.id === item.id ? draft.grade : saved;
-  const untouched = JSON.stringify(grade) === JSON.stringify(defaultGrade());
   const start = Number(item.start || 0);
   const len = Number(item.length || MIN_LEN);
+  const keyed = hasKeys(item, "grade");
+  const local = useClipTime(start, len, (item.keyframes || []).length > 0);
+  // With grade keyframes the panel shows, and edits, the key at the playhead.
+  const saved = fullGrade(keyed ? valueAt(item, "grade", local) : item.grade);
+  const grade = draft && draft.id === item.id ? draft.grade : saved;
+  const untouched = JSON.stringify(grade) === JSON.stringify(defaultGrade());
   const trackOff = !!(project.tracks || {}).adjustHidden;
   const update = (patch, label) => ops([{ op: "adjust.update", id: item.id, patch }], { label });
 
@@ -183,7 +189,7 @@ export function GradePanel({ project, item }) {
     }
     const mine = { id: item.id, grade: next };
     setState({ gradeDraft: mine });
-    update({ grade: next }, label).then(() => {
+    update(keyedPatch(item, clamp(clock.time - start, 0, len), { grade: next }), label).then(() => {
       if (getState().gradeDraft === mine) setState({ gradeDraft: null });
     });
   };
@@ -226,6 +232,8 @@ export function GradePanel({ project, item }) {
           <${Seconds} value=${len} min=${MIN_LEN} onCommit=${(v) => update({ length: v }, "修改調整圖層長度")} />
         <//>
       </div>
+      ${keyed && html`<div class="note note-info"><${Icon} name="diamond" size=${15} />
+        <span class="note-text">調色有關鍵幀：這裡顯示並改寫播放頭位置的調色。預覽與輸出在關鍵幀之間分段漸變。</span></div>`}
       <${Field} label="色輪" hint="拖曳圓盤上的圓點調整顏色，左側直條是飽和度，右側直條是亮度；雙擊歸零"
         after=${html`<${Button} size="sm" kind="ghost" icon="undo" disabled=${untouched}
           onClick=${() => commit(defaultGrade(), "重設調色")}>全部重設<//>`}>
@@ -248,6 +256,8 @@ export function GradePanel({ project, item }) {
       <//>
       <${Toggle} checked=${!!item.hidden} label="停用調整圖層" hint="保留在時間軸上，但預覽與匯出都不套用調色"
         onChange=${(hidden) => update({ hidden }, hidden ? "停用調整圖層" : "啟用調整圖層")} />
+      <${KeyList} item=${item} start=${start} length=${len} local=${local} update=${update}
+        onAdd=${() => addKeyframe(project, null, { type: "adjust", id: item.id })} />
       <div class="row">
         <${Button} size="sm" icon="skip-back" onClick=${() => setTime(start)}>跳到開頭<//>
         <${Button} size="sm" icon="arrow-right" onClick=${() => update({ start: round(clock.time, 3) }, "移動調整圖層")}

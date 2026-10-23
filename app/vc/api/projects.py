@@ -5,7 +5,9 @@ import copy
 import shutil
 from typing import TYPE_CHECKING, Any
 
+from .. import edits
 from ..ops import apply_ops
+from ..pacing import break_down, fill_coverage, pace_notes
 from ..script import MAX_SHOTS, docx_to_text, normalize_shot, parse_script
 from ..sequence import build_sequence
 from ..store import BLANK_SHOT_NAME
@@ -140,6 +142,29 @@ def register(router: Router, app: App) -> None:
                            batch=_short(data.get("batch"), 64), coalesce=_short(data.get("coalesce"), 64),
                            label=str(data.get("label") or "")[:80])
 
+    @router.route("GET", "/api/projects/{pid}/timeline")
+    def project_timeline(req: Request) -> dict:
+        return edits.timeline(store.get(req.params["pid"]))
+
+    @router.route("POST", "/api/projects/{pid}/edit")
+    def project_edit(req: Request) -> dict:
+        """One named timeline edit (vc/edits.py), applied as one undo step; some also queue a job."""
+        pid = req.params["pid"]
+        plan = edits.plan(store.get(pid), req.json_object())
+        out: dict = {"label": plan["label"], "changed": False}
+        ops = plan["ops"]
+        if ops:
+            # Like the edit page with linked editing on: items on later shots follow them.
+            if any(o["op"].startswith("shot.") for o in ops):
+                ops = [{"op": "linked", "ops": ops}]
+            out.update(store.apply(pid, ops, origin="user", label=plan["label"]))
+        if plan.get("job"):
+            job = plan["job"]
+            out["job"] = app.jobs.submit(job["kind"], pid, job["shotId"], job["payload"])
+        if plan.get("id"):
+            out["id"] = plan["id"]
+        return out
+
     @router.route("POST", "/api/projects/{pid}/undo")
     def project_undo(req: Request) -> dict:
         return store.undo(req.params["pid"])
@@ -188,9 +213,17 @@ def register(router: Router, app: App) -> None:
         data = req.json_object()
         text = data.get("text")
         mode = str(data.get("mode") or "auto")
+        detail = data.get("detail") is True
         if mode == "llm":
-            return {"shots": app.llm.script_to_shots(str(text or "")), "mode": "llm", "notes": []}
-        return parse_script(text, mode)
+            shots = app.llm.script_to_shots(str(text or ""), detail=detail)
+            if not detail:
+                return {"shots": shots, "mode": "llm", "notes": []}
+            shots, notes = fill_coverage(shots)
+            return {"shots": shots, "mode": "llm", "notes": pace_notes(shots) + notes}
+        result = parse_script(text, mode)
+        if detail:
+            return break_down(result)
+        return {**result, "shots": [{k: v for k, v in s.items() if k != "lines"} for s in result["shots"]]}
 
     @router.route("POST", "/api/script/docx")
     def script_docx(req: Request) -> dict:

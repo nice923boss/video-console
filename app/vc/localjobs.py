@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .export import export_options, render
+from .exportdir import ensure_root, export_root, record_export
 from .jobs import JobControl
 from .media import KENBURNS, KENBURNS_LABELS, Media
 from .ops import new_overlay, valid_id
@@ -23,7 +24,7 @@ from .util import AppError, clamp, kind_of, new_id
 
 log = logging.getLogger("vc.localjobs")
 
-LOCAL_KINDS = ("kenburns", "lastframe", "ingest", "export", "package")
+LOCAL_KINDS = ("kenburns", "lastframe", "reverse", "ingest", "export", "package")
 UPLOAD_RE = re.compile(r"^media/cache/upload-[a-z0-9_]+\.[a-z0-9]{1,5}$")
 ENCODERS = ("auto", "libx264", "h264_nvenc", "h264_amf", "h264_qsv")
 
@@ -95,7 +96,7 @@ class LocalJobs:
                 "duration": round(clamp(number(payload.get("duration"), shot.get("duration") or 5.0), 0.5, 60.0), 2),
                 "width": even_size(payload.get("width"), settings["width"]),
                 "height": even_size(payload.get("height"), settings["height"]),
-                "fps": int(clamp(number(payload.get("fps"), settings["fps"]), 1, 60)),
+                "fps": round(clamp(number(payload.get("fps"), settings["fps"]), 1, 60)),
             },
         }
 
@@ -135,10 +136,13 @@ class LocalJobs:
         if item.get("kind") != "video":
             raise AppError("擷取畫面需要影片")
         target = payload.get("target") or "next"
-        if target not in ("next", "self"):
+        if target not in ("next", "self", "shot"):
             raise AppError("擷取畫面的目標不正確")
         t_index, t_shot = index, shot
-        if target == "next":
+        if target == "shot":
+            # A freeze frame: the grab becomes the still of a shot the timeline made for it.
+            t_index, t_shot = find_shot(project, payload.get("targetShot"))
+        elif target == "next":
             if index + 1 >= len(project["shots"]):
                 raise AppError("這是最後一個鏡頭，沒有下一個鏡頭可以接")
             t_index, t_shot = index + 1, project["shots"][index + 1]
@@ -146,7 +150,9 @@ class LocalJobs:
         if at is not None:
             at = round(clamp(number(at, 0.0), 0.0, max(0.0, float(item.get("duration") or 0.0))), 3)
         title = ("擷取畫面" if at is not None else "擷取尾幀") + f"：{shot_label(index, shot)}"
-        if target == "next":
+        if target == "shot":
+            title = f"定格：{shot_label(t_index, t_shot)}"
+        elif target == "next":
             title += f" → {shot_label(t_index, t_shot)}"
         return {"title": title, "lane": "local:ffmpeg", "shotId": t_shot["id"],
                 "payload": {"source": item["id"], "fromShot": shot["id"], "target": target, "at": at}}
@@ -180,6 +186,47 @@ class LocalJobs:
         )
         commit_takes(self._store, ctl.pid, [take], "activeImage")
         return {"takeIds": [tid], "message": "已擷取畫面"}
+
+    # ---------------------------------------------------------------- reverse
+    def _prepare_reverse(self, project: dict, shot_id: str | None, payload: dict) -> dict:
+        index, shot = find_shot(project, shot_id)
+        item = find_item(project, payload.get("source") or shot.get("activeVideo"))
+        if not item or item.get("kind") != "video" or not item.get("duration"):
+            raise AppError("倒放需要影片")
+        return {"title": f"倒放：{shot_label(index, shot)}", "lane": "local:ffmpeg", "shotId": shot["id"],
+                "payload": {"source": item["id"]}}
+
+    def _run_reverse(self, ctl: JobControl, work: Path) -> dict:
+        p = ctl.payload
+        project = self._store.get(ctl.pid)
+        pdir = self._store.project_dir(ctl.pid)
+        item = find_item(project, p["source"])
+        if not item:
+            raise AppError("來源影片已被刪除", 410)
+        src = item_path(pdir, item)
+        media = self._media()
+        media.require()
+        out = work / "reverse.mp4"
+        media.reverse(src, out, float(item["duration"]), bool(item.get("hasAudio")), cancelled=ctl.cancelled,
+                      on_progress=lambda f: ctl.progress(0.02 + f * 0.9, "倒放影片"))
+        ctl.check()
+        tid = new_id("t")
+        staged = stage_file(media, pdir, out, TAKE_DIR, tid, cancelled=ctl.cancelled, on_progress=ctl.progress)
+        take = new_take(
+            ctl.shot_id, staged, take_id=tid, job_id=ctl.id, parent=item["id"], label="倒放",
+            source={"backend": "local", "tool": "reverse", "from": item["id"]},
+            prompt=item.get("prompt") or "", negative=item.get("negative") or "",
+        )
+        # The kept part of the clip is the same footage, now running the other way: mirror the trims.
+        shot = next((s for s in self._store.get(ctl.pid)["shots"] if s["id"] == ctl.shot_id), None)
+        extra = {}
+        if shot and shot.get("activeVideo") == item["id"]:
+            dur = float(staged.get("duration") or item["duration"])
+            t_in, t_out = float(shot.get("trimIn") or 0.0), shot.get("trimOut")
+            extra = {"trimIn": round(max(0.0, dur - float(t_out)), 3) if t_out is not None else 0.0,
+                     "trimOut": round(dur - t_in, 3) if t_in > 0 else None}
+        commit_takes(self._store, ctl.pid, [take], "activeVideo", extra)
+        return {"takeIds": [tid], "message": "倒放完成"}
 
     # ---------------------------------------------------------------- ingest
     def _prepare_ingest(self, project: dict, shot_id: str | None, payload: dict) -> dict:
@@ -251,6 +298,10 @@ class LocalJobs:
         return {**result, "message": "匯入完成"}
 
     # ---------------------------------------------------------------- export / package
+    def _export_root(self) -> Path:
+        folder = str(self._settings.section("export").get("folder") or "")
+        return ensure_root(export_root(folder, self._store.paths.data))
+
     def _prepare_export(self, project: dict, shot_id: str | None, payload: dict) -> dict:
         overrides = dict(payload.get("options") or {})
         for key in ("burnCaptions", "clipAudio"):
@@ -272,8 +323,11 @@ class LocalJobs:
         if pref == "auto":
             pref = self._settings.section("ffmpeg").get("encoder") or "auto"
         ctl.progress(0.0, "準備輸出")
-        result = render(media, self._store.get(ctl.pid), self._store.project_dir(ctl.pid), opts, pref,
-                        on_progress=lambda f: ctl.progress(f, "輸出影片中"), cancelled=ctl.cancelled)
+        pdir = self._store.project_dir(ctl.pid)
+        result = render(media, self._store.get(ctl.pid), pdir, opts, pref,
+                        on_progress=lambda f: ctl.progress(f, "輸出影片中"), cancelled=ctl.cancelled,
+                        out_dir=self._export_root())
+        record_export(pdir, pdir / result["file"])
         if result["missing"]:
             ctl.note(f"有 {result['missing']} 個鏡頭的畫面檔案遺失，已用文字卡代替")
         if result["empty"]:
@@ -288,8 +342,11 @@ class LocalJobs:
 
     def _run_package(self, ctl: JobControl, work: Path) -> dict:
         ctl.progress(0.0, "打包中")
-        result = build_package(self._store.get(ctl.pid), self._store.project_dir(ctl.pid), ctl.payload,
-                               on_progress=lambda f: ctl.progress(f, "打包中"), cancelled=ctl.cancelled)
+        pdir = self._store.project_dir(ctl.pid)
+        result = build_package(self._store.get(ctl.pid), pdir, ctl.payload,
+                               on_progress=lambda f: ctl.progress(f, "打包中"), cancelled=ctl.cancelled,
+                               out_dir=self._export_root())
+        record_export(pdir, pdir / result["file"])
         if result["missing"]:
             ctl.note(f"有 {result['missing']} 個檔案找不到，沒有放進打包檔")
         return {"file": result["file"], "package": result, "message": f"打包完成：{result['name']}"}

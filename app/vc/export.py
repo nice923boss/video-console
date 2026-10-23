@@ -11,6 +11,8 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
+import shutil
 import time
 from pathlib import Path
 from typing import Callable
@@ -18,15 +20,23 @@ from typing import Callable
 from .captions import ass_text as _ass_text
 from .captions import ass_time as _ass_time
 from .captions import caption_ass
+from .exportdir import file_ref, unique_path
 from .grade import build_cube, clean_grade, is_neutral
-from .media import Media
-from .sequence import XFADE_NAMES, build_sequence, total_duration
+from .keyframes import expr as kf_expr
+from .keyframes import steps as kf_steps
+from .media import ALPHA_DECODERS, Media
+from .sequence import XFADE_NAMES, audio_media, build_sequence, total_duration
 from .util import AppError, safe_filename
 
 log = logging.getLogger("vc.export")
 
 SLATE_COLOR = "0x15171a"
 CAPTION_FONT = "Microsoft JhengHei"
+
+
+def frame_rate(fps: float) -> str:
+    """The project frame rate as ffmpeg takes it: 29.97 is the NTSC rate 30000/1001."""
+    return "30000/1001" if abs(fps - 29.97) < 0.01 else f"{fps:g}"
 
 
 def export_options(project: dict, settings_export: dict, overrides: dict | None) -> dict:
@@ -88,7 +98,8 @@ def build_ass(project: dict, clips: list[dict], opts: dict, width: int, height: 
     burn: list[dict] = []
     if opts["burnCaptions"] and not tracks.get("captionsHidden"):
         burn = [cap for cap in project.get("captions", [])
-                if (cap.get("text") or "").strip() and float(cap.get("end", 0)) > float(cap.get("start", 0))]
+                if (cap.get("text") or "").strip() and float(cap.get("end", 0)) > float(cap.get("start", 0))
+                and not cap.get("disabled")]
     caption_styles, caption_events = caption_ass(project, burn, play_x, size)
     events += caption_events
     if not events:
@@ -151,42 +162,60 @@ def prepare_clips(project: dict, project_dir: Path) -> list[dict]:
 
 
 def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, opts: dict,
-                   inputs: list[list[str]], graph: list[str]) -> tuple[str, list[tuple[int, float, float, float]]]:
+                   inputs: list[list[str]], graph: list[str]) -> tuple[str, list[tuple[int, float, float, str]]]:
     """Lay the picture-in-picture clips over the picture, bottom track first (a higher track covers a lower
-    one). Returns the new picture label and (input, start, length, volume) for each clip whose sound plays."""
-    w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), int(project["settings"]["fps"])
+    one). Returns the new picture label and (input, start, length, volume expression) for each clip whose
+    sound plays. Keyframed position, size and opacity follow the timeline time t (T in geq)."""
+    w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), float(project["settings"]["fps"])
     all_media = project.get("media") or {}
-    sounds: list[tuple[int, float, float, float]] = []
+    sounds: list[tuple[int, float, float, str]] = []
     for layer in project.get("layers") or []:
         for item in project.get("overlays") or []:
             media = all_media.get(item.get("mediaId") or "")
-            if item.get("layer") != layer.get("id") or not media or media.get("kind") not in ("image", "video"):
+            if (item.get("layer") != layer.get("id") or not media or media.get("kind") not in ("image", "video")
+                    or item.get("disabled")):
                 continue
             start = float(item.get("start") or 0.0)
             length = min(float(item.get("length") or 0.0), total - start)
+            keyed = {k for kf in item.get("keyframes") or [] for k in kf if k != "t"}
             volume = float(item.get("volume", 1.0))
             # Hiding a track only hides its picture and muting only silences it, as in the preview.
             loud = (opts["clipAudio"] and media["kind"] == "video" and bool(media.get("hasAudio"))
-                    and not layer.get("muted") and volume > 0)
+                    and not layer.get("muted") and (volume > 0 or "volume" in keyed))
             if length <= 0.05 or (layer.get("hidden") and not loud) or not (project_dir / media["file"]).is_file():
                 continue
             if media["kind"] == "video":
-                inputs.append(["-ss", f"{float(item.get('in') or 0.0):.3f}", "-t", f"{length:.3f}", "-i", media["file"]])
+                decoder = ALPHA_DECODERS.get(media.get("alphaCodec") or "")
+                inputs.append(["-ss", f"{float(item.get('in') or 0.0):.3f}", "-t", f"{length:.3f}",
+                               *(["-c:v", decoder] if decoder else []), "-i", media["file"]])
             else:
-                inputs.append(["-loop", "1", "-framerate", str(fps), "-t", f"{length:.3f}", "-i", media["file"]])
+                inputs.append(["-loop", "1", "-framerate", frame_rate(fps), "-t", f"{length:.3f}", "-i", media["file"]])
             idx = len(inputs) - 1
             if loud:
-                sounds.append((idx, start, length, volume))
+                sounds.append((idx, start, length, kf_expr(item, "volume", "t", 0.0, 1.0)))
             if layer.get("hidden"):
                 continue
             # The clip's frames start at its place on the timeline; before that and after its end the
             # overlay passes the picture through unchanged.
-            chain = [f"setpts=PTS-STARTPTS+{start:.3f}/TB",
-                     f"scale={max(2, round(w * float(item.get('w') or 0.35) / 2) * 2)}:-2:flags=lanczos", "format=rgba"]
+            chain = [f"setpts=PTS-STARTPTS+{start:.3f}/TB"]
+            if "opacity" in keyed:
+                # geq keeps the frame size it first saw, so it runs before a changing scale.
+                op = kf_expr(item, "opacity", "T", start, 1.0)
+                chain += ["format=rgba", f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({op})'"]
+            if "w" in keyed:
+                chain += [f"scale=w='max(2,2*trunc({w}*({kf_expr(item, 'w', 't', start, 0.35)})/2))':h=-2:"
+                          "eval=frame:flags=lanczos", "setsar=1"]
+            else:
+                chain.append(f"scale={max(2, round(w * float(item.get('w') or 0.35) / 2) * 2)}:-2:flags=lanczos")
+            chain.append("format=rgba")
             opacity = float(item.get("opacity", 1.0))
-            if opacity < 1:
+            if opacity < 1 and "opacity" not in keyed:
                 chain.append(f"colorchannelmixer=aa={opacity:.3f}")
-            x, y = round(w * float(item.get("x") or 0.0)), round(h * float(item.get("y") or 0.0))
+            if keyed & {"x", "y"}:
+                x = f"'{w}*({kf_expr(item, 'x', 't', start)})'"
+                y = f"'{h}*({kf_expr(item, 'y', 't', start)})'"
+            else:
+                x, y = round(w * float(item.get("x") or 0.0)), round(h * float(item.get("y") or 0.0))
             graph.append(f"[{idx}:v]{','.join(chain)}[pip{idx}]")
             graph.append(f"[{label}][pip{idx}]overlay=x={x}:y={y}:eof_action=pass[pv{idx}]")
             label = f"pv{idx}"
@@ -194,18 +223,31 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
 
 
 def active_adjustments(project: dict, total: float) -> list[tuple[float, float, dict]]:
-    """(start, end, grade) of each adjustment layer that changes the picture, in timeline order."""
+    """(start, end, grade) of each adjustment layer that changes the picture, in timeline order.
+
+    A keyframed grade becomes a run of short spans, each holding the grade at its middle (see kf_steps)."""
     if (project.get("tracks") or {}).get("adjustHidden"):
         return []
     out = []
     for item in project.get("adjustments") or []:
         start = float(item.get("start") or 0.0)
         end = min(start + float(item.get("length") or 0.0), total)
-        grade = clean_grade(item.get("grade"))
-        if item.get("hidden") or end - start <= 0.01 or is_neutral(grade):
+        if item.get("hidden") or end - start <= 0.01:
             continue
-        out.append((start, end, grade))
+        for a, b, grade in kf_steps(item, "grade", start, end, float(project["settings"]["fps"])):
+            grade = clean_grade(grade)
+            if b - a > 0.001 and not is_neutral(grade):
+                out.append((a, b, grade))
     return sorted(out, key=lambda span: span[0])
+
+
+def _atempo(speed: float) -> str:
+    """Filters (with a trailing comma) that play sound at speed without changing its pitch."""
+    if abs(speed - 1) < 1e-6:
+        return ""
+    if speed < 0.5:  # one atempo goes no lower than half speed
+        return f"atempo={math.sqrt(speed):.4f}," * 2
+    return f"atempo={speed:.4f},"
 
 
 def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict, ass_rel: str | None = None,
@@ -215,24 +257,30 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     luts holds (start, end, cube file) per adjustment layer; each grades the picture with its upper
     tracks during its span, before captions are burnt in."""
     total = total_duration(clips)
-    w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), int(project["settings"]["fps"])
+    w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), float(project["settings"]["fps"])
     inputs: list[list[str]] = []
     graph: list[str] = []
     video_index: dict[int, int] = {}
 
     for i, clip in enumerate(clips):
         length = clip["length"]
-        if clip["source"] == "video":
-            inputs.append(["-ss", f"{clip['in']:.3f}", "-t", f"{length:.3f}", "-i", clip["take"]["file"]])
+        speed = float(clip.get("speed") or 1.0)
+        disabled = bool(clip["shot"].get("disabled"))
+        if disabled:
+            # A disabled shot keeps its place on the timeline as black and silence.
+            inputs.append(["-f", "lavfi", "-t", f"{length:.3f}", "-i", f"color=c=black:s={w}x{h}:r={frame_rate(fps)}"])
+        elif clip["source"] == "video":
+            inputs.append(["-ss", f"{clip['in']:.3f}", "-t", f"{length * speed:.3f}", "-i", clip["take"]["file"]])
         elif clip["source"] == "image":
-            inputs.append(["-loop", "1", "-framerate", str(fps), "-t", f"{length:.3f}", "-i", clip["take"]["file"]])
+            inputs.append(["-loop", "1", "-framerate", frame_rate(fps), "-t", f"{length:.3f}", "-i", clip["take"]["file"]])
         else:
-            inputs.append(["-f", "lavfi", "-t", f"{length:.3f}", "-i", f"color=c={SLATE_COLOR}:s={w}x{h}:r={fps}"])
+            inputs.append(["-f", "lavfi", "-t", f"{length:.3f}", "-i", f"color=c={SLATE_COLOR}:s={w}x{h}:r={frame_rate(fps)}"])
         idx = len(inputs) - 1
         video_index[i] = idx
         # setpts must come before fps: after setpts the link has no constant rate and xfade rejects it.
+        pts = "PTS-STARTPTS" if speed == 1 or disabled else f"(PTS-STARTPTS)/{speed:.4f}"
         graph.append(
-            f"[{idx}:v]setpts=PTS-STARTPTS,{_fit_filter(opts['fit'], w, h)},setsar=1,fps={fps},format=yuv420p,"
+            f"[{idx}:v]setpts={pts},{_fit_filter(opts['fit'], w, h)},setsar=1,fps={frame_rate(fps)},format=yuv420p,"
             f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=duration={length:.3f}[v{i}]"
         )
 
@@ -288,7 +336,9 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     aformat = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
     if opts["clipAudio"] and not tracks.get("videoMuted"):
         for i, clip in enumerate(clips):
-            if clip["source"] != "video" or not clip["take"].get("hasAudio"):
+            shot = clip["shot"]
+            if (clip["source"] != "video" or not clip["take"].get("hasAudio") or shot.get("disabled")
+                    or shot.get("audioDetached")):
                 continue
             length = clip["length"]
             fade_in = clips[i - 1]["transition"]["duration"] if i > 0 else 0.0
@@ -296,19 +346,20 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             fade_out = max(0.03, min(clip["transition"]["duration"], length / 2))
             ms = int(round(clip["start"] * 1000))
             graph.append(
-                f"[{video_index[i]}:a]{aformat},atrim=duration={length:.3f},asetpts=PTS-STARTPTS,"
+                f"[{video_index[i]}:a]{aformat},{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
+                f"asetpts=PTS-STARTPTS,"
                 f"afade=t=in:st=0:d={fade_in:.3f},afade=t=out:st={length - fade_out:.3f}:d={fade_out:.3f},"
                 f"adelay=delays={ms}:all=1,{fix_pts}[ca{i}]"
             )
             a_labels.append(f"ca{i}")
     for idx, start, length, volume in pip_sounds:
         graph.append(
-            f"[{idx}:a]{aformat},atrim=duration={length:.3f},asetpts=PTS-STARTPTS,volume={volume:.3f},"
+            f"[{idx}:a]{aformat},atrim=duration={length:.3f},asetpts=PTS-STARTPTS,volume='{volume}':eval=frame,"
             f"adelay=delays={int(round(start * 1000))}:all=1,{fix_pts}[pa{idx}]"
         )
         a_labels.append(f"pa{idx}")
     for k, track in enumerate(project.get("audio", [])):
-        media = project.get("media", {}).get(track.get("mediaId") or "")
+        media = audio_media(project, track)
         # Voice lines are the audio clips made for a caption; everything else sits on the music rows.
         row_muted = tracks.get("voiceMuted" if track.get("captionId") else "musicMuted")
         if track.get("muted") or row_muted or not media or not (project_dir / media["file"]).is_file():
@@ -326,7 +377,7 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         fi = min(float(track.get("fadeIn") or 0.0), length / 2)
         fo = min(float(track.get("fadeOut") or 0.0), length / 2)
         chain = [aformat, f"atrim=start={a_in:.3f}:duration={length:.3f}", "asetpts=PTS-STARTPTS",
-                 f"volume={float(track.get('volume', 1.0)):.3f}"]
+                 f"volume='{kf_expr(track, 'volume', 't', 0.0, 1.0)}':eval=frame"]
         if fi > 0:
             chain.append(f"afade=t=in:st=0:d={fi:.3f}")
         if fo > 0:
@@ -380,18 +431,21 @@ def render(
     encoder_pref: str = "auto",
     on_progress: Callable[[float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    out_dir: Path | None = None,
 ) -> dict:
-    """Render the project's sequence to exports/<name>_<time>.mp4 and return file info."""
+    """Render the project's sequence to <out_dir>/<name>_<time>.mp4 (default the project's exports/) and
+    return file info."""
     media.require()
     stamp = f"export-{int(time.time() * 1000)}"
     cache = project_dir / "media" / "cache"
     cache.mkdir(parents=True, exist_ok=True)
     ass_path = cache / f"{stamp}.ass"
     graph_path = cache / f"{stamp}.graph.txt"
-    out_dir = project_dir / "exports"
+    out_dir = out_dir or project_dir / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / export_filename(project)
-    work_path = cache / f"{stamp}.mp4"  # rendered here and moved into exports/ only once complete
+    out_path = unique_path(out_dir, export_filename(project))
+    part = out_dir / f".{out_path.name}.part"
+    work_path = cache / f"{stamp}.mp4"  # rendered here and moved to out_dir only once complete
 
     clips = prepare_clips(project, project_dir)
     ass = build_ass(project, clips, opts, int(project["settings"]["width"]), int(project["settings"]["height"]))
@@ -427,13 +481,14 @@ def render(
             log.warning("Export with %s failed (%s); retrying with libx264", encoder, exc.message)
             encoder = "libx264"
             media.run_progress(args_for(encoder), plan["total"], on_progress, cancelled, cwd=project_dir)
-        work_path.replace(out_path)
+        shutil.move(work_path, part)  # out_dir may be on another drive, where a plain rename fails
+        part.replace(out_path)
     finally:
-        for tmp in (ass_path, graph_path, work_path, *lut_paths):
+        for tmp in (ass_path, graph_path, work_path, part, *lut_paths):
             tmp.unlink(missing_ok=True)
     log.info("Exported %s in %.1fs with %s", out_path.name, time.time() - started, encoder)
     return {
-        "file": f"exports/{out_path.name}",
+        "file": file_ref(out_path, project_dir),
         "name": out_path.name,
         "duration": plan["total"],
         "size": out_path.stat().st_size,
@@ -457,7 +512,7 @@ def _srt_time(t: float) -> str:
 
 def captions_srt(project: dict) -> str:
     caps = sorted(
-        (c for c in project.get("captions", []) if (c.get("text") or "").strip()),
+        (c for c in project.get("captions", []) if (c.get("text") or "").strip() and not c.get("disabled")),
         key=lambda c: float(c.get("start", 0)),
     )
     blocks = []

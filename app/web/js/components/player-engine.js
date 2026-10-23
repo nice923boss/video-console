@@ -5,7 +5,8 @@
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
 // clock; nothing here re-renders through Preact.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, audioLength, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { clipIndexAt, audioLength, audioMedia, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad } from "../lib/caption-style.js";
 import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
@@ -17,6 +18,7 @@ const IDEO_SPACE = String.fromCharCode(0x3000);
 const ZONES = ["top", "middle", "bottom"];
 const DRAG_START_PX = 3;
 const HOLD_MS = 2000;
+const MAX_RATE = 16; // the fastest playbackRate browsers accept
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 let engineSeq = 0; // keeps SVG filter ids unique when more than one player exists
@@ -103,14 +105,16 @@ function makeSlot(host, rerender) {
   slot.load = (clip, pid) => {
     slot.clip = clip;
     const take = clip ? clip.take : null;
-    const key = clip ? `${clip.source}|${take ? take.file : ""}|${slateText(clip)}` : "";
+    const off = clip && clip.shot.disabled;
+    const key = clip ? `${off ? "off" : clip.source}|${take ? take.file : ""}|${slateText(clip)}` : "";
     if (key === slot.key) return;
     slot.key = key;
     slot.pendingSeek = null;
-    if (!clip) {
+    if (!clip || off) {
+      // A disabled shot keeps its place as black, as in the export.
       release(video);
       img.removeAttribute("src");
-      setMode("none");
+      setMode(off ? "off" : "none");
     } else if (clip.source === "video") {
       img.removeAttribute("src");
       video.src = fileUrl(pid, take.file);
@@ -145,6 +149,7 @@ function hide(slot) {
 
 // hooks.onCaptionMove(caption, {x, y}): a caption was dragged to a new anchor (frame fractions); it returns
 // the ops promise. hooks.captionDragLabel(caption): the text shown on the caption while it is dragged.
+// hooks.dragDisabled(): true while captions cannot be dragged (watch mode); a press is then a click on the stage.
 export function createEngine(host, hooks = {}) {
   // Adjustment layers grade the composed picture (clips, flashes, picture-in-picture) as export.py does
   // with lut3d, so captions and the project fade stay outside the graded box.
@@ -176,9 +181,9 @@ export function createEngine(host, hooks = {}) {
   let legacy = 52;
   let drag = null;
   let held = false; // a dropped caption stays put until the moved project arrives
-  let last = { t: 0, playing: false };
+  let last = { t: 0, playing: false, rate: 1 };
 
-  const rerender = () => render(last.t, last.playing);
+  const rerender = () => render(last.t, last.playing, last.rate);
   slots = [makeSlot(layers, rerender), makeSlot(layers, rerender)];
 
   function projectFade(t) {
@@ -193,7 +198,7 @@ export function createEngine(host, hooks = {}) {
   // Original sound of a video clip, with the same short fades export.py puts at each cut.
   function clipGain(i, t) {
     const clip = clips[i];
-    if (!clip || clip.source !== "video" || !clip.take.hasAudio) return 0;
+    if (!clip || clip.source !== "video" || !clip.take.hasAudio || clip.shot.disabled || clip.shot.audioDetached) return 0;
     const local = t - clip.start;
     const len = clip.length;
     const fi = Math.max(0.03, Math.min(i > 0 ? clips[i - 1].transition.duration : 0, len / 2));
@@ -204,11 +209,13 @@ export function createEngine(host, hooks = {}) {
   function syncVideo(slot, t, playing, gain) {
     const { clip, video } = slot;
     if (slot.mode !== "video") return;
-    const target = clip.in + Math.min(Math.max(0, t - clip.start), Math.max(0, clip.length - EDGE));
+    const target = clip.in + Math.min(Math.max(0, t - clip.start), Math.max(0, clip.length - EDGE)) * clip.speed;
     video.volume = clamp01(gain * level);
     video.muted = muted || gain <= 0;
     if (playing) {
-      if (Math.abs(video.currentTime - target) > DRIFT_PLAYING) seekTo(video, slot, target);
+      const speed = Math.min(MAX_RATE, last.rate * clip.speed);
+      if (video.playbackRate !== speed) video.playbackRate = speed;
+      if (Math.abs(video.currentTime - target) > DRIFT_PLAYING * Math.max(1, speed)) seekTo(video, slot, target);
       if (video.paused) playSafe(video);
     } else {
       if (!video.paused) video.pause();
@@ -268,7 +275,7 @@ export function createEngine(host, hooks = {}) {
   // Each caption in its style: in its top/middle/bottom row, or pinned where it was dragged (lib/caption-style.js).
   function drawCaptions(t) {
     if (drag || held) return;
-    const active = (project.captions || []).filter((c) => c.start <= t && t < c.end && (c.text || "").trim());
+    const active = (project.captions || []).filter((c) => c.start <= t && t < c.end && (c.text || "").trim() && !c.disabled);
     const looks = active.map((c) => {
       const s = resolveStyle(project, c, legacy);
       return { c, s, point: anchorOf(s, c), row: ZONES.includes(c.position) ? c.position : "bottom" };
@@ -294,7 +301,7 @@ export function createEngine(host, hooks = {}) {
   // Dragging a caption: it leaves its row, follows the pointer and is dropped at a new anchor. A press
   // without movement stays a click on the stage (play/pause).
   function startDrag(e, node, look) {
-    if (e.button !== 0 || !hooks.onCaptionMove || drag) return;
+    if (e.button !== 0 || !hooks.onCaptionMove || drag || (hooks.dragDisabled && hooks.dragDisabled())) return;
     e.stopPropagation();
     e.preventDefault();
     releaseFocus();
@@ -366,7 +373,7 @@ export function createEngine(host, hooks = {}) {
   function syncTracks() {
     const seen = new Set();
     for (const item of project.audio || []) {
-      const media = (project.media || {})[item.mediaId];
+      const media = audioMedia(project, item);
       if (!media) continue;
       seen.add(item.id);
       let tr = tracks.get(item.id);
@@ -395,11 +402,10 @@ export function createEngine(host, hooks = {}) {
   // One element per picture-in-picture clip, stacked by track; a clip whose file changed gets a new one.
   function syncOverlays() {
     const seen = new Set();
-    const { width, height } = project.settings;
     (project.layers || []).forEach((layer, z) => {
       for (const item of project.overlays || []) {
         const media = (project.media || {})[item.mediaId];
-        if (item.layer !== layer.id || !media || !["image", "video"].includes(media.kind)) continue;
+        if (item.layer !== layer.id || !media || !["image", "video"].includes(media.kind) || item.disabled) continue;
         seen.add(item.id);
         const src = fileUrl(project.id, media.file);
         let ov = pips.get(item.id);
@@ -428,13 +434,9 @@ export function createEngine(host, hooks = {}) {
         }
         ov.item = item;
         ov.layer = layer;
-        const st = ov.node.style;
-        st.left = `${(Number(item.x) * 100).toFixed(3)}%`;
-        st.top = `${(Number(item.y) * 100).toFixed(3)}%`;
-        st.width = `${(Number(item.w) * 100).toFixed(3)}%`;
-        st.height = `${(overlayHeight(item, media, width, height) * 100).toFixed(3)}%`;
-        st.opacity = String(clamp01(Number(item.opacity ?? 1)));
-        st.zIndex = String(z + 1);
+        ov.media = media;
+        ov.node.style.zIndex = String(z + 1);
+        place(ov, 0);
       }
     });
     for (const [id, ov] of pips) {
@@ -443,6 +445,20 @@ export function createEngine(host, hooks = {}) {
       ov.node.remove();
       pips.delete(id);
     }
+  }
+
+  // Position, size and opacity of a picture-in-picture clip local seconds into it (keyframes move them).
+  function place(ov, local) {
+    const { item, media, node } = ov;
+    const { width, height } = project.settings;
+    const pct = (v) => `${(Number(v) * 100).toFixed(3)}%`;
+    const w = Number(valueAt(item, "w", local, 0.35));
+    const st = node.style;
+    st.left = pct(valueAt(item, "x", local, 0));
+    st.top = pct(valueAt(item, "y", local, 0));
+    st.width = pct(w);
+    st.height = pct(overlayHeight({ w }, media, width, height));
+    st.opacity = String(clamp01(Number(valueAt(item, "opacity", local, 1))));
   }
 
   // The SVG filter of one adjustment's grade, rebuilt under a new id whenever the grade changes.
@@ -474,8 +490,12 @@ export function createEngine(host, hooks = {}) {
       const active = (project.adjustments || [])
         .filter((a) => !a.hidden && t >= Number(a.start || 0) && t < Number(a.start || 0) + Number(a.length || 0))
         .sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
+      const fps = Math.max(1, Number(project.settings.fps) || 24);
       for (const a of active) {
-        const grade = gradeDraft && gradeDraft.id === a.id ? gradeDraft.grade : a.grade;
+        const start = Number(a.start || 0);
+        const grade = gradeDraft && gradeDraft.id === a.id
+          ? gradeDraft.grade
+          : steppedAt(a, "grade", t - start, Math.min(Number(a.length || 0), total - start), fps);
         if (!isNeutral(grade)) refs.push(`url(#${filterFor(a.id, grade)})`);
       }
     }
@@ -493,17 +513,20 @@ export function createEngine(host, hooks = {}) {
       const local = t - Number(item.start || 0);
       const on = local >= 0 && local < Number(item.length || 0) && t < total;
       node.style.display = on && !layer.hidden ? "block" : "";
+      if (on && item.keyframes && item.keyframes.length) place(ov, local);
       if (!ov.video) continue;
       if (!on || !playing) {
         if (!node.paused) node.pause();
         if (!on) continue;
       }
       const target = Number(item.in || 0) + local;
-      const gain = layer.muted ? 0 : Number(item.volume ?? 1) * g;
+      const gain = layer.muted ? 0 : Number(valueAt(item, "volume", local, 1)) * g;
       node.volume = clamp01(gain * level);
       node.muted = muted || gain <= 0;
       if (playing) {
-        if (Math.abs(node.currentTime - target) > DRIFT_PLAYING) seekTo(node, ov, target);
+        const speed = Math.min(MAX_RATE, last.rate);
+        if (node.playbackRate !== speed) node.playbackRate = speed;
+        if (Math.abs(node.currentTime - target) > DRIFT_PLAYING * speed) seekTo(node, ov, target);
         if (node.paused) playSafe(node);
       } else if (Math.abs(node.currentTime - target) > DRIFT_PAUSED) {
         seekTo(node, ov, target);
@@ -525,19 +548,22 @@ export function createEngine(host, hooks = {}) {
       }
       const fi = Math.min(Number(item.fadeIn || 0), len / 2);
       const fo = Math.min(Number(item.fadeOut || 0), len / 2);
-      let gain = Number(item.volume ?? 1) * g;
+      let gain = Number(valueAt(item, "volume", local, 1)) * g;
       if (fi > 0 && local < fi) gain *= local / fi;
       if (fo > 0 && local > len - fo) gain *= (len - local) / fo;
       audio.volume = clamp01(gain * level);
       audio.muted = muted;
+      const speed = Math.min(MAX_RATE, last.rate);
+      if (audio.playbackRate !== speed) audio.playbackRate = speed;
       const target = Number(item.in || 0) + local;
-      if (Math.abs(audio.currentTime - target) > DRIFT_PLAYING) seekTo(audio, tr, target);
+      if (Math.abs(audio.currentTime - target) > DRIFT_PLAYING * speed) seekTo(audio, tr, target);
       if (audio.paused) playSafe(audio);
     }
   }
 
-  function render(t, playing) {
-    last = { t, playing };
+  // rate: the clock's playback speed (J/L pressed again plays faster).
+  function render(t, playing, rate = 1) {
+    last = { t, playing, rate: Math.max(1, Math.abs(rate)) };
     if (!project) return;
     const g = projectFade(t);
     const flags = project.tracks || {};

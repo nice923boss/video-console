@@ -16,6 +16,7 @@ from .comfy.manager import ComfyManager
 from .comfy.workflows import WorkflowStore
 from .deps import DepInstaller
 from .events import EventBus
+from .exportdir import export_root
 from .jobs import JobManager
 from .llm import LLMClient
 from .media import Media, find_ffmpeg
@@ -120,6 +121,14 @@ class App:
                             removed += 1
                     except OSError as exc:
                         log.warning("Could not remove %s: %s", f, exc)
+        # The shared export folder may hold the user's own files too, so only our hidden .<name>.part go.
+        out = export_root(str(self.settings.section("export").get("folder") or ""), self.paths.data)
+        for f in out.glob(".*.part") if out.is_dir() else ():
+            try:
+                f.unlink()
+                removed += 1
+            except OSError as exc:
+                log.warning("Could not remove %s: %s", f, exc)
         if removed:
             log.info("Removed %d leftover cache files", removed)
 

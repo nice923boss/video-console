@@ -92,6 +92,8 @@
   text-align: center;
 }
 
+.pl-slot.is-off { background: var(--stage-bg); } /* a disabled shot plays as black */
+
 .pl-slot.is-slate > .pl-slate,
 .pl-slot.is-error > .pl-slate { display: flex; }
 .pl-slate-title { font-size: max(13px, 4.4cqh); font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
@@ -190,6 +192,7 @@
 .player.is-full .pl-bar { background: var(--surface-1); }
 .pl-bar .pl-play { width: 38px; height: 38px; margin: 0 2px; border-radius: 50%; }
 .pl-time { margin: 0 10px 0 8px; font-size: 12.5px; white-space: nowrap; }
+.pl-rate { margin-right: 8px; padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); font-size: 12px; font-weight: 650; }
 .pl-clip { min-width: 0; max-width: 260px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .pl-vol { display: flex; align-items: center; gap: 2px; flex: none; margin-right: 4px; }
 .pl-vol-range { width: 96px; flex: none; }
@@ -274,6 +277,30 @@
   background: var(--accent-line);
   box-shadow: var(--shadow-1);
 }
+
+/* The I/O range across the lanes and on the ruler, and markers on the ruler */
+.tl-range { position: absolute; top: 0; bottom: 0; z-index: 9; background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 1px 0 var(--accent-line), inset -1px 0 var(--accent-line); pointer-events: none; }
+.tl-range-bar { position: absolute; top: 0; height: 5px; background: var(--accent-line); pointer-events: none; }
+.tl-marker { position: absolute; bottom: 0; z-index: 1; width: 11px; height: 13px; margin-left: -5px; background: var(--mk); clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%); cursor: pointer; }
+.tl-marker:hover { filter: brightness(1.2); }
+
+.tl-tools { display: inline-flex; gap: 2px; margin: 0 2px; padding: 0 4px; border-inline: 1px solid var(--border); }
+.timeline.is-blade [data-sel] { cursor: crosshair; }
+/* Watch mode: clips only move the playhead and the track buttons do nothing */
+.timeline.is-watch .tl-lane * { cursor: default; }
+.timeline.is-watch .tl-label button { opacity: .45; pointer-events: none; }
+.tl-watch-note { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px; color: var(--accent-text); font-size: 12.5px; font-weight: 600; }
+
+/* Disabled clips stay on the timeline, faded; keyframes show as diamonds along the clip's bottom edge */
+:is(.tl-clip, .tl-cap, .tl-audio, .tl-pip).is-off { opacity: .4; filter: grayscale(1); }
+.tl-keys { position: absolute; left: 0; right: 0; bottom: 1px; z-index: 3; height: 9px; pointer-events: none; }
+.tl-key { position: absolute; top: 1px; width: 7px; height: 7px; margin-left: -3.5px; background: var(--accent); box-shadow: 0 0 0 1px var(--stage-bg); transform: rotate(45deg); }
+
+.key-list > summary .dim { margin-left: auto; font-size: 11.5px; }
+.key-row { display: flex; align-items: center; gap: 8px; padding: 1px 2px 1px 0; border-radius: var(--r-sm); }
+.key-row.is-here { background: var(--accent-soft); }
+.key-time { padding: 3px 7px; font-size: 12px; color: var(--text); background: var(--surface-3); border: 0; border-radius: var(--r-sm); cursor: pointer; }
+.key-time:hover { color: var(--accent-line); }
 
 /* Video clips */
 

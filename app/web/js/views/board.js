@@ -158,7 +158,8 @@ function ShotCard({ row, ctx, drop, handlers }) {
       <div class="sc-row">
         <i class="route-dot" title=${`路由 ${shot.route}`}></i>
         <b class="sc-name" title=${shotName(shot, index)}>${shotName(shot, index)}</b>
-        <${IconButton} icon="more" size=${15} title="更多動作" class="sc-more" onClick=${(e) => shotMenu(e, ctx, row)} />
+        <${IconButton} icon="more" size=${15} title="更多動作" class="sc-more" onClick=${(e) => shotMenu(e, ctx, row)}
+          onDblClick=${(e) => e.stopPropagation()} />
       </div>
       <p class=${`sc-prompt ${shot.prompt ? "" : "dim"}`}>${shot.prompt || "尚未填寫畫面描述"}</p>
       ${caption && (caption.text || "").trim() && html`<p class="sc-caption" title=${`字幕：${caption.text}`}>
@@ -186,6 +187,8 @@ function Toolbar({ project, stats, filter, setFilter, density, setDensity, total
     <span class="grow"></span>
     <${Segmented} size="sm" value=${density} onChange=${setDensity}
       options=${DENSITIES.map((d) => ({ ...d, label: "" }))} />
+    <${Button} icon="settings" title="在右側面板設定風格、畫面尺寸與影格率"
+      onClick=${() => setState({ selected: [], focus: null })}>專案設定<//>
     <${Button} icon="book" onClick=${openScriptImport}>匯入劇本<//>
     <${Button} kind="primary" icon="plus" title=${`插在目前鏡頭之後${keyHint("board.add")}`} onClick=${() => addShot()}>新增鏡頭<//>
   </div>`;

@@ -7,7 +7,7 @@ import { openModal, Modal } from "../components/overlay.js";
 import { Button, Field, TextInput, Select, Segmented, Toggle } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 
-const FPS_CHOICES = [24, 25, 30];
+const FPS_CHOICES = [24, 25, 29.97, 30];
 const NAME_MAX = 120;
 
 function defaultName(projects) {
@@ -56,8 +56,8 @@ function NewProjectBody({ close, starterDefault }) {
   const [name, setName] = useState(() => defaultName(s.projects || []));
   const [aspect, setAspect] = useState(firstAspect);
   const [size, setSize] = useState(() => {
-    const w = defaults.width || 1280;
-    const h = defaults.height || 720;
+    const w = defaults.width || 1920;
+    const h = defaults.height || 1080;
     const known = firstAspect && firstAspect.sizes.some(([a, b]) => a === w && b === h);
     return known || !firstAspect ? `${w}x${h}` : firstAspect.sizes[0].join("x");
   });

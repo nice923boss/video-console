@@ -15,7 +15,7 @@ import { DepsSection } from "./settings-deps.js";
 import { useSectionDraft, DraftFoot } from "./settings-draft.js";
 
 const NONE = [];
-const FPS_CHOICES = [24, 25, 30];
+const FPS_CHOICES = [24, 25, 29.97, 30];
 const THEMES = [
   { value: "dark", label: "深色", icon: "moon" },
   { value: "light", label: "淺色", icon: "sun" },

@@ -40,8 +40,10 @@ def _shift(old_clips: list[dict], new_clips: list[dict], t: float) -> float:
     new_by_id = {c["shot"]["id"]: c for c in new_clips}
     new = new_by_id.get(old["shot"]["id"])
     if new is not None:
-        # A point trimmed off the head of its clip sticks to the clip's new start.
-        moved = max(0.0, old["in"] + local - new["in"])
+        # A point trimmed off the head of its clip sticks to the clip's new start. Points follow the
+        # source frame they sat on, so a speed change stretches them along with the clip.
+        source = old["in"] + local * old.get("speed", 1.0)
+        moved = max(0.0, source - new["in"]) / new.get("speed", 1.0)
         return new["start"] + moved - t
     # The shot is gone: land where it used to begin, which is now the next remaining clip.
     nxt = next((new_by_id[c["shot"]["id"]] for c in old_clips[i + 1:] if c["shot"]["id"] in new_by_id), None)

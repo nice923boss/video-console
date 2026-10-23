@@ -45,22 +45,35 @@ def clip_bounds(project: dict, shot: dict) -> tuple[float, float]:
     return 0.0, float(shot.get("duration") or 0.1)
 
 
+def clip_speed(shot: dict, source: str) -> float:
+    """Playback speed of a shot's video; stills always play at 1."""
+    return min(4.0, max(0.25, float(shot.get("speed") or 1.0))) if source == "video" else 1.0
+
+
+def audio_media(project: dict, item: dict) -> dict | None:
+    """The file an audio clip plays: a library item, or the take a shot's sound was detached from."""
+    return project["media"].get(item.get("mediaId")) or project["takes"].get(item.get("takeId"))
+
+
 def build_sequence(project: dict, include_all: bool = False) -> list[dict[str, Any]]:
-    """Return clips with start/length/in/out and the transition into the next clip."""
+    """Return clips with start/length/in/out/speed and the transition into the next clip."""
     shots = [s for s in project["shots"] if include_all or s.get("inSequence", True)]
     clips: list[dict[str, Any]] = []
     for shot in shots:
         t_in, t_out = clip_bounds(project, shot)
         vid = video_take(project, shot)
         img = image_take(project, shot)
+        source = "video" if vid else ("image" if img else "empty")
+        speed = clip_speed(shot, source)
         clips.append(
             {
                 "shot": shot,
-                "source": "video" if vid else ("image" if img else "empty"),
+                "source": source,
                 "take": vid or img,
                 "in": t_in,
                 "out": t_out,
-                "length": t_out - t_in,
+                "speed": speed,
+                "length": (t_out - t_in) / speed,
             }
         )
     start = 0.0

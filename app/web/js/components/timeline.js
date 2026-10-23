@@ -3,18 +3,24 @@
 // it, in the preview and in the export; an adjustment layer grades every picture lane below it. Zoom (px per second) and snapping are per-viewer preferences;
 // the playhead follows the shared playback clock directly, without re-rendering.
 import { html, useState, useEffect, useRef, useLayoutEffect } from "../lib/h.js";
-import { useStore, setState } from "../lib/store.js";
+import { useStore, setState, getState } from "../lib/store.js";
 import { usePref } from "../lib/prefs.js";
 import { useKeymap, keyHint } from "../lib/keymap.js";
 import { clock, setTime, onClock } from "../lib/clock.js";
 import { ops, undo, deleteShots, LINK_PREF } from "../lib/actions.js";
+import { setWatch, watchRefuses } from "../lib/watch.js";
 import { uploadFiles } from "../lib/jobs-actions.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
-import { sequenceDuration, audioLength } from "../lib/sequence.js";
+import { sequenceDuration, audioLength, audioMedia } from "../lib/sequence.js";
 import { generateMissing } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { toast } from "./toast.js";
-import { splitAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
+import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
+import {
+  MARKER_COLORS, KEYABLE, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
+  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet,
+} from "./tl-commands.js";
+import { openMenu } from "./overlay.js";
 import { Button, IconButton } from "./ui.js";
 import { Icon } from "./icons.js";
 import {
@@ -36,9 +42,11 @@ const MAJOR_PX = 80;
 const MAX_TICKS = 1500;
 const FOLLOW_PX = 24;
 const NEW_CAPTION_LEN = 2;
+const TRACK_SCALES = [0.75, 1, 1.25, 1.5, 2];
 
 const isBool = (v) => typeof v === "boolean";
 const validPps = (v) => typeof v === "number" && v >= PPS_MIN && v <= PPS_MAX;
+const validScale = (v) => TRACK_SCALES.includes(v);
 
 function addCaption() {
   const start = round(clock.time, 3);
@@ -94,7 +102,25 @@ async function addLayersWith(files, start) {
   for (let i = 0; i < files.length; i += 1) await uploadFiles([files[i]], { layer: ids[i], start });
 }
 
-function Ruler({ width, pps, onScrub }) {
+// Timeline keys that only move the playhead, the I/O range, the zoom or the track height.
+const WATCH_KEYS = new Set(["edit.deselect", "edit.markerNext", "edit.markerPrev", "edit.markIn", "edit.markOut",
+  "edit.playRange", "edit.clearRange", "edit.zoomIn", "edit.zoomOut", "edit.zoomFit", "edit.trackTaller", "edit.trackShorter"]);
+
+const markerHex = (color) => (MARKER_COLORS.find((c) => c.value === color) || MARKER_COLORS[0]).hex;
+
+// Right-click on a marker: its colour, or delete it.
+function markerMenu(e, m) {
+  e.stopPropagation();
+  openMenu(e, [
+    { header: `標記 ${fmtTime(m.start)}` },
+    ...MARKER_COLORS.map((c) => ({ label: c.label, swatch: c.hex, checked: m.color === c.value,
+      onClick: () => m.color !== c.value && ops([{ op: "marker.update", id: m.id, patch: { color: c.value } }], { label: "修改標記顏色" }) })),
+    { divider: true },
+    { label: "刪除標記", icon: "trash", danger: true, onClick: () => ops([{ op: "marker.delete", id: m.id }], { label: "刪除標記" }) },
+  ]);
+}
+
+function Ruler({ width, pps, onScrub, markers, range }) {
   let step = STEPS.find((s) => s * pps >= MAJOR_PX) || STEPS[STEPS.length - 1];
   const span = width / pps;
   while (span / step > MAX_TICKS) step *= 2;
@@ -104,8 +130,18 @@ function Ruler({ width, pps, onScrub }) {
     const t = Math.round(k * step * 1000) / 1000;
     ticks.push(html`<span key=${k} class="tl-tick mono" style=${`left:${t * pps}px`}>${fmtTime(t, { tenths: step < 1 })}</span>`);
   }
+  const jump = (e, m) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    setTime(Number(m.start));
+  };
   return html`<div class="tl-ruler" style=${`width:${width}px;--minor:${minor.toFixed(2)}px;--major:${(step * pps).toFixed(2)}px`}
-    onPointerDown=${onScrub} title="拖曳移動播放頭">${ticks}</div>`;
+    onPointerDown=${onScrub} title="拖曳移動播放頭">${ticks}
+    ${range && html`<i class="tl-range-bar" style=${`left:${range.in * pps}px;width:${(range.out - range.in) * pps}px`}></i>`}
+    ${markers.map((m) => html`<i key=${m.id} class="tl-marker" style=${`left:${m.start * pps}px;--mk:${markerHex(m.color)}`}
+      title=${`標記 ${fmtTime(m.start)}：點一下跳到這裡，右鍵換顏色或刪除`} onPointerDown=${(e) => jump(e, m)}
+      onContextMenu=${(e) => markerMenu(e, m)}></i>`)}
+  </div>`;
 }
 
 // Caption voice-overs share rows: each goes into the first row where it does not overlap.
@@ -115,7 +151,7 @@ function packVoiceRows(project, items) {
   const sorted = [...items].sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
   for (const item of sorted) {
     const start = Number(item.start || 0);
-    const end = start + audioLength(item, (project.media || {})[item.mediaId]);
+    const end = start + audioLength(item, audioMedia(project, item));
     const i = ends.findIndex((e) => e <= start + 1e-3);
     if (i < 0) {
       rows.push([item]);
@@ -132,7 +168,7 @@ function contentSpan(project, clips) {
   let end = sequenceDuration(clips);
   for (const c of project.captions || []) end = Math.max(end, Number(c.end) || 0);
   for (const a of project.audio || []) {
-    end = Math.max(end, Number(a.start || 0) + audioLength(a, (project.media || {})[a.mediaId]));
+    end = Math.max(end, Number(a.start || 0) + audioLength(a, audioMedia(project, a)));
   }
   for (const o of project.overlays || []) end = Math.max(end, Number(o.start || 0) + Number(o.length || 0));
   for (const j of project.adjustments || []) end = Math.max(end, Number(j.start || 0) + Number(j.length || 0));
@@ -140,8 +176,11 @@ function contentSpan(project, clips) {
 }
 
 export function Timeline({ project, clips, hotkeys = true }) {
-  const { editSel, focus } = useStore((s) => ({ editSel: s.editSel, focus: s.focus }));
+  const { editSel, focus, editRange, editTool, watch } = useStore((s) => ({
+    editSel: s.editSel, focus: s.focus, editRange: s.editRange, editTool: s.editTool, watch: s.watch,
+  }));
   const [pps, setPps] = usePref("vc.timeline.pps", PPS_DEFAULT, validPps);
+  const [scale, setScale] = usePref("vc.timeline.scale", 1, validScale);
   const [snapOn, setSnapOn] = usePref("vc.timeline.snap", true, isBool);
   const [linkOn, setLinkOn] = usePref(LINK_PREF, true, isBool);
   const [viewW, setViewW] = useState(0);
@@ -154,7 +193,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const ppsRef = useRef(pps);
   const dataRef = useRef(null);
   ppsRef.current = pps;
-  dataRef.current = { project, clips, snapOn, linkOn };
+  dataRef.current = { project, clips, snapOn, linkOn, scale };
 
   const placeHead = () => {
     const el = headRef.current;
@@ -217,7 +256,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
 
   const onWheel = (e) => {
     const sc = scrollRef.current;
-    if (e.ctrlKey || e.metaKey) {
+    if (e.altKey || e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const offset = Math.max(0, e.clientX - sc.getBoundingClientRect().left - LABEL_W);
       zoomTo(pps * (e.deltaY < 0 ? ZOOM_WHEEL : 1 / ZOOM_WHEEL), { time: (sc.scrollLeft + offset) / pps, offset });
@@ -227,12 +266,14 @@ export function Timeline({ project, clips, hotkeys = true }) {
     }
   };
 
-  const scrub = (e) => {
-    if (e.button !== 0) return;
-    const lane = e.currentTarget;
+  const scrubLane = (lane, e) => {
     const at = (ev) => setTime(Math.max(0, (ev.clientX - lane.getBoundingClientRect().left) / ppsRef.current));
     at(e);
     dragPointer(e, { threshold: 0, onMove: (dx, ev) => at(ev) });
+  };
+  const scrub = (e) => {
+    if (e.button !== 0) return;
+    scrubLane(e.currentTarget, e);
   };
   const onLaneDown = (e) => {
     if (e.target !== e.currentTarget) return;
@@ -255,7 +296,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     for (const a of d.project.audio || []) {
       if (a.id === exclude.audio) continue;
       const start = Number(a.start || 0);
-      pts.push(start, start + audioLength(a, (d.project.media || {})[a.mediaId]));
+      pts.push(start, start + audioLength(a, audioMedia(d.project, a)));
     }
     for (const o of d.project.overlays || []) if (o.id !== exclude.overlay) pts.push(o.start, o.start + o.length);
     for (const j of d.project.adjustments || []) if (j.id !== exclude.adjust) pts.push(j.start, j.start + j.length);
@@ -264,19 +305,89 @@ export function Timeline({ project, clips, hotkeys = true }) {
 
   const selRef = useRef(editSel);
   selRef.current = editSel;
-  useKeymap({
+  // Commands that act on the project, the sequence and the selection as they are when the key is pressed.
+  const on = (fn) => () => fn(dataRef.current.project, dataRef.current.clips, selRef.current);
+  const stepScale = (dir) => {
+    const i = TRACK_SCALES.indexOf(dataRef.current.scale) + dir;
+    if (i < 0 || i >= TRACK_SCALES.length) return toast(dir > 0 ? "軌道已經最高" : "軌道已經最低", { id: "tl-scale", duration: 1500 });
+    setScale(TRACK_SCALES[i]);
+  };
+  const keys = {
     "edit.delete": () => deleteSelection(selRef.current),
     "edit.deselect": () => (selRef.current ? setState({ editSel: null }) : false),
-    "edit.split": () => splitAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current),
+    "edit.split": on(splitAtPlayhead),
+    "edit.splitAll": on(splitAllAtPlayhead),
     "edit.trimStart": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "start"),
     "edit.trimEnd": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "end"),
+    "edit.toolSelect": () => setState({ editTool: "select" }),
+    "edit.toolBlade": () => setState({ editTool: "blade" }),
+    "edit.toggleEnabled": on(toggleEnabled),
     "edit.addCaption": () => addCaption(),
+    "edit.markerAdd": on(markerAdd),
+    "edit.markerColor": on(markerColor),
+    "edit.markerNext": () => markerJump(dataRef.current.project, 1),
+    "edit.markerPrev": () => markerJump(dataRef.current.project, -1),
+    "edit.volumeUp": on((p, c, sel) => nudgeVolume(p, c, sel, 1, getState().editRange)),
+    "edit.volumeDown": on((p, c, sel) => nudgeVolume(p, c, sel, -1, getState().editRange)),
+    "edit.markIn": () => markIn(contentSpan(dataRef.current.project, dataRef.current.clips)),
+    "edit.markOut": () => markOut(),
+    "edit.rangeFromClip": on(rangeFromClip),
+    "edit.playRange": () => playRange(),
+    "edit.clearRange": () => (getState().editRange ? clearRange() : false),
+    "edit.freeze": on(freezeFrame),
+    "edit.detachAudio": on(detachAudio),
+    "edit.reverseClip": on(reverseClip),
+    "edit.speed": on(focusSpeed),
+    "edit.speedCurve": () => notYet("曲線變速"),
+    "edit.keyframePanel": () => toggleKeyPanel(selRef.current),
+    "edit.keyframeAdd": on(addKeyframe),
+    "edit.group": () => notYet("組合"),
+    "edit.compound": () => notYet("新建複合片段"),
+    "edit.uncompound": () => notYet("解除複合片段"),
+    "edit.precompose": () => notYet("預合成"),
     "edit.zoomIn": () => zoomTo(ppsRef.current * ZOOM_STEP),
     "edit.zoomOut": () => zoomTo(ppsRef.current / ZOOM_STEP),
     "edit.zoomFit": () => fit(),
+    "edit.trackTaller": () => stepScale(1),
+    "edit.trackShorter": () => stepScale(-1),
     "edit.snap": () => setSnapOn(!dataRef.current.snapOn),
     "edit.link": () => setLinkOn(!dataRef.current.linkOn),
-  }, { active: hotkeys });
+  };
+  // Watch mode keeps only the keys that look around; the rest say why nothing happens.
+  useKeymap(watch ? Object.fromEntries(Object.entries(keys).map(([id, fn]) => [id, WATCH_KEYS.has(id) ? fn : () => { watchRefuses(); }]))
+    : keys, { active: hotkeys });
+
+  // Clicks on a clip in the blade tool cut it there; Shift+click on a clip that takes keyframes adds one there.
+  const onCanvasDown = (e) => {
+    if (e.button !== 0) return;
+    const el = e.target.closest && e.target.closest("[data-sel]");
+    const blade = editTool === "blade";
+    if (!el || !(blade || e.shiftKey)) return;
+    const [type, id] = el.dataset.sel.split(":");
+    if (!blade && !KEYABLE.includes(type)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const sc = scrollRef.current;
+    const t = Math.max(0, (e.clientX - sc.getBoundingClientRect().left - LABEL_W + sc.scrollLeft) / pps);
+    const sel = { type, id };
+    setState({ editSel: sel });
+    if (!blade) return addKeyframe(project, clips, sel, t);
+    setTime(t);
+    splitAtPlayhead(project, clips, sel);
+  };
+
+  // Watch mode: a press on a lane, clip included, only moves the playhead; the ruler works as usual and
+  // the track buttons and clip menus stay inert. Double-clicks still jump to an item's start.
+  const watchDown = (e) => {
+    if (e.target.closest(".tl-row-ruler")) return;
+    e.stopPropagation();
+    const lane = e.target.closest(".tl-lane");
+    if (lane && e.button === 0) scrubLane(lane, e);
+  };
+  const watchBlock = (e) => {
+    e.stopPropagation();
+    if (e.type === "contextmenu") e.preventDefault();
+  };
 
   const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
   const dropTime = (e) => {
@@ -290,7 +401,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const onDragOver = (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
+    e.dataTransfer.dropEffect = watch ? "none" : "copy";
+    if (watch) return;
     const row = dropRow(e);
     const at = row === "video" ? shotIndexAt(project, clips, dropTime(e)).at : null;
     if (!drop || drop.row !== row || drop.at !== at) setDrop({ row, at });
@@ -306,6 +418,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     e.preventDefault();
     e.stopPropagation();
     setDrop(null);
+    if (watchRefuses()) return;
     const t = dropTime(e);
     const start = round(t, 2);
     const row = dropRow(e);
@@ -329,7 +442,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   };
 
   const ctx = {
-    pid: project.id, pps, ar: project.settings.width / project.settings.height, snapper,
+    pid: project.id, pps, scale, ar: project.settings.width / project.settings.height, snapper,
     insertAt: (t) => shotIndexAt(project, clips, t),
   };
   const tracks = project.tracks || {};
@@ -344,15 +457,18 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const label = (icon, text, extra = null) => html`<div class="tl-label"><${Icon} name=${icon} size=${14} /><span>${text}</span>${extra}</div>`;
   const row = (key, height, body, { drop: target = null, hidden = false, muted = false } = {}) => html`<div key=${key}
     class=${["tl-row", hidden && "is-hidden", muted && "is-muted", target && drop && drop.row === target && "is-drop-target"].filter(Boolean).join(" ")}
-    style=${`height:${height}px`} data-drop=${target}>${body}</div>`;
+    style=${`height:${Math.round(height * scale)}px`} data-drop=${target}>${body}</div>`;
   const setTrack = (key, label) => ops([{ op: "project.update", patch: { tracks: { [key]: !tracks[key] } } }], { label });
   const eyeBtn = (hidden, onClick) => html`<${IconButton} icon=${hidden ? "eye-off" : "eye"} size=${14} active=${hidden}
     title=${hidden ? "顯示這條軌道" : "隱藏這條軌道（預覽與輸出都不顯示）"} onClick=${onClick} />`;
   const muteBtn = (muted, onClick, what = "這條軌道") => html`<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
     active=${muted} title=${muted ? "取消靜音" : `${what}靜音`} onClick=${onClick} />`;
 
-  return html`<div class=${`timeline ${drop ? "is-drop" : ""}`} onDragOver=${onDragOver} onDragLeave=${onDragLeave} onDrop=${onDrop}>
+  return html`<div class=${`timeline ${drop ? "is-drop" : ""} ${!watch && editTool === "blade" ? "is-blade" : ""} ${watch ? "is-watch" : ""}`}
+    onDragOver=${onDragOver} onDragLeave=${onDragLeave} onDrop=${onDrop}>
     <div class="tl-toolbar">
+      ${watch ? html`<span class="tl-watch-note"><${Icon} name="eye" size=${14} />觀看模式：只能看，不會修改專案</span>
+        <${Button} size="sm" icon="x" onClick=${() => setWatch(false)}>結束觀看<//>` : html`
       <${Button} size="sm" kind="ghost" icon="captions" onClick=${addCaption} title=${`在播放頭位置新增 2 秒字幕${keyHint("edit.addCaption")}`}>新增字幕<//>
       <${Button} size="sm" kind="ghost" icon="music" onClick=${() => fileRef.current && fileRef.current.click()}
         title="在播放頭位置加入音樂或旁白">加入音訊<//>
@@ -360,25 +476,34 @@ export function Timeline({ project, clips, hotkeys = true }) {
       <${Button} size="sm" kind="ghost" icon="users" onClick=${openCastDialog} title="人物與 Audio8Voice 配音聲音">人物表<//>
       <${Button} size="sm" kind="ghost" icon="mic" onClick=${generateMissing}
         title="替已指定人物、還沒配音或內容已改的字幕生成配音">生成配音<//>
+      <span class="tl-tools">
+        <${IconButton} icon="pointer" size=${16} active=${editTool !== "blade"} title=${`選擇模式${keyHint("edit.toolSelect")}`}
+          onClick=${() => setState({ editTool: "select" })} />
+        <${IconButton} icon="blade" size=${16} active=${editTool === "blade"} title=${`分割模式：點片段就在點的位置切開${keyHint("edit.toolBlade")}`}
+          onClick=${() => setState({ editTool: "blade" })} />
+      </span>
       <${IconButton} icon="scissors" size=${16} title=${`在播放頭分割選取的軌道，沒有選取時分割畫面軌${keyHint("edit.split")}`}
         disabled=${!clips.length && !(editSel && editSel.type !== "shot")} onClick=${() => splitAtPlayhead(project, clips, editSel)} />
       <${IconButton} icon="magnet" size=${16} active=${snapOn}
         title=${`${snapOn ? "磁吸對齊：開，拖曳時按住 Alt 暫停" : "磁吸對齊：關"}${keyHint("edit.snap")}`} onClick=${() => setSnapOn(!snapOn)} />
       <${IconButton} icon="link" size=${16} active=${linkOn}
         title=${`${linkOn ? "連動上下軌：開，鏡頭移動或改長度時，字幕、上層畫面、音樂、音效跟著移動" : "連動上下軌：關"}${keyHint("edit.link")}`}
-        onClick=${() => setLinkOn(!linkOn)} />
+        onClick=${() => setLinkOn(!linkOn)} />`}
       <span class="grow"></span>
+      ${!watch && html`<${Button} size="sm" kind="ghost" icon="eye" onClick=${() => setWatch(true)}
+        title="只看不改：即時看 Claude 透過 API 剪輯，這個視窗不會修改專案">觀看模式<//>`}
       <span class="tl-total dim">序列 ${fmtTime(total, { tenths: false })}，${clips.length} 個片段</span>
       <${IconButton} icon="zoom-out" size=${16} title=${`縮小${keyHint("edit.zoomOut")}`} disabled=${pps <= PPS_MIN} onClick=${() => zoomTo(pps / ZOOM_STEP)} />
-      <span class="tl-zoom mono" title="Ctrl 加滑鼠滾輪也可以縮放">${Math.round(pps)} px/秒</span>
+      <span class="tl-zoom mono" title="Alt 或 Ctrl 加滑鼠滾輪也可以縮放">${Math.round(pps)} px/秒</span>
       <${IconButton} icon="zoom-in" size=${16} title=${`放大${keyHint("edit.zoomIn")}`} disabled=${pps >= PPS_MAX} onClick=${() => zoomTo(pps * ZOOM_STEP)} />
       <${IconButton} icon="expand" size=${16} title=${`符合視窗寬度${keyHint("edit.zoomFit")}`} onClick=${fit} />
     </div>
     <div class="tl-scroll" ref=${scrollRef} onWheel=${onWheel} onScroll=${placeHead}>
-      <div class="tl-canvas" style=${`width:${LABEL_W + contentW}px;--label-w:${LABEL_W}px`}>
+      <div class="tl-canvas" style=${`width:${LABEL_W + contentW}px;--label-w:${LABEL_W}px`} onPointerDownCapture=${watch ? watchDown : onCanvasDown}
+        onClickCapture=${watch ? watchBlock : null} onContextMenuCapture=${watch ? watchBlock : null}>
         <div class="tl-row tl-row-ruler" style=${`height:${RULER_H}px`}>
           <div class="tl-label tl-corner"></div>
-          <${Ruler} width=${contentW} pps=${pps} onScrub=${scrub} />
+          <${Ruler} width=${contentW} pps=${pps} onScrub=${scrub} markers=${project.markers || []} range=${editRange} />
         </div>
         ${row("captions", CAPTION_H, html`
           ${label("captions", "字幕", eyeBtn(!!tracks.captionsHidden,
@@ -392,7 +517,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
             ${adjGhost && html`<div class="tl-adj-ghost" style=${`left:${adjGhost.start * pps}px;width:${Math.max(4, adjGhost.length * pps)}px`}>
               <${Icon} name="plus" size=${12} /><span>放開加入調整圖層</span></div>`}`)}`,
           { hidden: !!tracks.adjustHidden })}
-        ${row("add-layer", ADD_H, html`
+        ${!watch && row("add-layer", ADD_H, html`
           <div class="tl-label"><button type="button" class="tl-add-track" title="在最上層新增一條畫面軌" onClick=${addLayer}>
             <${Icon} name="plus" size=${14} /><span>新增軌道</span></button></div>
           ${lane("tl-lane-add", html`<span class="tl-lane-hint dim">把圖片或影片拖到這裡，放到新的畫面軌</span>`)}`,
@@ -431,7 +556,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
           ${lane("tl-lane-audio", items.map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
             selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`))}`,
           { muted: !!tracks.voiceMuted }))}
-        ${music.map((item, i) => html`<div key=${item.id} class="tl-row" style=${`height:${AUDIO_H}px`}>
+        ${music.map((item, i) => html`<div key=${item.id} class="tl-row" style=${`height:${Math.round(AUDIO_H * scale)}px`}>
           ${label("music", `音訊 ${i + 1}`, html`<${IconButton} icon=${item.muted ? "volume-x" : "volume"} size=${14}
             active=${item.muted} title=${item.muted ? "取消靜音" : "這條音軌靜音"}
             onClick=${() => ops([{ op: "audio.update", id: item.id, patch: { muted: !item.muted } }],
@@ -439,10 +564,11 @@ export function Timeline({ project, clips, hotkeys = true }) {
           ${lane("tl-lane-audio", html`<${AudioClip} project=${project} item=${item} ctx=${ctx}
             selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`)}
         </div>`)}
-        ${!audio.length && html`<div class="tl-row" style=${`height:${AUDIO_H}px`}>
+        ${!audio.length && html`<div class="tl-row" style=${`height:${Math.round(AUDIO_H * scale)}px`}>
           ${label("music", "音訊")}
-          ${lane("tl-lane-audio", html`<span class="tl-lane-hint dim">把音樂或旁白檔案拖到這裡，或按「加入音訊」</span>`)}
+          ${lane("tl-lane-audio", html`<span class="tl-lane-hint dim">${watch ? "還沒有音訊" : "把音樂或旁白檔案拖到這裡，或按「加入音訊」"}</span>`)}
         </div>`}
+        ${editRange && html`<div class="tl-range" style=${`left:${LABEL_W + editRange.in * pps}px;width:${(editRange.out - editRange.in) * pps}px`}></div>`}
         <div class="tl-playhead" ref=${headRef} style=${`left:${LABEL_W}px`}></div>
       </div>
     </div>

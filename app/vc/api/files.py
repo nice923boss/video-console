@@ -11,9 +11,10 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from ..export import captions_srt, export_filename, shots_csv
+from ..exportdir import file_ref, find_export, forget_export, project_exports
 from ..server import FileResponse, Request, Response, Router
 from ..storyboard import render_storyboard, shot_picture
-from ..util import AppError, is_within, kind_of, new_id
+from ..util import AppError, kind_of, new_id
 from .system import open_folder
 
 if TYPE_CHECKING:
@@ -27,20 +28,16 @@ BOM = "\ufeff"  # Excel and many subtitle tools need it to read UTF-8 as UTF-8
 TRUE = ("1", "true", "yes")
 
 
-def export_entries(folder: Path) -> list[dict[str, Any]]:
-    """Finished files in exports/, newest first (in-progress *.part files are skipped)."""
+def export_entries(project_dir: Path) -> list[dict[str, Any]]:
+    """The project's finished videos and packages, newest first (in-progress *.part files are skipped)."""
     items = []
-    for f in folder.iterdir() if folder.is_dir() else ():
-        if f.name.endswith(".part"):
-            continue
+    for f in project_exports(project_dir):
         try:
             st = f.stat()
         except OSError:
             continue  # removed while listing
-        if not f.is_file():
-            continue
         kind = "package" if f.suffix.lower() == ".zip" else (kind_of(f.name) or "file")
-        items.append({"name": f.name, "path": f"exports/{f.name}", "size": st.st_size,
+        items.append({"name": f.name, "path": file_ref(f, project_dir), "size": st.st_size,
                       "modified": st.st_mtime, "kind": kind})
     items.sort(key=lambda e: e["modified"], reverse=True)
     return items
@@ -53,9 +50,18 @@ def download_stem(project: dict) -> str:
 def register(router: Router, app: App) -> None:
     store = app.store
 
+    def resolve(pid: str, rel: str) -> Path:
+        """A project file, or one of the project's exports in the shared export folder (a full path)."""
+        if not Path(rel).is_absolute():
+            return store.resolve_file(pid, rel)
+        path = find_export(store.project_dir(pid), rel)
+        if path is None:
+            raise AppError("找不到檔案（可能已被刪除）", 404)
+        return path
+
     @router.route("GET", "/api/projects/{pid}/file")
     def project_file(req: Request) -> FileResponse:
-        path = store.resolve_file(req.params["pid"], req.query.get("path", ""))
+        path = resolve(req.params["pid"], req.query.get("path", ""))
         name = None
         if req.query.get("download") in TRUE:
             name = (req.query.get("name") or "").strip()[:200] or path.name
@@ -86,22 +92,23 @@ def register(router: Router, app: App) -> None:
     # ------------------------------------------------------------------ exported files
     @router.route("GET", "/api/projects/{pid}/exports")
     def export_list(req: Request) -> list[dict]:
-        return export_entries(store.project_dir(req.params["pid"]) / "exports")
+        return export_entries(store.project_dir(req.params["pid"]))
 
     @router.route("DELETE", "/api/projects/{pid}/exports/{name}")
     def export_delete(req: Request) -> None:
-        folder = store.project_dir(req.params["pid"]) / "exports"
+        pdir = store.project_dir(req.params["pid"])
         name = req.params["name"]
-        path = folder / name
-        if name in (".", "..") or Path(name).name != name or "\\" in name or not is_within(path, folder):
+        if name in (".", "..") or Path(name).name != name or "\\" in name:
             raise AppError("檔案名稱不合法", 403)
-        if not path.is_file():
+        path = find_export(pdir, name)
+        if path is None:
             raise AppError("找不到檔案（可能已被刪除）", 404)
         try:
             path.unlink()
         except OSError:
             raise AppError("檔案正在使用中，請先停止播放", 409) from None
-        log.info("Deleted export %s", name)
+        forget_export(pdir, path)
+        log.info("Deleted export %s", path)
 
     # ------------------------------------------------------------------ storyboard, captions, shot list
     @router.route("GET", "/api/projects/{pid}/storyboard")
@@ -140,7 +147,7 @@ def register(router: Router, app: App) -> None:
             return
         if sys.platform != "win32":
             raise AppError("只有 Windows 支援開啟資料夾", 501)
-        path = store.resolve_file(pid, rel)
+        path = resolve(pid, rel)
         if not path.exists():
             raise AppError("找不到檔案（可能已被刪除）", 404)
-        subprocess.Popen(f'explorer /select,"{path}"')  # noqa: S602 - resolved path inside the project folder
+        subprocess.Popen(f'explorer /select,"{path}"')  # noqa: S602 - a project file or one of its exports

@@ -7,6 +7,7 @@ import { newId, shotLabel } from "./format.js";
 import { toast, updateToast, dismissToast, toastError } from "../components/toast.js";
 import { confirmDialog } from "../components/overlay.js";
 import { readPref } from "./prefs.js";
+import { watchRefuses } from "./watch.js";
 
 const EMPTY_UNDO = { undo: 0, redo: 0, undoLabel: "", redoLabel: "" };
 // With linking on (the timeline's link toggle), shot edits carry the items on the other tracks along.
@@ -74,7 +75,7 @@ export async function loadProject(pid) {
     }
     const first = data.project.shots[0];
     return {
-      pid, project: data.project, undo: data.undo || EMPTY_UNDO, editSel: null,
+      pid, project: data.project, undo: data.undo || EMPTY_UNDO, editSel: null, editRange: null,
       selected: first ? [first.id] : [], focus: first ? first.id : null,
     };
   });
@@ -93,7 +94,7 @@ export async function openProject(pid, view = "board") {
 }
 
 export function closeProject() {
-  setState({ pid: null, project: null, undo: EMPTY_UNDO, selected: [], focus: null, editSel: null, view: "home" });
+  setState({ pid: null, project: null, undo: EMPTY_UNDO, selected: [], focus: null, editSel: null, editRange: null, view: "home" });
 }
 
 export async function createProject({ name, settings, starter = false, style = null }) {
@@ -195,7 +196,7 @@ function ensureRev(pid, rev) {
 
 export async function ops(list, { label = "", coalesce = null, undoable = true, batch = null } = {}) {
   const { pid } = getState();
-  if (!pid || !list.length) return null;
+  if (!pid || !list.length || watchRefuses()) return null;
   try {
     const sent = linking(list) ? [{ op: "linked", ops: list }] : list;
     const res = await api.post(`/api/projects/${enc(pid)}/ops`, { ops: sent, label, coalesce, undoable, batch });
@@ -214,7 +215,7 @@ export function updateProject(patch, { label = "修改專案", coalesce = null }
 
 async function step(kind) {
   const { pid, undo: u } = getState();
-  if (!pid) return;
+  if (!pid || watchRefuses()) return;
   const label = kind === "undo" ? u.undoLabel : u.redoLabel;
   if (!(kind === "undo" ? u.undo : u.redo)) {
     toast(kind === "undo" ? "沒有可以復原的步驟" : "沒有可以重做的步驟", { duration: 1600 });

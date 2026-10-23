@@ -73,8 +73,10 @@
 | 類型 | 內建供應商 |
 |---|---|
 | 生圖 | OpenAI 圖片、Google Gemini 圖片、Stability AI、fal.ai、Replicate |
-| 圖轉影片 | 可靈 Kling、Runway、MiniMax 海螺、Google Gemini Omni、fal.ai、Replicate |
+| 圖轉影片 | Google Gemini Omni、Runway、fal.ai、Replicate、可靈 Kling、MiniMax 海螺 |
 | 自訂 | 任何 HTTP API：用 JSON 範本描述請求（`{{prompt}}`、`{{image}}`、`{{api_key}}` 等），用 `data.0.url` 這類路徑取回結果，支援先拿任務代號再輪詢 |
+
+預設值都不是中國廠商的模型：路由 B 的影片用 Google Gemini Omni，fal.ai 與 Replicate 影片預設 Lightricks LTX 2.5，文字模型範例是 gemma3:4b。可靈、海螺、Wan 仍在選單裡，需要時自己切換。
 
 金鑰用 Windows DPAPI 加密存在 `data/secrets.json`，畫面上只顯示遮罩，記錄檔不會出現金鑰。
 

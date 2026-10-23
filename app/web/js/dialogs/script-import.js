@@ -23,7 +23,8 @@ const MODES = [
   { value: "llm", label: "文字模型", icon: "bot", title: "交給文字模型改寫成分鏡（需要在引擎頁設定）" },
 ];
 const MODE_NAME = { auto: "自動判斷", paragraphs: "依段落", lines: "依行", sentences: "依句子", single: "整段一個",
-  table: "表格", llm: "文字模型" };
+  table: "表格", numbered: "編號清單", llm: "文字模型" };
+const PACES = { slow: ["舒緩", "info"], medium: ["平穩", "neutral"], fast: ["緊湊", "warn"] };
 const SAMPLE = `1. 清晨的海港，薄霧中漁船緩緩出港，海鷗盤旋。（遠景，緩慢推進）
 字幕：天還沒亮，港口已經醒了。
 
@@ -45,8 +46,9 @@ async function readTextFile(file) {
   }
 }
 
-function ShotRow({ shot, index, checked, onCheck, onEdit }) {
-  return html`<div class=${`si-row ${checked ? "" : "is-off"}`}>
+function ShotRow({ shot, index, checked, onCheck, onEdit, beatStart }) {
+  const pace = PACES[shot.pace];
+  return html`<div class=${`si-row ${checked ? "" : "is-off"} ${beatStart ? "is-beat-start" : ""}`}>
     <label class="si-check" title=${checked ? "取消勾選就不會匯入" : "勾選後匯入"}>
       <input type="checkbox" checked=${checked} onChange=${(e) => onCheck(e.currentTarget.checked)} />
       <span class="mono">${index + 1}</span>
@@ -55,12 +57,14 @@ function ShotRow({ shot, index, checked, onCheck, onEdit }) {
       <div class="si-line">
         <${TextInput} value=${shot.name} placeholder="鏡頭名稱（可留白）" maxlength="60" class="si-name"
           onChange=${(name) => onEdit({ name })} />
-        <${NumberInput} value=${shot.duration} nullable placeholder="預設" min=${0.5} max=${60} step=${0.5} digits=${2}
+        <${NumberInput} value=${shot.duration} nullable placeholder="預設" min=${0.5} max=${60} step=${0.1} digits=${2}
           suffix="秒" class="si-dur" title="鏡頭長度，留白用專案預設" onCommit=${(duration) => onEdit({ duration })} />
       </div>
       <${TextArea} value=${shot.prompt} rows=${2} autosize placeholder="畫面描述（生圖提示詞）" maxlength="4000"
         onChange=${(prompt) => onEdit({ prompt })} />
-      ${(shot.motion || shot.camera) && html`<div class="si-meta">
+      ${(shot.motion || shot.camera || shot.beat) && html`<div class="si-meta">
+        ${shot.beat && html`<${Badge} tone=${pace ? pace[1] : "neutral"} title="劇情段落與節奏，只在這一步參考，不會存進鏡頭">
+          第 ${shot.beat} 段${pace ? `，${pace[0]}` : ""}<//>`}
         ${shot.camera && html`<${Badge} tone="blue"><${Icon} name="camera" size=${12} />${shot.camera}<//>`}
         ${shot.motion && html`<span class="dim" title="動態描述（生影片提示詞）"><${Icon} name="video" size=${12} />${shot.motion}</span>`}
       </div>`}
@@ -80,6 +84,7 @@ function ScriptImportBody({ close }) {
   const focusIndex = project ? project.shots.findIndex((x) => x.id === s.focus) : -1;
   const [text, setText] = useState("");
   const [mode, setMode] = useState("auto");
+  const [detail, setDetail] = useState(true);
   const [result, setResult] = useState(null);
   const [checked, setChecked] = useState([]);
   const [where, setWhere] = useState("end");
@@ -99,7 +104,7 @@ function ScriptImportBody({ close }) {
     if (!text.trim()) return;
     setBusy(true);
     try {
-      const data = await api.post("/api/script/parse", { text, mode });
+      const data = await api.post("/api/script/parse", { text, mode, detail });
       if (!data.shots.length) {
         toast("沒有拆出任何鏡頭，換一種拆分方式試試", { level: "warn" });
         return;
@@ -117,6 +122,8 @@ function ScriptImportBody({ close }) {
   const picked = result ? result.shots.filter((_, i) => checked[i]) : [];
   const withCaption = picked.filter((x) => x.caption).length;
   const total = picked.reduce((n, x) => n + (x.duration || 0), 0);
+  const lengths = picked.map((x) => x.duration).filter(Boolean);
+  const beats = result ? new Set(result.shots.map((x) => x.beat).filter(Boolean)).size : 0;
 
   const apply = async () => {
     if (!picked.length || picked.length > MAX_SHOTS) return;
@@ -162,7 +169,8 @@ function ScriptImportBody({ close }) {
     return html`<${Modal} title="確認拆解結果" wide backdropClose=${false} onClose=${() => close(null)} footer=${footer} class="script-import">
       <div class="si-summary">
         <${Badge} tone="accent">${MODE_NAME[result.mode] || result.mode}<//>
-        <span>拆出 ${result.shots.length} 個鏡頭，已勾選 ${picked.length} 個${total > 0 ? `，有標長度的合計 ${fmtSeconds(total)}` : ""}</span>
+        <span>${beats ? `${beats} 段劇情，` : ""}拆出 ${result.shots.length} 個鏡頭，已勾選 ${picked.length} 個${total > 0 ? `，有標長度的合計 ${fmtSeconds(total)}` : ""}${
+          lengths.length > 1 ? `（每鏡 ${Math.min(...lengths)} 到 ${Math.max(...lengths)} 秒）` : ""}</span>
         <span class="grow"></span>
         <${Button} size="sm" kind="ghost" icon=${allOn ? "square" : "square-check"}
           onClick=${() => setChecked(result.shots.map(() => !allOn))}>${allOn ? "全部取消" : "全部勾選"}<//>
@@ -174,6 +182,7 @@ function ScriptImportBody({ close }) {
         <span class="note-text">一次最多加入 ${MAX_SHOTS} 個鏡頭，請取消勾選一些，或分次匯入。</span></div>`}
       <div class="si-list">
         ${result.shots.map((shot, i) => html`<${ShotRow} key=${i} shot=${shot} index=${i} checked=${!!checked[i]}
+          beatStart=${i > 0 && !!shot.beat && shot.beat !== result.shots[i - 1].beat}
           onCheck=${(v) => setChecked((c) => c.map((x, k) => (k === i ? v : x)))} onEdit=${(patch) => edit(i, patch)} />`)}
       </div>
       <div class="row-2 si-options">
@@ -199,9 +208,12 @@ function ScriptImportBody({ close }) {
         placeholder=${"每段寫一個畫面，可加「字幕：」「運鏡：」「秒數：」等標籤。\n也可以直接貼上 Excel 或試算表的分鏡表。"}
         onKeyDown=${(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) parse(); }} />
     <//>
-    <${Field} label="拆分方式" hint=${mode === "llm" ? "文字模型會花幾秒到一分鐘，結果仍可在下一步修改" : "Ctrl+Enter 也可以開始拆解"}>
+    <${Field} label="拆分方式" hint=${mode === "llm" ? `文字模型會花${detail ? "一到幾分鐘" : "幾秒到一分鐘"}，結果仍可在下一步修改` : "Ctrl+Enter 也可以開始拆解"}>
       <${Segmented} value=${mode} onChange=${setMode} options=${modes} size="sm" />
     <//>
+    <${Toggle} checked=${detail} onChange=${setDetail} label="依劇情細拆鏡頭"
+      hint=${detail ? "每段劇情拆成遠景、中景、特寫等多個鏡頭，依節奏與旁白長度安排秒數；已寫明秒數的段落維持一鏡"
+        : "每段劇情一個鏡頭，照原文拆"} />
   <//>`;
 }
 

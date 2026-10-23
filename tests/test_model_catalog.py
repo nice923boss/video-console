@@ -25,6 +25,9 @@ KLING_T2V = "fal-ai/kling-video/v2.1/master/text-to-video"
 TURBO_STD_I2V = "fal-ai/kling-video/v9/turbo/standard/image-to-video"
 TURBO_PRO_I2V = "fal-ai/kling-video/v9/turbo/pro/image-to-video"
 TURBO_PRO_T2V = "fal-ai/kling-video/v9/turbo/pro/text-to-video"
+LTX_PRO_I2V = "lightricks/ltx-9/image-to-video/pro"
+LTX_FAST_I2V = "lightricks/ltx-9/image-to-video/fast"
+LTX_FAST_T2V = "lightricks/ltx-9/text-to-video/fast"
 
 
 @pytest.fixture()
@@ -77,23 +80,27 @@ def provider(client: Client, pid: str) -> dict:
     return next(p for p in client.json("GET", "/api/providers") if p["id"] == pid)
 
 
-def route_kling(mock_http, i2v: str = KLING_I2V, t2v: str = KLING_T2V) -> None:
-    """The given models are retired on fal; v9 turbo replaces them. Two unusable models sit in the general list."""
+def route_kling(mock_http, i2v: str = KLING_I2V, t2v: str = KLING_T2V,
+                newer: tuple[str, str, str] = (TURBO_PRO_I2V, TURBO_STD_I2V, TURBO_PRO_T2V)) -> None:
+    """The given models are retired on fal; `newer` (two image-to-video tiers and a text-to-video model of the
+    same family, v9 turbo by default) replaces them. Two unusable models sit in the general list."""
+    pro_i2v, std_i2v, new_t2v = newer
+    family = family_of(i2v)
     mock_http.route("GET", fal_lookup(*sorted({i2v, t2v})), (200, {"models": [
         fal_model(t2v, "2025-06-01", status="deprecated"), fal_model(i2v, "2025-06-01", status="deprecated")]}))
     mock_http.route("GET", fal_search("image-to-video"), (200, {"models": [
-        fal_model(TURBO_STD_I2V, "2025-09-20", required=("prompt", "image_url"), durations=("5", "10")),
+        fal_model(std_i2v, "2025-09-20", required=("prompt", "image_url"), durations=("5", "10")),
         fal_model("fal-ai/other/first-last-frame", "2025-10-01", required=("prompt", "image_url", "end_image_url"),
                   props=("prompt", "image_url", "end_image_url")),
         fal_model("fal-ai/other/many-images", "2025-10-02", required=("prompt", "image_urls"),
                   props=("prompt", "image_urls"))]}))
-    mock_http.route("GET", fal_search("image-to-video", "kling"), (200, {"models": [
-        fal_model(TURBO_PRO_I2V, "2025-09-23", required=("prompt", "image_url")),
-        fal_model(TURBO_STD_I2V, "2025-09-20", required=("prompt", "image_url"), durations=("5", "10")),
+    mock_http.route("GET", fal_search("image-to-video", family), (200, {"models": [
+        fal_model(pro_i2v, "2025-09-23", required=("prompt", "image_url")),
+        fal_model(std_i2v, "2025-09-20", required=("prompt", "image_url"), durations=("5", "10")),
         fal_model(i2v, "2025-06-01", status="deprecated")]}))
     mock_http.route("GET", fal_search("text-to-video"), (200, {"models": []}))
-    mock_http.route("GET", fal_search("text-to-video", "kling"), (200, {"models": [
-        fal_model(TURBO_PRO_T2V, "2025-09-23", props=("prompt", "aspect_ratio", "duration"))]}))
+    mock_http.route("GET", fal_search("text-to-video", family), (200, {"models": [
+        fal_model(new_t2v, "2025-09-23", props=("prompt", "aspect_ratio", "duration"))]}))
 
 
 # ---------------------------------------------------------------- naming rules
@@ -155,21 +162,22 @@ def test_catalog_entries_belong_to_their_source_and_survive_a_restart(tmp_path: 
 
 # ---------------------------------------------------------------- fal.ai through the app
 def test_fal_lists_current_models_and_moves_retired_defaults_to_the_newest(client: Client, fal) -> None:
-    route_kling(fal, DEFAULT_I2V, DEFAULT_T2V)  # the day fal retires today's built-in defaults
+    # the day fal retires today's built-in defaults
+    route_kling(fal, DEFAULT_I2V, DEFAULT_T2V, (LTX_PRO_I2V, LTX_FAST_I2V, LTX_FAST_T2V))
     info = provider(client, "fal-video")
     assert info["modelKeys"] == {"i2v": "model", "t2v": "modelT2V"} and info["models"] is None
 
     result = client.json("POST", "/api/providers/fal-video/models", {})
     i2v = result["models"]["fields"]["model"]
-    assert [o["value"] for o in i2v["options"]] == [TURBO_PRO_I2V, TURBO_STD_I2V]  # newest first, unusable ones gone
+    assert [o["value"] for o in i2v["options"]] == [LTX_PRO_I2V, LTX_FAST_I2V]  # newest first, unusable ones gone
     assert i2v["options"][1]["hint"] == "秒數 5、10" and i2v["options"][1]["date"] == "2025-09-20"
-    assert i2v["known"] == {DEFAULT_I2V: "deprecated"} and i2v["suggested"] == TURBO_STD_I2V
-    assert result["models"]["fields"]["modelT2V"]["suggested"] == TURBO_PRO_T2V
+    assert i2v["known"] == {DEFAULT_I2V: "deprecated"} and i2v["suggested"] == LTX_FAST_I2V
+    assert result["models"]["fields"]["modelT2V"]["suggested"] == LTX_FAST_T2V
     # nothing was saved for this provider, so its retired defaults follow the newest models
-    assert result["pinned"] == {"model": TURBO_STD_I2V, "modelT2V": TURBO_PRO_T2V}
+    assert result["pinned"] == {"model": LTX_FAST_I2V, "modelT2V": LTX_FAST_T2V}
     config = provider(client, "fal-video")["config"]
-    assert (config["model"], config["modelT2V"]) == (TURBO_STD_I2V, TURBO_PRO_T2V)
-    assert provider(client, "fal-video")["models"]["fields"]["model"]["suggested"] == TURBO_STD_I2V
+    assert (config["model"], config["modelT2V"]) == (LTX_FAST_I2V, LTX_FAST_T2V)
+    assert provider(client, "fal-video")["models"]["fields"]["model"]["suggested"] == LTX_FAST_I2V
     assert all("authorization" not in c.headers for c in fal.calls)  # the model list needs no key
 
 
@@ -215,7 +223,7 @@ def test_a_shot_asks_the_model_for_one_of_its_own_lengths(client: Client, fal) -
         fal.route("GET", fal_search(category, "kling"), (200, {"models": []}))
     client.json("PUT", "/api/providers/fal-video", {"config": {"model": i2v, "modelT2V": t2v}})
     client.json("PUT", "/api/secrets", {"name": "provider.fal-image.api_key", "value": KEY})
-    assert provider(client, "fal-video")["durations"] == {"i2v": [5.0, 10.0], "t2v": [5.0, 10.0]}  # not detected yet
+    assert provider(client, "fal-video")["durations"] == {"i2v": [6.0, 8.0, 10.0], "t2v": [6.0, 8.0, 10.0]}  # not detected yet
     fields = client.json("POST", "/api/providers/fal-video/models", {})["models"]["fields"]
     assert fields["modelT2V"]["durations"] == {t2v: ["4s", "6s", "8s"]} and fields["model"]["durations"] == {i2v: []}
     assert provider(client, "fal-video")["durations"] == {"i2v": [], "t2v": [4.0, 6.0, 8.0]}
@@ -238,8 +246,9 @@ def test_a_shot_asks_the_model_for_one_of_its_own_lengths(client: Client, fal) -
 
 
 def test_a_draft_is_checked_without_touching_the_settings(client: Client, fal) -> None:
-    route_kling(fal, KLING_I2V, DEFAULT_T2V)
-    result = client.json("POST", "/api/providers/fal-video/models", {"config": {"model": KLING_I2V}})
+    route_kling(fal)
+    result = client.json("POST", "/api/providers/fal-video/models",
+                         {"config": {"model": KLING_I2V, "modelT2V": KLING_T2V}})
     assert result["pinned"] == {} and result["models"]["fields"]["model"]["known"] == {KLING_I2V: "deprecated"}
     assert provider(client, "fal-video")["config"]["model"] == DEFAULT_I2V  # still the built-in default
 
@@ -283,7 +292,7 @@ def test_fal_rate_limit_reads_as_a_retry_hint(client: Client, fal) -> None:
     fal.route("GET", fal_lookup(*sorted({DEFAULT_I2V, DEFAULT_T2V})), (429, {"detail": "rate limited"}))
     for category in ("image-to-video", "text-to-video"):
         fal.route("GET", fal_search(category), (200, {"models": []}))
-        fal.route("GET", fal_search(category, "kling"), (200, {"models": []}))
+        fal.route("GET", fal_search(category, family_of(DEFAULT_I2V)), (200, {"models": []}))
     error = client.json("POST", "/api/providers/fal-video/models", {}, status=429)
     assert "重新偵測" in error["error"]
 

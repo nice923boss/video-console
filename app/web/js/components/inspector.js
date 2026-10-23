@@ -25,7 +25,7 @@ const TABS = [
   { id: "takes", label: "版本", icon: "layers" },
   { id: "edit", label: "剪輯", icon: "scissors" },
 ];
-const FPS_CHOICES = [12, 16, 24, 25, 30, 60];
+const FPS_CHOICES = [12, 16, 24, 25, 29.97, 30, 60];
 const BATCH_THUMBS = 8;
 const NO_ROUTES = [];
 const COUNT_OPTIONS = [1, 2, 3, 4].map((n) => ({ value: n, label: String(n), title: `每個鏡頭生成 ${n} 份` }));

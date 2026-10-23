@@ -490,6 +490,59 @@ def test_video_picture_in_picture_keeps_its_sound(app: App, client: Client, proj
     assert loudness() < 50
 
 
+@needs_ffmpeg
+def test_reverse_and_freeze_frame_jobs(app: App, client: Client, project: dict, tmp_path: Path) -> None:
+    pid, sid = project["id"], project["shots"][0]["id"]
+    clip = tmp_path / "clip.mp4"
+    subprocess.run([find_ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "testsrc=s=320x180:r=25:d=3",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-shortest", "-pix_fmt", "yuv420p",
+                    str(clip)], check=True)
+    job = client.json("POST", f"/api/projects/{pid}/upload?name=clip.mp4&target=shot&shot={sid}",
+                      clip.read_bytes())["job"]
+    assert client.wait_job(job["id"])["status"] == "done"
+    src_id = client.json("GET", f"/api/projects/{pid}")["project"]["shots"][0]["activeVideo"]
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [
+        {"op": "shot.update", "id": sid, "patch": {"trimIn": 0.5, "trimOut": 2.0}}]})
+
+    job = client.json("POST", "/api/jobs", {"kind": "reverse", "pid": pid, "shotId": sid, "payload": {}})["job"]
+    done = client.wait_job(job["id"])
+    assert done["status"] == "done", done["error"]
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    shot = saved["shots"][0]
+    rev = saved["takes"][shot["activeVideo"]]
+    assert rev["parent"] == src_id and rev["label"] == "倒放" and rev["hasAudio"]
+    # the kept second and a half is the same footage running the other way
+    assert shot["trimIn"] == pytest.approx(3.0 - 2.0, abs=0.05)
+    assert shot["trimOut"] == pytest.approx(3.0 - 0.5, abs=0.05)
+
+    root = app.store.project_dir(pid)
+
+    def gray(item: dict, at: float) -> bytes:
+        return subprocess.run([find_ffmpeg(), "-v", "error", "-ss", f"{at}", "-i", str(root / item["file"]),
+                               "-frames:v", "1", "-s", "64x36", "-pix_fmt", "gray", "-f", "rawvideo", "-"],
+                              capture_output=True, check=True).stdout
+
+    def diff(a: bytes, b: bytes) -> float:
+        return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+    first = gray(rev, 0.1)
+    assert diff(first, gray(saved["takes"][src_id], 2.88)) < diff(first, gray(saved["takes"][src_id], 0.1))
+
+    # freeze frame: a shot made for the still gets the grabbed picture
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [
+        {"op": "shot.add", "shot": {"id": "s_frz00000a", "duration": 2.0}, "index": 1}]})
+    job = client.json("POST", "/api/jobs", {"kind": "lastframe", "pid": pid, "shotId": sid, "payload": {
+        "source": src_id, "target": "shot", "targetShot": "s_frz00000a", "at": 1.0}})["job"]
+    assert job["title"].startswith("定格：")
+    done = client.wait_job(job["id"])
+    assert done["status"] == "done", done["error"]
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    frozen = next(s for s in saved["shots"] if s["id"] == "s_frz00000a")
+    still = saved["takes"][frozen["activeImage"]]
+    assert still["kind"] == "image" and still["shot"] == "s_frz00000a" and still["parent"] == src_id
+    assert saved["shots"][0]["activeVideo"] == rev["id"]  # the source shot is left as it was
+
+
 # ---------------------------------------------------------------- jobs
 def test_queue_controls_while_paused(app: App, client: Client, project: dict) -> None:
     assert client.json("POST", "/api/jobs/pause", {"paused": True})["paused"] is True

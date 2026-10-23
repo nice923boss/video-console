@@ -5,7 +5,8 @@
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { newId, round } from "../lib/format.js";
-import { clipIndexAt, audioLength } from "../lib/sequence.js";
+import { clipIndexAt, audioLength, audioMedia } from "../lib/sequence.js";
+import { splitKeys, shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { toast } from "./toast.js";
 
 const MIN_VIDEO = 0.1;
@@ -37,7 +38,7 @@ function targetAt(project, clips, sel, t) {
     return { type: "overlay", item, start, length, still, min: still ? MIN_STILL : MIN_ITEM };
   }
   if (audio) {
-    const span = (a) => [Number(a.start || 0), audioLength(a, media[a.mediaId])];
+    const span = (a) => [Number(a.start || 0), audioLength(a, audioMedia(project, a))];
     const track = audio.captionId ? (project.audio || []).filter((a) => a.captionId) : [audio];
     const item = pick(track, sel, span, t);
     if (!item) return missing;
@@ -79,52 +80,85 @@ function resolve(project, clips, sel) {
   return { ...target, t: round(t, 3), local };
 }
 
-function splitShot({ clip, local }) {
-  const { shot } = clip;
-  const trans = shot.transition || { type: "cut", duration: 0.5 };
-  const head = clip.source === "video" ? { trimOut: round(clip.in + local, 3) } : { duration: round(local, 2) };
-  const tail = clip.source === "video"
-    ? { trimIn: round(clip.in + local, 3), trimOut: shot.trimOut ?? null }
-    : { duration: round(clip.length - local, 2) };
-  const copy = { ...shot, ...tail, id: newId("s") };
-  return ops([
-    { op: "shot.update", id: shot.id, patch: { ...head, transition: { ...trans, type: "cut" } } },
-    { op: "shot.add", shot: copy, index: clip.index + 1 },
-  ], { label: "分割鏡頭" });
+// The ops that cut a resolved target in two at the playhead.
+export function splitOps(g) {
+  const { item, t, local } = g;
+  if (g.type === "shot") {
+    const { clip } = g;
+    const { shot } = clip;
+    const trans = shot.transition || { type: "cut", duration: 0.5 };
+    const at = round(clip.in + local * (clip.speed || 1), 3);
+    const head = clip.source === "video" ? { trimOut: at } : { duration: round(local, 2) };
+    const tail = clip.source === "video" ? { trimIn: at, trimOut: shot.trimOut ?? null } : { duration: round(clip.length - local, 2) };
+    return [
+      { op: "shot.update", id: shot.id, patch: { ...head, transition: { ...trans, type: "cut" } } },
+      { op: "shot.add", shot: { ...shot, ...tail, id: newId("s") }, index: clip.index + 1 },
+    ];
+  }
+  const [head, tail] = splitKeys(item || {}, local);
+  if (g.type === "overlay") {
+    const rest = { ...item, id: newId("o"), start: t, in: g.still ? item.in : round(Number(item.in || 0) + local, 3),
+      length: round(g.length - local, 3), ...keyPatch(item, tail) };
+    return [{ op: "overlay.update", id: item.id, patch: { length: round(local, 3), ...keyPatch(item, head) } },
+      { op: "overlay.add", item: rest }];
+  }
+  if (g.type === "audio") {
+    const cut = round(Number(item.in || 0) + local, 3);
+    return [
+      { op: "audio.update", id: item.id, patch: { out: cut, fadeOut: 0, ...keyPatch(item, head) } },
+      { op: "audio.add", item: { ...item, id: newId("a"), start: t, in: cut, fadeIn: 0, ...keyPatch(item, tail) } },
+    ];
+  }
+  if (g.type === "adjust") {
+    return [
+      { op: "adjust.update", id: item.id, patch: { length: round(local, 3), ...keyPatch(item, head) } },
+      { op: "adjust.add", item: { ...item, id: newId("adj"), start: t, length: round(g.length - local, 3), ...keyPatch(item, tail) } },
+    ];
+  }
+  return [
+    { op: "caption.update", id: item.id, patch: { end: t } },
+    { op: "caption.add", item: { ...item, id: newId("c"), start: t, shot: null } },
+  ];
 }
+
+const SPLIT_LABEL = { shot: "分割鏡頭", overlay: "分割片段", audio: "分割音軌", adjust: "分割調整圖層", caption: "分割字幕" };
 
 export function splitAtPlayhead(project, clips, sel) {
   const g = resolve(project, clips, sel);
-  if (!g) return;
-  if (g.type === "shot") {
-    splitShot(g);
+  if (g) ops(splitOps(g), { label: SPLIT_LABEL[g.type] });
+}
+
+// Cut every clip on every track that the playhead crosses, as one undo step. Clips too close to an
+// edge at the playhead are left whole.
+export function splitAllAtPlayhead(project, clips) {
+  const t = clock.time;
+  const media = project.media || {};
+  const targets = [];
+  const clip = clips[clipIndexAt(clips, t)];
+  if (clip) targets.push({ type: "shot", clip, start: clip.start, length: clip.length, min: clip.source === "video" ? MIN_VIDEO : MIN_STILL });
+  for (const o of project.overlays || []) {
+    const still = (media[o.mediaId] || {}).kind === "image";
+    targets.push({ type: "overlay", item: o, start: Number(o.start || 0), length: Number(o.length || MIN_ITEM), still, min: still ? MIN_STILL : MIN_ITEM });
+  }
+  for (const a of project.audio || []) {
+    targets.push({ type: "audio", item: a, start: Number(a.start || 0), length: audioLength(a, audioMedia(project, a)), min: MIN_ITEM });
+  }
+  for (const c of project.captions || []) {
+    targets.push({ type: "caption", item: c, start: Number(c.start || 0), length: Number(c.end || 0) - Number(c.start || 0), min: MIN_ITEM });
+  }
+  for (const j of project.adjustments || []) {
+    targets.push({ type: "adjust", item: j, start: Number(j.start || 0), length: Number(j.length || MIN_ITEM), min: MIN_ITEM });
+  }
+  const list = [];
+  for (const g of targets) {
+    const local = t - g.start;
+    if (local >= g.min && g.length - local >= g.min) list.push(...splitOps({ ...g, t: round(t, 3), local }));
+  }
+  if (!list.length) {
+    toast("播放頭位置沒有可以分割的片段", { level: "warn" });
     return;
   }
-  const { item, t, local } = g;
-  if (g.type === "overlay") {
-    const tail = { ...item, id: newId("o"), start: t, in: g.still ? item.in : round(Number(item.in || 0) + local, 3),
-      length: round(g.length - local, 3) };
-    ops([
-      { op: "overlay.update", id: item.id, patch: { length: round(local, 3) } },
-      { op: "overlay.add", item: tail },
-    ], { label: "分割片段" });
-  } else if (g.type === "audio") {
-    const cut = round(Number(item.in || 0) + local, 3);
-    ops([
-      { op: "audio.update", id: item.id, patch: { out: cut, fadeOut: 0 } },
-      { op: "audio.add", item: { ...item, id: newId("a"), start: t, in: cut, fadeIn: 0 } },
-    ], { label: "分割音軌" });
-  } else if (g.type === "adjust") {
-    ops([
-      { op: "adjust.update", id: item.id, patch: { length: round(local, 3) } },
-      { op: "adjust.add", item: { ...item, id: newId("adj"), start: t, length: round(g.length - local, 3) } },
-    ], { label: "分割調整圖層" });
-  } else {
-    ops([
-      { op: "caption.update", id: item.id, patch: { end: t } },
-      { op: "caption.add", item: { ...item, id: newId("c"), start: t, shot: null } },
-    ], { label: "分割字幕" });
-  }
+  ops(list, { label: "分割所有軌道" });
 }
 
 // side "start" removes the part before the playhead, "end" the part after it.
@@ -137,7 +171,8 @@ export function trimAtPlayhead(project, clips, sel, side) {
   if (g.type === "shot") {
     const { clip } = g;
     let patch;
-    if (clip.source === "video") patch = left ? { trimIn: round(clip.in + local, 3) } : { trimOut: round(clip.in + local, 3) };
+    const at = round(clip.in + local * (clip.speed || 1), 3);
+    if (clip.source === "video") patch = left ? { trimIn: at } : { trimOut: at };
     else patch = { duration: round(left ? clip.length - local : local, 2) };
     // The shots after it move up, so the playhead goes to where the kept part now starts.
     ops([{ op: "shot.update", id: clip.shot.id, patch }], { label }).then((res) => {
@@ -148,12 +183,14 @@ export function trimAtPlayhead(project, clips, sel, side) {
   let patch;
   if (g.type === "overlay") {
     const tIn = g.still ? item.in : round(Number(item.in || 0) + local, 3);
-    patch = left ? { start: t, in: tIn, length: round(g.length - local, 3) } : { length: round(local, 3) };
+    patch = left ? { start: t, in: tIn, length: round(g.length - local, 3), ...keyPatch(item, shiftKeys(item, local)) }
+      : { length: round(local, 3) };
   } else if (g.type === "audio") {
     const cut = round(Number(item.in || 0) + local, 3);
-    patch = left ? { start: t, in: cut } : { out: cut };
+    patch = left ? { start: t, in: cut, ...keyPatch(item, shiftKeys(item, local)) } : { out: cut };
   } else if (g.type === "adjust") {
-    patch = left ? { start: t, length: round(g.length - local, 3) } : { length: round(local, 3) };
+    patch = left ? { start: t, length: round(g.length - local, 3), ...keyPatch(item, shiftKeys(item, local)) }
+      : { length: round(local, 3) };
   } else {
     patch = left ? { start: t } : { end: t };
   }

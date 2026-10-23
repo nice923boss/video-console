@@ -27,7 +27,7 @@ def completion(content: str) -> tuple[int, dict]:
 @pytest.fixture()
 def llm(settings, secrets, mock_http) -> LLMClient:
     mock_http.route("GET", "/v1/models", (200, {"object": "list",
-                                               "data": [{"id": "qwen2.5:7b-instruct"}, {"id": "llama3"}]}))
+                                               "data": [{"id": "gemma3:4b"}, {"id": "llama3"}]}))
     settings.update({"llm": {"enabled": True, "baseUrl": mock_http.url + "/v1/"}})
     return LLMClient(settings, secrets)
 
@@ -44,8 +44,8 @@ def test_connection_test_lists_models_even_when_switched_off(llm, settings):
 
     result = llm.test()
 
-    assert result == {"ok": True, "models": ["qwen2.5:7b-instruct", "llama3"], "modelFound": True,
-                      "message": "連線成功，找到模型「qwen2.5:7b-instruct」"}
+    assert result == {"ok": True, "models": ["gemma3:4b", "llama3"], "modelFound": True,
+                      "message": "連線成功，找到模型「gemma3:4b」"}
 
 
 def test_connection_test_flags_a_model_the_server_lacks(llm, settings):
@@ -77,7 +77,7 @@ def test_enhance_sends_one_chat_request_and_cleans_the_reply(llm, secrets, mock_
     call = mock_http.calls[-1]
     assert call.headers["authorization"] == "Bearer sk-test"
     body = call.json()
-    assert body["model"] == "qwen2.5:7b-instruct"
+    assert body["model"] == "gemma3:4b"
     assert (body["temperature"], body["stream"]) == (0.7, False)
     system, user = body["messages"]
     assert system["role"] == "system" and "text-to-image" in system["content"]

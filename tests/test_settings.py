@@ -101,8 +101,8 @@ def test_corrupt_stored_settings_fall_back_to_defaults(tmp_path):
     assert SettingsStore(path).section("llm") == DEFAULTS["llm"]
 
 
-def test_defaults_pair_local_ltx_video_with_a_cloud_route_at_1280x720():
+def test_defaults_pair_local_ltx_video_with_a_cloud_route_at_1920x1080():
     local, cloud = DEFAULTS["routes"]
     assert local["video"] == {"backend": "comfy", "server": "auto", "workflow": "ltxv-2b-i2v"}
     assert cloud["video"]["backend"] == "provider"
-    assert (DEFAULTS["defaults"]["width"], DEFAULTS["defaults"]["height"]) == (1280, 720)
+    assert (DEFAULTS["defaults"]["width"], DEFAULTS["defaults"]["height"]) == (1920, 1080)

@@ -85,7 +85,7 @@ class ProjectStore:
         project.setdefault("schema", SCHEMA)
         for key, default in (("takes", {}), ("audio", []), ("captions", []), ("media", {}), ("notes", ""),
                              ("cast", []), ("tracks", {}), ("layers", []), ("overlays", []), ("captionStyles", []),
-                             ("adjustments", [])):
+                             ("adjustments", []), ("markers", [])):
             project.setdefault(key, default)
         project.setdefault("style", {"prompt": "", "negative": "", "preset": ""})
         project["settings"].setdefault("fadeIn", 0.0)
@@ -217,6 +217,7 @@ class ProjectStore:
             "overlays": [],
             "captionStyles": [],
             "adjustments": [],
+            "markers": [],
         }
         write_json_atomic(d / "project.json", project)
         with self._lock:

@@ -3,7 +3,7 @@
 import { html, useState, useEffect } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { api } from "../lib/api.js";
-import { revealInFolder } from "../lib/actions.js";
+import { revealInFolder, revealSystemFolder } from "../lib/actions.js";
 import { fileUrl, fmtBytes, fmtRelTime, fmtDateTime } from "../lib/format.js";
 import { Button, IconButton, Empty, Spinner, Section } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
@@ -11,6 +11,7 @@ import { openLightbox } from "../components/media.js";
 import { confirmDialog } from "../components/overlay.js";
 import { toast, toastError } from "../components/toast.js";
 import { JobRow } from "../components/job-row.js";
+import { useExportFolder } from "../components/export-folder.js";
 import { openExportDialog } from "../dialogs/export-dialog.js";
 
 const enc = encodeURIComponent;
@@ -74,6 +75,7 @@ function ExportRow({ pid, file, onPlay, onDelete }) {
 export function ExportsPane({ project }) {
   const pid = project.id;
   const jobs = useStore((s) => s.jobs);
+  const folder = useExportFolder();
   const [files, setFiles] = useState(null);
   const [error, setError] = useState("");
   const mine = jobs.filter((j) => isExportJob(j, pid));
@@ -86,7 +88,7 @@ export function ExportsPane({ project }) {
       setFiles(list);
       setError("");
     },
-    (err) => setError(err.message || "無法讀取輸出資料夾"),
+    (err) => setError(err.message || "無法讀取輸出檔清單"),
   );
   useEffect(() => {
     load();
@@ -98,7 +100,7 @@ export function ExportsPane({ project }) {
   };
   const remove = async (file) => {
     const ok = await confirmDialog({ title: "刪除輸出檔", danger: true, confirmLabel: "刪除",
-      message: `「${file.name}」（${fmtBytes(file.size)}）會從輸出資料夾永久刪除，無法復原。專案內容不受影響，之後可以重新輸出。` });
+      message: `「${file.name}」（${fmtBytes(file.size)}）會從電腦永久刪除，無法復原。專案內容不受影響，之後可以重新輸出。` });
     if (!ok) return;
     try {
       await api.del(`/api/projects/${enc(pid)}/exports/${enc(file.name)}`);
@@ -120,10 +122,10 @@ export function ExportsPane({ project }) {
       <div class="exp-lead">
         <b>輸出成品</b>
         <span class="dim">${files ? `${files.length} 個檔案，共 ${fmtBytes(total)}` : "讀取中…"}</span>
+        <span class="dim exp-where" title=${folder}>存在<code class="export-folder-path"><bdi>${folder}</bdi></code></span>
       </div>
-      <span class="grow"></span>
       <${IconButton} icon="refresh" title="重新整理" onClick=${load} />
-      <${Button} icon="folder-open" onClick=${() => revealInFolder(files && files.length ? files[0].path : "")}>開啟資料夾<//>
+      <${Button} icon="folder-open" title=${`開啟 ${folder}`} onClick=${() => revealSystemFolder("exports")}>開啟資料夾<//>
       <${Button} icon="package" onClick=${() => openExportDialog("package")}>打包專案<//>
       <${Button} kind="primary" icon="film" onClick=${() => openExportDialog("video")}>輸出影片<//>
     </div>
@@ -140,7 +142,7 @@ export function ExportsPane({ project }) {
               ? html`<div class="exp-list">${rows(videos)}</div>`
               : html`<${Empty} icon="film" title="還沒有輸出過影片"
                   actions=${html`<${Button} kind="primary" icon="film" onClick=${() => openExportDialog("video")}>輸出影片<//>`}>
-                  輸出會把序列裡的鏡頭、轉場、音軌與字幕合成一支 MP4，存在專案的 exports 資料夾。
+                  輸出會把序列裡的鏡頭、轉場、音軌與字幕合成一支 MP4，存在匯出資料夾（設定 › 影片輸出可更改）。
                 <//>`}
       <//>
       ${packages.length > 0 && html`<${Section} title="打包檔" icon="package" class="exp-section">

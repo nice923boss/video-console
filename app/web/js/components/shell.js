@@ -6,6 +6,7 @@ import { fmtTime, fmtBytes } from "../lib/format.js";
 import { buildSequence, sequenceDuration } from "../lib/sequence.js";
 import { currentTheme } from "../lib/theme.js";
 import { keyHint, keysOf, selectKeymap } from "../lib/keymap.js";
+import { setWatch } from "../lib/watch.js";
 import { Icon } from "./icons.js";
 import { Dot, Keys, Spinner, Button, IconButton } from "./ui.js";
 import { openMenu, promptDialog } from "./overlay.js";
@@ -131,7 +132,9 @@ function QueueChip() {
 }
 
 export function TopBar({ commands }) {
-  const { project, projects, view, u } = useStore((s) => ({ project: s.project, projects: s.projects, view: s.view, u: s.undo }));
+  const { project, projects, view, u, watch } = useStore((s) => ({
+    project: s.project, projects: s.projects, view: s.view, u: s.undo, watch: s.watch,
+  }));
   useStore(selectKeymap); // re-render the key hints after a rebind
   const stats = useMemo(() => {
     if (!project) return null;
@@ -157,14 +160,18 @@ export function TopBar({ commands }) {
       ${keysOf("app.palette")[0] && html`<${Keys} combo=${keysOf("app.palette")[0]} />`}
     </button>
     <div class="tb-right">
-      ${project && html`<div class="tb-history">
+      ${project && watch && html`<button type="button" class="tb-watch" onClick=${() => setWatch(false)}
+          title="這個視窗只顯示專案的即時變化，不會修改它；按一下結束觀看">
+        <${Icon} name="eye" size=${15} /><span>觀看模式</span><${Icon} name="x" size=${13} />
+      </button>`}
+      ${project && !watch && html`<div class="tb-history">
         <${IconButton} icon="undo" disabled=${!u.undo} onClick=${undo}
           title=${u.undo ? `復原：${u.undoLabel || "上一步"}${keyHint("app.undo")}` : "沒有可以復原的步驟"} />
         <${IconButton} icon="redo" disabled=${!u.redo} onClick=${redo}
           title=${u.redo ? `重做：${u.redoLabel || "下一步"}${keyHint("app.redo")}` : "沒有可以重做的步驟"} />
       </div>`}
       <${QueueChip} />
-      ${project && view !== "home" && html`<${Button} kind="primary" icon="film" onClick=${commands.export}>輸出影片<//>`}
+      ${project && view !== "home" && !watch && html`<${Button} kind="primary" icon="film" onClick=${commands.export}>輸出影片<//>`}
     </div>
   </header>`;
 }

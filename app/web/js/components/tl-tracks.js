@@ -7,7 +7,8 @@ import { ops, updateShot, moveShot, focusShot } from "../lib/actions.js";
 import { setTime } from "../lib/clock.js";
 import { releaseFocus } from "../lib/keys.js";
 import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/format.js";
-import { buildSequence, audioLength } from "../lib/sequence.js";
+import { buildSequence, audioLength, audioMedia } from "../lib/sequence.js";
+import { shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
 import { takeFromMedia } from "../views/library.js";
 import { Icon } from "./icons.js";
@@ -27,7 +28,7 @@ const MIN_STILL = 0.2;
 const MAX_STILL = 600;
 const MIN_ITEM = 0.1;
 const MAX_TIME = 36000;
-const TILE_H = VIDEO_H - 11; // the row's 1px bottom border, then .tl-clip sits 5px in from top and bottom
+const TILE_INSET = 11; // the row's 1px bottom border, then .tl-clip sits 5px in from top and bottom
 const STRIP_FRAMES = 8;
 const WAVE_MAX_PX = 8000;
 const SOURCE_ICON = { video: "video", image: "image", empty: "film" };
@@ -42,6 +43,15 @@ function clipMenu(e, shot, label) {
     ...SHOT_COLORS.map((c) => ({ label: c.label, swatch: c.value, checked: current === c.value,
       onClick: () => current !== c.value && updateShot(shot.id, { color: c.value }, { label: "修改標籤顏色" }) })),
   ]);
+}
+
+// A clip's keyframes as diamonds along its bottom edge. While its left edge is being trimmed they keep
+// their place on the timeline, as they will once the trim lands.
+export function KeyMarks({ item, pps, drag, base, length }) {
+  const offset = drag && drag.mode === "l" ? drag.start - base.start : 0;
+  const keys = (item.keyframes || []).filter((k) => k.t - offset >= -1e-3 && k.t - offset <= length + 1e-3);
+  if (!keys.length) return null;
+  return html`<div class="tl-keys">${keys.map((k) => html`<i key=${k.t} class="tl-key" style=${`left:${(k.t - offset) * pps}px`}></i>`)}</div>`;
 }
 
 // Left-button drag tracked on window. onMove(dx, ev) starts once the pointer passed `threshold` px
@@ -159,13 +169,14 @@ function selectShot(id, additive) {
 
 // Tiles always keep the picture's own aspect, however long the clip. Consecutive tiles that show the same
 // strip frame become one rect filled with a repeating pattern, so a long clip costs at most STRIP_FRAMES rects.
-function Tiles({ clip, geo, pid, pps, ar }) {
+function Tiles({ clip, geo, pid, pps, ar, scale }) {
   const take = clip.take;
+  const tileH = Math.round(VIDEO_H * scale) - TILE_INSET;
   if (!take) return html`<div class="tl-tiles"></div>`;
   if (clip.source === "video" && take.strip) {
     const url = fileUrl(pid, take.strip);
     const dur = Number(take.duration) || 1;
-    const tileW = TILE_H * (take.width && take.height ? take.width / take.height : ar);
+    const tileW = tileH * (take.width && take.height ? take.width / take.height : ar);
     const count = Math.max(1, Math.ceil((geo.length * pps) / tileW));
     const runs = [];
     for (let k = 0; k < count; k += 1) {
@@ -177,10 +188,10 @@ function Tiles({ clip, geo, pid, pps, ar }) {
     }
     const pat = (frame) => `tlp-${clip.shot.id}-${frame}`;
     return html`<svg class="tl-tiles is-strip">
-      <defs>${runs.map((r) => html`<pattern key=${r.frame} id=${pat(r.frame)} patternUnits="userSpaceOnUse" width=${tileW} height=${TILE_H}>
-        <image href=${url} x=${-r.frame * tileW} width=${tileW * STRIP_FRAMES} height=${TILE_H} preserveAspectRatio="none" />
+      <defs>${runs.map((r) => html`<pattern key=${r.frame} id=${pat(r.frame)} patternUnits="userSpaceOnUse" width=${tileW} height=${tileH}>
+        <image href=${url} x=${-r.frame * tileW} width=${tileW * STRIP_FRAMES} height=${tileH} preserveAspectRatio="none" />
       </pattern>`)}</defs>
-      ${runs.map((r) => html`<rect key=${r.frame} x=${r.k * tileW} width=${r.n * tileW} height=${TILE_H} fill=${`url(#${pat(r.frame)})`} />`)}
+      ${runs.map((r) => html`<rect key=${r.frame} x=${r.k * tileW} width=${r.n * tileW} height=${tileH} fill=${`url(#${pat(r.frame)})`} />`)}
     </svg>`;
   }
   const path = take.thumb || (clip.source === "image" ? take.file : "");
@@ -287,16 +298,16 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
     const geo = drag && drag.geo && drag.id === id ? drag.geo : { start: clip.start, length: clip.length, in: clip.in };
     const moving = drag && drag.dx != null && drag.id === id;
     const cls = ["tl-clip", `is-${clip.source}`, shotSel && focus === id && "is-selected", moving && "is-dragging",
-      clip.shot.color && "has-color"].filter(Boolean).join(" ");
+      clip.shot.color && "has-color", clip.shot.disabled && "is-off"].filter(Boolean).join(" ");
     const label = shotLabel(clip.shot, clip.index);
     const style = `left:${geo.start * pps}px;width:${Math.max(2, geo.length * pps)}px`
       + (clip.shot.color ? `;--shot-color:${clip.shot.color}` : "")
       + (moving ? `;transform:translateX(${drag.dx}px)` : "");
-    return html`<div key=${id} class=${cls} style=${style}
-      title=${`${label}，${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n拖曳左右邊緣修剪，拖曳中間調整順序，雙擊跳到該處，右鍵標記顏色`}
+    return html`<div key=${id} class=${cls} style=${style} data-sel=${`shot:${id}`}
+      title=${`${label}，${clip.shot.disabled ? "已停用，" : ""}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n拖曳左右邊緣修剪，拖曳中間調整順序，雙擊跳到該處，右鍵標記顏色`}
       onPointerDown=${(e) => beginMove(e, clip)} onDblClick=${(e) => setTime(laneTime(e, pps))}
       onContextMenu=${(e) => clipMenu(e, clip.shot, label)}>
-      <${Tiles} clip=${clip} geo=${geo} pid=${project.id} pps=${pps} ar=${ctx.ar} />
+      <${Tiles} clip=${clip} geo=${geo} pid=${project.id} pps=${pps} ar=${ctx.ar} scale=${ctx.scale} />
       <div class="tl-clip-label"><${Icon} name=${SOURCE_ICON[clip.source]} size=${12} /><span>${label}</span></div>
       ${clip.source === "empty" && geo.length * pps > 90 && html`<span class="tl-clip-empty">尚未產生畫面</span>`}
       <span class="tl-clip-dur mono">${fmtSeconds(geo.length, 1)}</span>
@@ -352,12 +363,12 @@ export function CaptionTrack({ project, ctx, editSel }) {
     const text = (cap.text || "").trim() || "（空白字幕）";
     const member = castMember(project, cap.speaker);
     const voice = member ? voiceState(project, cap) : null;
-    const cls = ["tl-cap", sel && "is-selected", drag && drag.id === cap.id && "is-dragging", voice === "stale" && "is-stale"]
-      .filter(Boolean).join(" ");
+    const cls = ["tl-cap", sel && "is-selected", drag && drag.id === cap.id && "is-dragging", voice === "stale" && "is-stale",
+      cap.disabled && "is-off"].filter(Boolean).join(" ");
     const who = member ? `${member.name || "未命名"}，${VOICE_STATES[voice].label}\n` : "";
     const bound = cap.shot ? project.shots.findIndex((s) => s.id === cap.shot) : -1;
     const link = bound >= 0 ? `\n綁定 ${shotLabel(project.shots[bound], bound)}` : "";
-    return html`<div key=${cap.id} class=${cls}
+    return html`<div key=${cap.id} class=${cls} data-sel=${`caption:${cap.id}`}
       style=${`left:${cur.start * pps}px;width:${Math.max(4, (cur.end - cur.start) * pps)}px`}
       title=${`${who}${text}\n${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}，雙擊跳到開頭${link}`}
       onPointerDown=${(e) => begin(e, cap, "move")} onDblClick=${() => setTime(cap.start)}>
@@ -427,7 +438,7 @@ function Wave({ pid, media, tIn, len, width }) {
 export function AudioClip({ project, item, ctx, selected }) {
   const [drag, setDrag] = useState(null);
   const { pps } = ctx;
-  const media = (project.media || {})[item.mediaId];
+  const media = audioMedia(project, item);
   const full = media && media.duration ? Number(media.duration) : 0;
   const base = { start: Number(item.start || 0), in: Number(item.in || 0), out: item.out == null ? null : Number(item.out) };
   const cur = drag || base;
@@ -464,7 +475,7 @@ export function AudioClip({ project, item, ctx, selected }) {
           text = `出點 ${tOut.toFixed(2)} 秒`;
         }
         const t = mode === "r" ? next.start + audioLength(next, media) : next.start;
-        setDrag({ ...next, tip: { t, text } });
+        setDrag({ ...next, mode, tip: { t, text } });
       },
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
@@ -474,6 +485,7 @@ export function AudioClip({ project, item, ctx, selected }) {
         }
         if (cancelled || !patch) return;
         const label = mode === "move" ? "移動音軌" : mode === "l" ? "修改音軌入點" : "修改音軌出點";
+        if (mode === "l") Object.assign(patch, keyPatch(item, shiftKeys(item, patch.start - base.start)));
         ops([{ op: "audio.update", id: item.id, patch }], { label });
       },
     });
@@ -485,14 +497,15 @@ export function AudioClip({ project, item, ctx, selected }) {
     .filter(Boolean).join(" ");
   const fi = Math.min(Number(item.fadeIn || 0), len / 2) * pps;
   const fo = Math.min(Number(item.fadeOut || 0), len / 2) * pps;
-  return html`<div class=${cls} style=${`left:${cur.start * pps}px;width:${width}px`}
-    title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(len, 2)}，雙擊跳到開頭`}
+  return html`<div class=${cls} style=${`left:${cur.start * pps}px;width:${width}px`} data-sel=${`audio:${item.id}`}
+    title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(len, 2)}，雙擊跳到開頭，Shift+點擊加關鍵幀`}
     onPointerDown=${(e) => begin(e, "move")} onDblClick=${() => setTime(cur.start)}>
     ${media && html`<${Wave} pid=${project.id} media=${media} tIn=${cur.in} len=${len} width=${width} />`}
     ${fi > 1 && html`<i class="tl-fade is-in" style=${`width:${fi}px`}></i>`}
     ${fo > 1 && html`<i class="tl-fade is-out" style=${`width:${fo}px`}></i>`}
     <div class="tl-audio-label"><${Icon} name=${item.muted ? "volume-x" : "music"} size=${12} />
       <span>${media ? name : "找不到音訊檔"}</span></div>
+    <${KeyMarks} item=${item} pps=${pps} drag=${drag} base=${base} length=${len} />
     <${Handles} onDown=${begin} />
     <${Tip} tip=${drag && drag.tip ? { ...drag.tip, t: drag.tip.t - cur.start } : null} pps=${pps} />
   </div>`;
@@ -502,17 +515,19 @@ export function AudioClip({ project, item, ctx, selected }) {
 // take has one (takes imported before waveforms were made for videos have none). It only shows the
 // sound: trims and moves happen on the picture lane, and its mute switch silences this lane too.
 // A click selects the shot, whose edit tab holds "轉成字幕".
+const playsOwnSound = (c) => c.source === "video" && c.take.hasAudio && !c.shot.audioDetached;
+
 export function hasSourceAudio(clips) {
-  return clips.some((c) => c.source === "video" && c.take.hasAudio);
+  return clips.some(playsOwnSound);
 }
 
 export function SourceAudioTrack({ project, clips, ctx, editSel }) {
   const { pps } = ctx;
-  return clips.filter((c) => c.source === "video" && c.take.hasAudio).map((c) => {
+  return clips.filter(playsOwnSound).map((c) => {
     const width = Math.max(4, c.length * pps);
     const name = shotLabel(c.shot, c.index);
     const sel = !!editSel && editSel.type === "shot" && editSel.id === c.shot.id;
-    return html`<div key=${c.shot.id} class=${`tl-audio tl-source${sel ? " is-selected" : ""}`}
+    return html`<div key=${c.shot.id} class=${`tl-audio tl-source${sel ? " is-selected" : ""}`} data-sel=${`shot:${c.shot.id}`}
       style=${`left:${c.start * pps}px;width:${width}px`}
       title=${`${name} 的原聲\n${fmtSeconds(c.start, 2)} 開始，長 ${fmtSeconds(c.length, 2)}，雙擊跳到開頭`}
       onPointerDown=${(e) => e.stopPropagation()} onDblClick=${() => setTime(c.start)}
@@ -611,7 +626,7 @@ export function OverlayClip({ project, item, ctx, selected }) {
           text = `長度 ${length.toFixed(2)} 秒`;
         }
         const t = insert ? insert.at : mode === "r" ? next.start + next.length : next.start;
-        setDrag({ ...next, dy, insert, tip: { t, text } });
+        setDrag({ ...next, mode, dy, insert, tip: { t, text } });
       },
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
@@ -626,6 +641,7 @@ export function OverlayClip({ project, item, ctx, selected }) {
         }
         const patch = {};
         for (const k of ["start", "in", "length"]) if (next[k] !== base[k]) patch[k] = next[k];
+        if (mode === "l" && patch.start != null) Object.assign(patch, keyPatch(item, shiftKeys(item, patch.start - base.start)));
         const list = [];
         let label = mode === "move" ? "移動片段" : "修剪片段";
         if (target === "new-layer") {
@@ -645,14 +661,15 @@ export function OverlayClip({ project, item, ctx, selected }) {
   const name = item.name || (media && media.name) || "片段";
   const thumb = media ? media.thumb || (still ? media.file : "") : "";
   const cls = ["tl-clip", "tl-pip", still ? "is-image" : "is-video", selected && "is-selected", !media && "is-missing",
-    drag && "is-dragging"].filter(Boolean).join(" ");
+    drag && "is-dragging", item.disabled && "is-off"].filter(Boolean).join(" ");
   const style = `left:${cur.start * pps}px;width:${width}px` + (drag && drag.dy ? `;transform:translateY(${drag.dy}px)` : "");
-  return html`<div class=${cls} style=${style}
-    title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n拖曳移動，上下拖曳換軌道，拖進「畫面」軌可穿插成鏡頭，拖曳左右邊緣修剪，雙擊跳到開頭`}
+  return html`<div class=${cls} style=${style} data-sel=${`overlay:${item.id}`}
+    title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n拖曳移動，上下拖曳換軌道，拖進「畫面」軌可穿插成鏡頭，拖曳左右邊緣修剪，雙擊跳到開頭，Shift+點擊加關鍵幀`}
     onPointerDown=${(e) => begin(e, "move")} onDblClick=${() => setTime(cur.start)}>
     ${thumb && html`<div class="tl-tiles" style=${`background-image:url("${fileUrl(project.id, thumb)}");background-size:auto 100%`}></div>`}
     <div class="tl-clip-label"><${Icon} name=${still ? "image" : "video"} size=${12} /><span>${media ? name : "找不到素材檔"}</span></div>
     <span class="tl-clip-dur mono">${fmtSeconds(cur.length, 1)}</span>
+    <${KeyMarks} item=${item} pps=${pps} drag=${drag} base=${base} length=${cur.length} />
     <${Handles} onDown=${begin} />
   </div>
   ${drag && drag.insert && html`<i class="tl-insert"

@@ -95,12 +95,19 @@ VC 也會自動找系統 PATH、imageio-ffmpeg 套件、WinGet 與 Scoop 安裝�
 | SKILL | 用途 |
 |---|---|
 | `interview-video-edit` | 指定一個訪談影片資料夾，自動轉 1080p、每位受訪者開一個 VC 專案、語音轉字幕、依規則標記或剪掉採訪者提問與長停頓、修字幕、輸出 |
+| `script-to-vc-storyboard` | 讀一份腳本（.docx、.txt、.md），由 Claude 設計景別、運鏡、字幕切分與每鏡秒數，產出 VC「匯入劇本」一列一鏡、內容不被改動的 Word 分鏡表，並用 VC 原始碼離線自檢 |
 
 ```bash
 cp -r "<VC 資料夾>/claude/skills/interview-video-edit" ~/.claude/skills/
 ```
 
+```bash
+cp -r "<VC 資料夾>/claude/skills/script-to-vc-storyboard" ~/.claude/skills/
+```
+
 `interview-video-edit` 需要步驟 3 的 ffmpeg 與步驟 4 的語音轉字幕；轉檔用 NVIDIA 硬體編碼（h264_nvenc），沒有 NVIDIA 顯示卡時改用 libx264，速度較慢。
+
+`script-to-vc-storyboard` 需要 python-docx；自檢要讀 VC 原始碼（`app/vc/script.py`），只有執行檔版時無法自檢，改成實際匯入 VC 目視確認。
 
 ## 步驟 7：連線測試
 
@@ -127,4 +134,5 @@ print("OK")
 - 刪除使用者既有的專案、清空垃圾桶、清除專案檔案（purge）之前先問使用者。
 - 會改變鏡頭位置或長度的修改用 `{"op": "linked", "ops": [...]}` 包起來，字幕才會跟著移動。
 - 每次 `ops` 呼叫是使用者介面上的一個復原步驟，相關的修改放在同一次呼叫裡，使用者按一次 Ctrl+Z 就能整批收回。
+- 在時間軸上分割、裁剪、定格、分離原聲、倒放、調整音量、加關鍵幀時，先用 `vc.timeline(pid)` 找片段位置，再用 `vc.edit(pid, 指令, ...)`（`docs/API.md` 3.7 節），結果和使用者按快捷鍵相同，不必自己組 op。
 - 長工作（匯入 4K 檔、語音轉字幕、輸出）可能要數十分鐘，用 `vc.wait(job_id)` 等待；4K 素材先轉成 1080p 再匯入會快很多。

@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from .net import HttpError, request
+from .pacing import beat_fields, time_beats
 from .script import MAX_SHOTS, normalize_shot
 from .secrets import SecretStore
 from .settings import SettingsStore
@@ -52,6 +53,30 @@ _SHOTS = (
     'composition; never titles, subtitles or other on-screen text, which go in "caption"), "motion" (how subjects and camera move), "camera" (shot size and camera move), '
     '"caption" (narration or dialogue to show as a subtitle, or ""), "duration" (seconds, a number from 2 to 10). '
     "Use the same language as the script; Traditional Chinese stays Traditional Chinese."
+)
+_DETAIL_SHOTS = (
+    "You are a film director planning coverage and editing rhythm. First read the whole script and find its "
+    "structure (opening, build-up, conflict or climax, resolution) and how intense each story beat is. Then cover "
+    "every beat with 2 to 5 shots of different sizes or angles (wide or establishing, medium, close-up, insert of "
+    "a hand or object, reaction, over-the-shoulder ...), keeping the same characters, wardrobe and setting across "
+    "a beat. A beat covered by a single shot is wrong: a script of 10 beats needs about 25 to 45 shots. "
+    "When the script already lays a beat out, follow its layout: each numbered action (1. 2. 3.) is its own shot, "
+    "a written close-up such as (特寫) is its own close-up, each speaker in a dialogue gets a shot of them speaking, "
+    "a camera direction in the remarks is its own shot, an information card's narration runs across its panels in "
+    "order, and a narrator's list (A、B、C) gets one shot per item. A fantasy or danger flash is 1 to 3 very short "
+    "shots of 0.5 to 1 second. Typical lengths: an establishing shot 4 to 6 seconds, an action 2 to 3.5 seconds, "
+    "a close-up 1.5 to 2.5 seconds, a spoken line as long as it takes to read. "
+    "Pace the cutting by the story, not by a fixed length: calm or emotional beats get fewer, longer shots; "
+    "tense or fast beats get more, shorter shots; never make every shot the same length. Narration is read at "
+    "about 4 Chinese characters per second: split each beat's narration at its pauses across that beat's shots so "
+    "every shot lasts at least as long as its own part. At most {limit} shots in story order. Reply with a JSON "
+    'array only, no markdown. Each item is an object with: "beat" (story beat number from 1), "pace" ("slow", '
+    '"medium" or "fast"), "name" (short title, at most 12 characters), "prompt" (start with the shot size, then what '
+    "the frame shows: subject, setting, lighting, composition; never titles, subtitles or other on-screen text), "
+    '"motion" (how subjects move), "camera" (shot size and camera move, e.g. "特寫，緩慢推近"), "caption" (the part '
+    'of the narration or dialogue heard during this shot, or ""), "duration" (seconds, a number from 0.8 to 10). '
+    "Write name, prompt, motion and camera in the script's language, not English: a Traditional Chinese script "
+    "gets Traditional Chinese fields."
 )
 
 
@@ -101,14 +126,20 @@ class LLMClient:
             raise AppError("LLM 沒有回傳譯文，請換個模型再試", 502)
         return result[:8000]
 
-    def script_to_shots(self, text: str) -> list[dict]:
+    def script_to_shots(self, text: str, detail: bool = False) -> list[dict]:
+        """detail: several sizes and angles per story beat, cut to the story's pace (shots carry beat and pace)."""
         text = (text or "").strip()
         if not text:
             raise AppError("請先貼上劇本或分鏡文字")
         if len(text) > MAX_INPUT:
             raise AppError(f"AI 拆解一次最多 {MAX_INPUT:,} 字，請分段處理或改用一般拆解")
-        reply = self.chat(_SHOTS.format(limit=60), text, timeout=300)
-        shots = [s for s in (normalize_shot(item) for item in _shot_list(_extract_json(reply))) if s]
+        if not detail:
+            reply = self.chat(_SHOTS.format(limit=60), text, timeout=300)
+            shots = [s for s in (normalize_shot(item) for item in _shot_list(_extract_json(reply))) if s]
+        else:
+            reply = self.chat(_DETAIL_SHOTS.format(limit=120), text, timeout=600)
+            shots = time_beats([{**s, **beat_fields(item)} for item in _shot_list(_extract_json(reply))
+                                if (s := normalize_shot(item))])
         if not shots:
             raise AppError("LLM 沒有拆出任何鏡頭，請換個模型或改用一般拆解", 502)
         return shots[:MAX_SHOTS]

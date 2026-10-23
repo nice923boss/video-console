@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from . import VERSION
 from .export import captions_srt, export_filename, shots_csv
+from .exportdir import file_ref, project_exports, unique_path
 from .sequence import video_take
 from .storyboard import render_storyboard, shot_picture
 from .util import AppError, replace_with_retry, safe_filename
@@ -32,7 +33,7 @@ def _entry(prefix: str, index: int, name: str, ext: str) -> str:
 
 
 def _latest_export(project_dir: Path) -> Path | None:
-    videos = [p for p in (project_dir / "exports").glob("*.mp4") if p.is_file()]
+    videos = [p for p in project_exports(project_dir) if p.suffix.lower() == ".mp4"]
     return max(videos, key=lambda p: p.stat().st_mtime) if videos else None
 
 
@@ -107,8 +108,10 @@ def build_package(
     opts: dict | None = None,
     on_progress: Callable[[float], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    out_dir: Path | None = None,
 ) -> dict:
-    """Write exports/<name>_<time>_package.zip and return {file, name, size, count, missing}."""
+    """Write <out_dir>/<name>_<time>_package.zip (default the project's exports/) and return
+    {file, name, size, count, missing}."""
     opts = {"includeVideos": True, "includeExport": True, "fullBackup": False, **(opts or {})}
     files, pictures, missing = plan_package(project, project_dir, opts)
     texts = {
@@ -124,10 +127,10 @@ def build_package(
     if srt:
         texts["captions.srt"] = srt
 
-    out_dir = project_dir / "exports"
+    out_dir = out_dir or project_dir / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = Path(export_filename(project)).stem + "_package.zip"
-    final = out_dir / name
+    final = unique_path(out_dir, Path(export_filename(project)).stem + "_package.zip")
+    name = final.name
     part = out_dir / f".{name}.part"
     total = max(1, sum(path.stat().st_size for _, path in files))
     done = 0
@@ -152,5 +155,5 @@ def build_package(
         part.unlink(missing_ok=True)
         raise
     log.info("Packaged %s (%d files, %d missing)", name, len(files) + len(texts), missing)
-    return {"file": f"exports/{name}", "name": name, "size": final.stat().st_size,
+    return {"file": file_ref(final, project_dir), "name": name, "size": final.stat().st_size,
             "count": len(files) + len(texts), "missing": missing}

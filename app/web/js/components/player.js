@@ -23,7 +23,7 @@ const isBool = (v) => typeof v === "boolean";
 const validView = (v) => !!v && isBool(v.safe) && isBool(v.thirds) && isBool(v.captions);
 const validVolume = (v) => !!v && typeof v.level === "number" && v.level >= 0 && v.level <= 1 && isBool(v.muted);
 
-// Advances the clock in real time while playing (backwards when clock.rate is -1). Seeks made
+// Advances the clock at clock.rate times real time while playing (backwards when it is negative). Seeks made
 // elsewhere (timeline, inspector) restart the timing from the new position; a buffering video holds
 // the clock for a few seconds at most.
 function createLoop(engine, loopRef) {
@@ -136,6 +136,7 @@ const captionHooks = {
     const n = (st.project.captions || []).filter((c) => usesStyle(st.project, c, id, legacy)).length;
     return `同樣式全部一起移動（${n} 句）`;
   },
+  dragDisabled: () => getState().watch,
 };
 
 // The engine plays media only forwards; backwards playback is drawn as a run of paused frames.
@@ -152,7 +153,7 @@ export function Player({ project, clips, hotkeys = true }) {
   const [view, setView] = usePref("vc.player.view", DEFAULT_VIEW, validView);
   const [volume, setVolume] = usePref("vc.player.volume", DEFAULT_VOLUME, validVolume);
   const [loop, setLoop] = usePref("vc.player.loop", false, isBool);
-  const [live, setLive] = useState({ playing: clock.playing, index: -1 });
+  const [live, setLive] = useState({ playing: clock.playing, index: -1, rate: 1 });
   const [full, setFull] = useState(false);
   const rootRef = useRef(null);
   const hostRef = useRef(null);
@@ -170,11 +171,13 @@ export function Player({ project, clips, hotkeys = true }) {
     engineRef.current = engine;
     const off = onClock((c) => {
       loopCtl.onClock(c);
-      engine.render(c.time, rolling(c));
+      engine.render(c.time, rolling(c), c.rate);
       if (timeRef.current) timeRef.current.textContent = fmtTime(c.time);
       const index = clipIndexAt(clipsRef.current, c.time);
-      if (liveRef.current.playing !== c.playing || liveRef.current.index !== index) {
-        liveRef.current = { playing: c.playing, index };
+      const rate = c.playing ? c.rate : 1;
+      const was = liveRef.current;
+      if (was.playing !== c.playing || was.index !== index || was.rate !== rate) {
+        liveRef.current = { playing: c.playing, index, rate };
         setLive(liveRef.current);
       }
     });
@@ -193,7 +196,7 @@ export function Player({ project, clips, hotkeys = true }) {
   useEffect(() => {
     engineRef.current.setProject(project, clips, legacy);
     setDuration(sequenceDuration(clips));
-    engineRef.current.render(clock.time, rolling(clock));
+    engineRef.current.render(clock.time, rolling(clock), clock.rate);
     if (timeRef.current) timeRef.current.textContent = fmtTime(clock.time);
   }, [project, clips, legacy]);
 
@@ -257,6 +260,7 @@ export function Player({ project, clips, hotkeys = true }) {
       <${IconButton} icon="skip-forward" size=${17} title=${`下一個鏡頭${keyHint("edit.nextEdit")}`} disabled=${!clips.length}
         onClick=${() => jumpClip(clips, 1)} />
       <span class="pl-time mono"><span ref=${timeRef}>${fmtTime(clock.time)}</span><span class="dim"> / ${fmtTime(total)}</span></span>
+      ${live.rate !== 1 && html`<span class="pl-rate mono" title="J、L 再按一次加速，空白鍵恢復正常">${live.rate}x</span>`}
       ${current && html`<span class="pl-clip dim" title=${shotLabel(current.shot, current.index)}>
         ${shotLabel(current.shot, current.index)}
       </span>`}

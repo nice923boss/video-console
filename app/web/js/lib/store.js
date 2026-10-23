@@ -32,6 +32,10 @@ const INITIAL = {
   voice: null,              // Audio8Voice for the cast editor: {loading, status, voices, presets, error}
   captionDragScope: null,   // "one" | "style" once picked; null: the viewer's saved choice
   gradeDraft: null,         // {id, grade}: an adjustment layer's grade while its panel control is dragged
+  editRange: null,          // {in, out}: the timeline range marked with I and O (seconds)
+  editTool: "select",       // timeline click tool: "select" | "blade"
+  keyPanel: false,          // the keyframe list in the edit properties panel is open
+  watch: false,             // watch mode (lib/watch.js): this window only shows the open project
 };
 
 let state = { ...INITIAL };

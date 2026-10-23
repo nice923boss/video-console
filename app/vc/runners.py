@@ -337,7 +337,7 @@ class Runners:
             notes.append(f"範本「{name}」不使用參考圖，已略過" if kind == "image"
                          else f"範本「{name}」不使用鏡頭圖片，改用文字生成")
             item = None
-        fps = int(tpl.get("defaultFps") or project["settings"]["fps"])
+        fps = round(float(tpl.get("defaultFps") or project["settings"]["fps"]))
         frames = 0
         if kind == "video":
             # The shot's chosen video seconds win over the shot length, like on the cloud providers
@@ -427,7 +427,7 @@ class Runners:
             "provider": prov.id,
             "mode": mode,
             "params": {},
-            "fps": int(project["settings"]["fps"]),
+            "fps": round(float(project["settings"]["fps"])),
             "frames": 0,
         }
         if kind == "video":

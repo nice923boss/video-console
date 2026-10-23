@@ -5,7 +5,8 @@ import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round, shotLabel } from "../lib/format.js";
-import { audioLength, overlayHeight, fitFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { audioLength, audioMedia, overlayHeight, fitFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { hasKeys, valueAt } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, voiceClip, generateVoices } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openCaptionStyleDialog } from "../dialogs/caption-style-dialog.js";
@@ -16,6 +17,8 @@ import { Button, IconButton, Field, DraftText, NumberInput, Slider, Segmented, T
 import { Icon } from "./icons.js";
 import { Inspector } from "./inspector.js";
 import { GradePanel } from "./grade-panel.js";
+import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
+import { addKeyframe } from "./tl-commands.js";
 
 const MAX_TIME = 36000;
 const MIN_LEN = 0.1;
@@ -53,7 +56,7 @@ function Seconds({ value, onCommit, min = 0, max = MAX_TIME, nullable = false, p
 }
 
 function AudioPanel({ project, item }) {
-  const media = (project.media || {})[item.mediaId];
+  const media = audioMedia(project, item);
   const full = media && media.duration ? Number(media.duration) : 0;
   const start = Number(item.start || 0);
   const tIn = Number(item.in || 0);
@@ -61,6 +64,8 @@ function AudioPanel({ project, item }) {
   const outLimit = full > 0 ? full : MAX_TIME;
   const name = item.name || (media && media.name) || "音訊";
   const pct = (v) => `${Math.round(v * 100)}%`;
+  const local = useClipTime(start, len, (item.keyframes || []).length > 0);
+  const here = () => clamp(clock.time - start, 0, len);
   const remove = () => {
     closePanel();
     ops([{ op: "audio.delete", id: item.id }], { label: "移除音軌" });
@@ -94,9 +99,10 @@ function AudioPanel({ project, item }) {
             onCommit=${(v) => updateAudio(item.id, { out: v != null && full > 0 && v >= full - 1e-3 ? null : v }, "修改音軌出點")} />
         <//>
       </div>
-      <${Field} label="音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
-        <${Slider} value=${Number(item.volume ?? 1)} min=${0} max=${4} step=${0.05} format=${pct}
-          onCommit=${(v) => updateAudio(item.id, { volume: round(v, 2) }, "音軌音量")} />
+      <${Field} label="音量" hint=${hasKeys(item, "volume") ? "音量有關鍵幀：這裡顯示並改寫播放頭位置的音量"
+        : "100% 是原始音量，最高 400%；預覽播放最高只到 100%"}>
+        <${Slider} value=${Number(valueAt(item, "volume", local, 1))} min=${0} max=${4} step=${0.05} format=${pct}
+          onCommit=${(v) => updateAudio(item.id, keyedPatch(item, here(), { volume: round(v, 2) }), "音軌音量")} />
       <//>
       <div class="row-2">
         <${Field} label="淡入">
@@ -108,6 +114,9 @@ function AudioPanel({ project, item }) {
       </div>
       <${Toggle} checked=${!!item.muted} label="靜音" hint="保留在時間軸上，但預覽與匯出都不播放"
         onChange=${(muted) => updateAudio(item.id, { muted }, muted ? "音軌靜音" : "取消靜音")} />
+      <${KeyList} item=${item} start=${start} length=${len} local=${local}
+        update=${(patch, label) => updateAudio(item.id, patch, label)}
+        onAdd=${() => addKeyframe(project, null, { type: "audio", id: item.id })} />
       ${media && html`<div class="src-info dim">
         <${Icon} name="music" size=${14} /><span class="grow">${media.name || media.file}</span>
         <span class="mono">${full > 0 ? fmtSeconds(full, 2) : "長度未知"}</span>
@@ -139,14 +148,19 @@ function OverlayPanel({ project, item }) {
   const name = item.name || (media && media.name) || "片段";
   const pct = (v) => `${Math.round(v * 100)}%`;
   const update = (patch, label) => ops([{ op: "overlay.update", id: item.id, patch }], { label });
+  const keyed = (item.keyframes || []).length > 0;
+  const local = useClipTime(start, len, keyed);
+  const at = (f, fallback) => Number(valueAt(item, f, local, fallback));
+  // Fields with keyframes change their key at the playhead.
+  const set = (values, label) => update(keyedPatch(item, clamp(clock.time - start, 0, len), values), label);
   const fw = Number(project.settings.width);
   const fh = Number(project.settings.height);
-  const w = Number(item.w || 0.35);
-  const h = overlayHeight(item, media, fw, fh);
+  const w = at("w", 0.35);
+  const h = overlayHeight({ ...item, w }, media, fw, fh);
   const mx = 0.03;
   const my = (0.03 * fw) / fh;
   const place = ({ x, y, w: size }) =>
-    update({ x: round(clamp(x, -1, 1), 4), y: round(clamp(y, -1, 1), 4), ...(size ? { w: size } : {}) }, "片段位置");
+    set({ x: round(clamp(x, -1, 1), 4), y: round(clamp(y, -1, 1), 4), ...(size ? { w: size } : {}) }, "片段位置");
   const spots = [
     { label: "滿版", ...fitFrame(media, fw, fh) },
     { label: "左上", x: mx, y: my },
@@ -183,33 +197,36 @@ function OverlayPanel({ project, item }) {
         <${Seconds} value=${tIn} max=${full > 0 ? Math.max(0, full - MIN_LEN) : MAX_TIME}
           onCommit=${(v) => update(full > 0 ? { in: v, length: round(Math.min(len, full - v), 3) } : { in: v }, "修改片段入點")} />
       <//>`}
-      <${Field} label="位置" hint="以畫面左上角為起點；也可以直接套用滿版或角落位置">
+      <${Field} label="位置" hint=${keyed ? "這個片段有關鍵幀：下面顯示播放頭位置的值，有關鍵幀的項目會改寫播放頭位置的關鍵幀"
+        : "以畫面左上角為起點；也可以直接套用滿版或角落位置"}>
         <div class="row">
           ${spots.map((s) => html`<${Button} size="sm" kind="ghost" onClick=${() => place(s)}>${s.label}<//>`)}
         </div>
       <//>
       <div class="row-2">
         <${Field} label="水平">
-          <${Slider} value=${Number(item.x || 0)} min=${-1} max=${1} step=${0.005} format=${pct}
-            onCommit=${(v) => update({ x: round(v, 4) }, "片段位置")} />
+          <${Slider} value=${at("x", 0)} min=${-1} max=${1} step=${0.005} format=${pct}
+            onCommit=${(v) => set({ x: round(v, 4) }, "片段位置")} />
         <//>
         <${Field} label="垂直">
-          <${Slider} value=${Number(item.y || 0)} min=${-1} max=${1} step=${0.005} format=${pct}
-            onCommit=${(v) => update({ y: round(v, 4) }, "片段位置")} />
+          <${Slider} value=${at("y", 0)} min=${-1} max=${1} step=${0.005} format=${pct}
+            onCommit=${(v) => set({ y: round(v, 4) }, "片段位置")} />
         <//>
       </div>
       <${Field} label="大小" hint="畫面寬度的百分比，高度依素材比例">
         <${Slider} value=${w} min=${0.05} max=${1} step=${0.01} format=${pct}
-          onCommit=${(v) => update({ w: round(v, 4) }, "片段大小")} />
+          onCommit=${(v) => set({ w: round(v, 4) }, "片段大小")} />
       <//>
       <${Field} label="不透明度">
-        <${Slider} value=${Number(item.opacity ?? 1)} min=${0} max=${1} step=${0.01} format=${pct}
-          onCommit=${(v) => update({ opacity: round(v, 2) }, "片段不透明度")} />
+        <${Slider} value=${at("opacity", 1)} min=${0} max=${1} step=${0.01} format=${pct}
+          onCommit=${(v) => set({ opacity: round(v, 2) }, "片段不透明度")} />
       <//>
       ${video && media.hasAudio && html`<${Field} label="音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
-        <${Slider} value=${Number(item.volume ?? 1)} min=${0} max=${4} step=${0.05} format=${pct}
-          onCommit=${(v) => update({ volume: round(v, 2) }, "片段音量")} />
+        <${Slider} value=${at("volume", 1)} min=${0} max=${4} step=${0.05} format=${pct}
+          onCommit=${(v) => set({ volume: round(v, 2) }, "片段音量")} />
       <//>`}
+      <${KeyList} item=${item} start=${start} length=${len} local=${local} update=${update}
+        onAdd=${() => addKeyframe(project, null, { type: "overlay", id: item.id })} />
       ${media && html`<div class="src-info dim">
         <${Icon} name=${video ? "video" : "image"} size=${14} /><span class="grow">${media.name || media.file}</span>
         <span class="mono">${full > 0 ? fmtSeconds(full, 2) : video ? "長度未知" : "圖片"}</span>

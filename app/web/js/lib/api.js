@@ -1,5 +1,6 @@
 // Thin fetch wrapper for the local server. Every state-changing request carries the X-VC header the
 // server requires, so a page from another origin cannot drive the API.
+import { getState } from "./store.js";
 
 export class ApiError extends Error {
   constructor(message, status = 0, detail = null) {
@@ -12,8 +13,22 @@ export class ApiError extends Error {
 
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const OFFLINE = "無法連線到 Video Console 伺服器，請確認程式仍在執行";
+const WATCHED = "觀看模式中，不會修改專案";
+
+// Watch mode backstop (lib/watch.js): no write to the open project leaves this window, whichever
+// control sent it. Marking it opened, showing its folder and copying it (open / reveal / duplicate) stay allowed.
+function watchBlocks(method, path, body) {
+  const { watch, pid } = getState();
+  if (!watch || !pid || !UNSAFE.has(method)) return false;
+  if (path === "/api/jobs" || path === "/api/jobs/batch") {
+    return !!body && (body.pid === pid || (body.jobs || []).some((j) => j.pid === pid));
+  }
+  const base = `/api/projects/${encodeURIComponent(pid)}`;
+  return (path === base || path.startsWith(`${base}/`)) && !/^\/(open|reveal|duplicate)$/.test(path.slice(base.length));
+}
 
 export async function request(method, path, body, { signal } = {}) {
+  if (watchBlocks(method, path, body)) throw new ApiError(WATCHED, 0);
   const headers = { Accept: "application/json" };
   const init = { method, headers, cache: "no-store", credentials: "same-origin", signal };
   if (UNSAFE.has(method)) headers["X-VC"] = "1";
@@ -54,6 +69,7 @@ export const api = {
 
 // Raw-body upload with progress (fetch has no upload progress events).
 export function upload(path, file, onProgress) {
+  if (watchBlocks("POST", path.split("?")[0])) return Promise.reject(new ApiError(WATCHED, 0));
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", path);

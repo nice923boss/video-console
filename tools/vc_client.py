@@ -157,6 +157,16 @@ class VC:
         """Apply one undoable batch. Wrap shot ops as {"op": "linked", "ops": [...]} to carry captions along."""
         return self.post(f"/api/projects/{pid}/ops", {"ops": ops, "label": label, "undoable": undoable})
 
+    def timeline(self, pid: str) -> dict:
+        """Where everything sits: {duration, clips (picture lane), items (other tracks), markers}."""
+        return self.get(f"/api/projects/{pid}/timeline")
+
+    def edit(self, pid: str, cmd: str, **params) -> dict:
+        """One named timeline edit as one undo step, e.g. edit(pid, "split", t=12.5) or
+        edit(pid, "volume", type="audio", id=aid, db=-3). Commands: split, splitAll, trim, freeze, detach,
+        restore, reverse, volume, keyframe (docs/API.md 3.7). Returns {rev, changed, label, id?, job?}."""
+        return self.post(f"/api/projects/{pid}/edit", {"cmd": cmd, **params})
+
     # ------------------------------------------------------------ files and jobs
     def upload(self, pid: str, path: str | Path, *, shot: str | None = None, target: str | None = None) -> dict:
         """Upload a file; returns the ingest job. With shot= the video becomes that shot's active take."""

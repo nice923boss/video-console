@@ -92,7 +92,7 @@ SHOT_SIZES: list[dict[str, str]] = [
 # Frame sizes are multiples of 8 (1080 is not a multiple of 16); the first size of each aspect is the default
 # picked with it. Generation never goes above a 720 short side (runners.GEN_SHORT_SIDE); the export scales up.
 ASPECTS: list[dict[str, Any]] = [
-    {"id": "16:9", "label": "16:9 橫式", "sizes": [[1280, 720], [1920, 1080], [1024, 576], [768, 448]]},
+    {"id": "16:9", "label": "16:9 橫式", "sizes": [[1920, 1080], [1280, 720], [1024, 576], [768, 448]]},
     {"id": "9:16", "label": "9:16 直式", "sizes": [[448, 768], [576, 1024], [720, 1280], [1080, 1920]]},
     {"id": "1:1", "label": "1:1 方形", "sizes": [[640, 640], [768, 768], [1024, 1024]]},
     {"id": "4:3", "label": "4:3", "sizes": [[768, 576], [1024, 768]]},

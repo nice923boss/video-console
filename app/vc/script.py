@@ -91,8 +91,17 @@ _ACTION_RE = re.compile(_ACTION)
 _QUOTE_RE = re.compile(
     r"(" + _SPEECH + r"|" + _ACTION + r"|[:：])\s*[:：]?\s*[「『“\"]([^」』”\"]{1,300})[」』”\"]"
 )
-# One spoken line in a sound column: 陳凱：(內心獨白)「……」 -> speaker, how it is said, the words.
-_SPEECH_LINE_RE = re.compile(r"^(?:([^「」:：()（）]{1,20})[:：])?\s*([(（][^)）]*[)）])?\s*「(.+)」[。．]?$")
+# A spoken line in a sound column: its speaker and how it is said (小蘭(奶音)：, 旁白(男、女)：, 尤哈、林哲：,
+# 同學D：（對著隊長說）), then the words, quoted or not. A colon before a digit is a time (4:00), not a speaker.
+_NAME = r"[^\s「」『』“”\"()（）:：，,。！？!?；;…～~]"
+_SPEAKER_RE = re.compile(
+    r"^(" + _NAME + r"{1,12})\s*([(（][^()（）]{0,20}[)）])?\s*[:：](?!\d)\s*([(（][^()（）]{0,30}[)）])?\s*")
+_HOW_RE = re.compile(r"^[(（][^()（）]{0,30}[)）]\s*")
+_QUOTED_RE = re.compile(r"^[「『“\"](.+?)(?:[」』”\"][。．]?)?$")
+# The next speaker in the same line: ……這上面有什麼特別的故事嗎？尤哈：這是我外婆織的……
+_TURN_RE = re.compile(r"(?<=[。！？!?…～~」』”])\s*(?=(?!第)" + _NAME + r"{1,8}(?:[(（][^()（）]{0,20}[)）])?[:：](?!\d))")
+# A stage direction on a line of its own, its opening bracket sometimes left out: (畫面接入幻想)、畫面接入電視內容)
+_DIRECTION_RE = re.compile(r"^[(（]?[^()（）「」『』“”]{1,30}[)）]$")
 # A clause that describes a camera move (so it belongs to the video motion text).
 _MOVE_RE = re.compile(
     r"(運鏡|推鏡|拉鏡|搖鏡|移鏡|跟拍|跟鏡|空拍|航拍|手持鏡頭|固定鏡頭|鏡頭固定|鏡頭不動|環繞拍攝|鏡頭從"
@@ -433,23 +442,57 @@ def _is_index(value: str) -> bool:
     return bool(re.fullmatch(r"[#＃]?\s*" + _NUM + r"[.、]?", value.strip()))
 
 
-def _speech_cell(value: str, fields: dict[str, list[str]]) -> None:
-    """A sound column: spoken lines are the caption (their speakers go to the notes), 音樂：/音效： lines the notes."""
+def _spoken(line: str) -> tuple[str, str, str] | None:
+    """(speaker, how it is said, words) of a spoken line, ("", "（direction）", "") of a stage direction, None for
+    plain narration. A name over 8 characters, or a field label such as 畫面：, needs quotes to count as a speaker."""
+    if _DIRECTION_RE.match(line):
+        return "", "（" + line.strip("(（)） ") + "）", ""
+    m = _SPEAKER_RE.match(line)
+    if m and _ALIAS_FIELD.get(m.group(1).lower(), "caption") != "caption":
+        m = None
+    rest = line[m.end():] if m else line
+    how = "".join(g for g in (m.groups()[1:] if m else ()) if g)
+    if not m and (lead := _HOW_RE.match(rest)):  # (內心獨白)「……」
+        how, rest = lead.group().strip(), rest[lead.end():]
+    quoted = _QUOTED_RE.match(rest)
+    if not quoted and (not m or len(m.group(1)) > 8):
+        return None
+    words = quoted.group(1) if quoted else rest
+    if lead := _HOW_RE.match(words):  # 爸爸：「(鎖上動作) 幸好……」
+        how, words = how + lead.group().strip(), words[lead.end():]
+    return (m.group(1) if m else ""), how, words
+
+
+def _turns(line: str) -> list[str]:
+    """A line that opens with a speaker, cut where another speaker takes over; any other line as it is."""
+    return [t for t in _TURN_RE.split(line) if t.strip()] if _SPEAKER_RE.match(line) else [line]
+
+
+def _speech_cell(value: str, fields: dict[str, list[str]]) -> list[list[str]]:
+    """A sound column: spoken lines are the caption (their speakers go to the notes), 音樂：/音效： lines and stage
+    directions the notes. Returns the spoken lines in order as [speaker, words, how it is said] ("" for an unnamed
+    narrator)."""
     lines = [ln.strip() for ln in value.split("\n") if ln.strip()]
     sound = [ln for ln in lines if (m := _LABEL_RE.match(ln)) and _ALIAS_FIELD[m.group(1).lower()] == "notes"]
-    spoken = [(ln, _SPEECH_LINE_RE.match(ln)) for ln in lines if ln not in sound]
-    if not sound and not any(m for _, m in spoken):
+    spoken = [(t, _spoken(t)) for ln in lines if ln not in sound for t in _turns(ln)]
+    if not sound and not any(read for _, read in spoken):
         fields["caption"].append(value)  # plain narration: the cell is the caption as it is
-        return
+        return [["", _tidy(value), ""]]
     speakers: list[str] = []
-    for line, m in spoken:
-        fields["caption"].append(m.group(3) if m else line)
-        who = ((m.group(1) or "").strip() + (m.group(2) or "")) if m else ""
-        if who and who not in speakers:
-            speakers.append(who)
+    out: list[list[str]] = []
+    for line, read in spoken:
+        name, how, words = read or ("", "", line)
+        if not words:
+            fields["notes"].append(how)
+            continue
+        fields["caption"].append(words)
+        out.append([name, _tidy(words), how])
+        if (name or how) and name + how not in speakers:
+            speakers.append(name + how)
     fields["notes"].extend(sound)
     if speakers:
         fields["notes"].append("說話者：" + "／".join(speakers))
+    return out
 
 
 def _parse_table(rows: list[list[str]]) -> list[dict]:
@@ -461,6 +504,7 @@ def _parse_table(rows: list[list[str]]) -> list[dict]:
     for row in rows[1:] if has_header else rows:
         cells = [_BOLD_RE.sub("", c).strip() for c in row]
         fields: dict[str, list[str]] = defaultdict(list)
+        lines: list[list[str]] = []
         if has_header:
             for i, value in enumerate(cells):
                 field = header[i] if i < len(header) else None
@@ -470,7 +514,7 @@ def _parse_table(rows: list[list[str]]) -> list[dict]:
                     if not _is_index(value):
                         fields["name"].append(value)
                 elif field == "caption":
-                    _speech_cell(value, fields)
+                    lines.extend(_speech_cell(value, fields))
                 else:
                     fields[field or "extra"].append(value)
         else:
@@ -488,7 +532,8 @@ def _parse_table(rows: list[list[str]]) -> list[dict]:
                 fields["motion"].extend(rest[main + 1:])
         shot = _finish(fields)
         if shot:
-            shots.append(shot)
+            # who says what, line by line, for the detailed breakdown (vc.pacing) to give each its own shot
+            shots.append({**shot, "lines": [ln for ln in lines if ln[1]]} if has_header else shot)
     return shots
 
 

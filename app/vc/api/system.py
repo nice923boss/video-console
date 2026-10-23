@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from .. import VERSION
 from ..captions import list_fonts
+from ..exportdir import ensure_root, export_root
 from ..presets import all_presets
 from ..server import Request, Router
 from ..util import AppError
@@ -53,7 +54,7 @@ def open_folder(path: Path) -> None:
     if sys.platform != "win32":
         raise AppError("只有 Windows 支援開啟資料夾", 501)
     path.mkdir(parents=True, exist_ok=True)
-    os.startfile(path)  # noqa: S606 - a fixed folder inside the data directory
+    os.startfile(path)  # noqa: S606 - a data folder or the export folder from settings
 
 
 def register(router: Router, app: App) -> None:
@@ -94,7 +95,12 @@ def register(router: Router, app: App) -> None:
     @router.route("POST", "/api/system/reveal")
     def reveal_folder(req: Request) -> None:
         what = str(req.json_object().get("what") or "data")
-        folders = {"data": app.paths.data, "logs": app.paths.logs, "workflows": app.paths.workflows}
+        if what == "exports":
+            folder = str(app.settings.section("export").get("folder") or "")
+            open_folder(ensure_root(export_root(folder, app.paths.data)))
+            return
+        folders = {"data": app.paths.data, "logs": app.paths.logs, "workflows": app.paths.workflows,
+                   "projects": app.paths.projects}
         if what not in folders:
             raise AppError("不支援的資料夾")
         open_folder(folders[what])

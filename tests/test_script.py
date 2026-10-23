@@ -12,7 +12,7 @@ from vc.util import AppError
 
 
 def brief(shot: dict) -> dict:
-    return {k: v for k, v in shot.items() if v}
+    return {k: v for k, v in shot.items() if v and k != "lines"}  # lines: test_sound_cells_keep_who_says_what
 
 
 def make_docx(*blocks: str | list[list[str]]) -> bytes:
@@ -266,6 +266,30 @@ def test_auto_mode_reads_common_formats(text, mode, shots):
 
     assert result["mode"] == mode
     assert [brief(s) for s in result["shots"]] == shots
+
+
+@pytest.mark.parametrize("cell, lines, notes", [
+    ("小女孩：(大喊)「爸爸回來了！」", [["小女孩", "爸爸回來了！", "(大喊)"]], "說話者：小女孩(大喊)"),
+    ("陳凱：好啊，一起吃", [["陳凱", "好啊，一起吃", ""]], "說話者：陳凱"),
+    ("陳凱：「這上面有什麼特別的故事嗎？」尤哈：這是我外婆織的", [["陳凱", "這上面有什麼特別的故事嗎？", ""],
+                                                    ["尤哈", "這是我外婆織的", ""]], "說話者：陳凱／尤哈"),
+    ("(畫面接入幻想)\n旁白：「如果每天都能這樣就好了。」", [["旁白", "如果每天都能這樣就好了", ""]],
+     "（畫面接入幻想）\n說話者：旁白"),
+    ("尤哈、林哲：「謝謝你！」", [["尤哈、林哲", "謝謝你！", ""]], "說話者：尤哈、林哲"),
+    ("旁白(男、女)：安全的一天", [["旁白", "安全的一天", "(男、女)"]], "說話者：旁白(男、女)"),
+    ("下午 4:00 放學鐘響", [["", "下午 4:00 放學鐘響", ""]], ""),
+    ("音樂：輕快的配樂", [], "音樂：輕快的配樂"),
+], ids=["how", "unquoted", "two-in-a-line", "stage-direction", "several-speakers", "narrator-how", "time", "music"])
+def test_sound_cells_keep_who_says_what(cell, lines, notes):
+    [shot] = parse_script(f'鏡號\t影像\t聲音\n1\t清晨漁港\t"{cell}"\n')["shots"]
+
+    assert shot["lines"] == lines
+    assert shot["notes"] == notes
+
+
+def test_only_tables_with_a_header_keep_the_lines():
+    assert "lines" not in parse_script("1\t清晨漁港\t陳凱：「早安！」\n2\t燈塔夕照\t晚安\n")["shots"][0]
+    assert "lines" not in parse_script(CASES["numbered"][0])["shots"][0]
 
 
 def test_untitled_heading_line_is_reported():

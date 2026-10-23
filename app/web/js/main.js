@@ -4,6 +4,7 @@ import { html, render, useEffect, useState } from "./lib/h.js";
 import { getState, setState, subscribe, useStore } from "./lib/store.js";
 import { connectEvents } from "./lib/events.js";
 import { navigate, undo, redo, importProjectZip } from "./lib/actions.js";
+import { readWatch } from "./lib/watch.js";
 import { useKeymap, allCommands, PALETTE_GROUP } from "./lib/keymap.js";
 import { buildCommands } from "./commands.js";
 import { Rail, TopBar, StatusBar, VIEWS, VIEW_LABEL } from "./components/shell.js";
@@ -183,6 +184,7 @@ window.addEventListener("drop", (e) => {
 
 const initial = viewFromHash();
 if (initial) setState({ view: initial });
+if (readWatch()) setState({ watch: true });
 subscribe(syncLocation);
 
 const root = document.getElementById("app");

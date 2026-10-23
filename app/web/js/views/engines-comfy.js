@@ -177,7 +177,7 @@ function SharedOptions({ comfy, workflows }) {
     <${Toggle} checked=${comfy.livePreview !== false} onChange=${(v) => save({ livePreview: v })}
       label="生成時顯示即時預覽" hint="ComfyUI 有開啟預覽時，佇列與鏡頭卡片會顯示生成中的畫面" />
     <${Toggle} checked=${!!comfy.useComfyOrgKey} onChange=${(v) => save({ useComfyOrgKey: v })}
-      label="使用 Comfy 官方 API 節點" hint="工作流程含 Comfy.org 付費 API 節點（例如 Kling、Veo 節點）時，隨工作送出下面的金鑰" />
+      label="使用 Comfy 官方 API 節點" hint="工作流程含 Comfy.org 付費 API 節點（例如 Runway、Luma 節點）時，隨工作送出下面的金鑰" />
     ${comfy.useComfyOrgKey && html`<${SecretField} name="comfyorg.api_key" label="Comfy.org API 金鑰"
       help="只在送出工作時附加給 ComfyUI，不會寫進工作紀錄。" />`}
   <//>`;

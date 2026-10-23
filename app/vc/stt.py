@@ -205,10 +205,11 @@ def caption_ops(cues: list[tuple[float, float, str]], clip: dict) -> list[dict]:
     """caption.add ops placing clip-relative subtitles on the timeline, clamped to the clip."""
     base = float(clip["start"])
     limit = base + float(clip["length"])
+    speed = float(clip.get("speed") or 1.0)  # cue times are in the source; a faster clip shortens them
     ops = []
     for start, end, text in cues:
-        a = round(base + max(0.0, start), 3)
-        b = round(min(base + end, limit), 3)
+        a = round(base + max(0.0, start) / speed, 3)
+        b = round(min(base + end / speed, limit), 3)
         if b - a < MIN_CUE:
             continue
         ops.append({"op": "caption.add", "item": {"id": new_id("c"), "start": a, "end": b, "text": text[:500],

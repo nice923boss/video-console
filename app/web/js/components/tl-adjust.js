@@ -9,8 +9,9 @@ import { clock, setTime } from "../lib/clock.js";
 import { fmtSeconds, newId, round, clamp } from "../lib/format.js";
 import { clipIndexAt } from "../lib/sequence.js";
 import { defaultGrade, isNeutral } from "../lib/grade.js";
+import { shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { Icon } from "./icons.js";
-import { dragPointer, snapRange, Tip, Handles } from "./tl-tracks.js";
+import { dragPointer, snapRange, Tip, Handles, KeyMarks } from "./tl-tracks.js";
 
 export const ADJUST_H = 30;
 
@@ -84,7 +85,7 @@ export function AdjustTrack({ project, ctx, editSel }) {
           next = { start: base.start, length: round(clamp(snap(end + shift, ev) - base.start, MIN_ITEM, MAX_TIME), 3) };
         }
         const text = mode === "move" ? `開始 ${next.start.toFixed(2)} 秒` : `長度 ${next.length.toFixed(2)} 秒`;
-        setDrag({ id: item.id, ...next, tip: { t: mode === "r" ? next.start + next.length : next.start, text } });
+        setDrag({ id: item.id, mode, ...next, tip: { t: mode === "r" ? next.start + next.length : next.start, text } });
       },
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
@@ -95,6 +96,7 @@ export function AdjustTrack({ project, ctx, editSel }) {
         if (cancelled || !next) return;
         const patch = {};
         for (const k of ["start", "length"]) if (next[k] !== base[k]) patch[k] = next[k];
+        if (mode === "l" && patch.start != null) Object.assign(patch, keyPatch(item, shiftKeys(item, patch.start - base.start)));
         if (Object.keys(patch).length) {
           ops([{ op: "adjust.update", id: item.id, patch }], { label: mode === "move" ? "移動調整圖層" : "修改調整圖層長度" });
         }
@@ -104,17 +106,21 @@ export function AdjustTrack({ project, ctx, editSel }) {
 
   const items = [...(project.adjustments || [])].sort((a, b) => Number(a.start || 0) - Number(b.start || 0));
   return html`${items.map((item) => {
-    const cur = drag && drag.id === item.id ? drag : { start: Number(item.start || 0), length: Number(item.length || MIN_ITEM) };
+    const base = { start: Number(item.start || 0), length: Number(item.length || MIN_ITEM) };
+    const mine = drag && drag.id === item.id ? drag : null;
+    const cur = mine || base;
     const sel = !!editSel && editSel.type === "adjust" && editSel.id === item.id;
     const plain = isNeutral(item.grade);
     const cls = ["tl-adj", sel && "is-selected", item.hidden && "is-off", drag && drag.id === item.id && "is-dragging"]
       .filter(Boolean).join(" ");
     return html`<div key=${item.id} class=${cls} style=${`left:${cur.start * pps}px;width:${Math.max(4, cur.length * pps)}px`}
-      title=${`${adjustName(item)}${item.hidden ? "（已停用）" : ""}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n調色套用到下方所有畫面；拖曳移動，拖曳左右邊緣改長度，雙擊跳到開頭`}
+      data-sel=${`adjust:${item.id}`}
+      title=${`${adjustName(item)}${item.hidden ? "（已停用）" : ""}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n調色套用到下方所有畫面；拖曳移動，拖曳左右邊緣改長度，雙擊跳到開頭，Shift+點擊加關鍵幀`}
       onPointerDown=${(e) => begin(e, item, "move")} onDblClick=${() => setTime(cur.start)}>
       <${Icon} name=${item.hidden ? "eye-off" : "palette"} size=${12} class="tl-adj-icon" />
       <span class="tl-adj-name">${adjustName(item)}</span>
       ${plain && cur.length * pps > 110 && html`<span class="tl-adj-note">未調色</span>`}
+      <${KeyMarks} item=${item} pps=${pps} drag=${mine} base=${base} length=${cur.length} />
       <${Handles} onDown=${(e, side) => begin(e, item, side)} />
     </div>`;
   })}

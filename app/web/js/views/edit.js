@@ -1,5 +1,5 @@
 // Edit view: the preview player on top, the timeline below (drag the divider to resize it), and the
-// property panel for whatever is selected on the timeline.
+// property panel for whatever is selected on the timeline (not shown in watch mode, which changes nothing).
 import { html, useMemo, useRef } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { navigate } from "../lib/actions.js";
@@ -20,7 +20,7 @@ const TL_KEY_STEP = 24;
 const validHeight = (v) => Number.isFinite(v) && v >= TL_MIN && v <= 4000;
 
 export function EditView() {
-  const { project, editSel } = useStore((s) => ({ project: s.project, editSel: s.editSel }));
+  const { project, editSel, watch } = useStore((s) => ({ project: s.project, editSel: s.editSel, watch: s.watch }));
   const [height, setHeight] = usePref("vc.edit.tlh", TL_DEFAULT, validHeight);
   const mainRef = useRef(null);
   const clips = useMemo(() => (project ? buildSequence(project) : []), [project]);
@@ -89,6 +89,6 @@ export function EditView() {
         <${Timeline} project=${project} clips=${clips} />
       </div>
     </section>
-    <${EditProps} project=${project} sel=${editSel} />
+    ${!watch && html`<${EditProps} project=${project} sel=${editSel} />`}
   </div>`;
 }

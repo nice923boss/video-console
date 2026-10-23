@@ -1,6 +1,7 @@
-// Command palette (Ctrl+K): ranked search over actions, views, shots and projects.
+// Command palette (Ctrl+Shift+P by default): ranked search over actions, views, shots and projects.
 import { html, useState, useMemo, useRef, useEffect, useLayoutEffect } from "../lib/h.js";
 import { useHotkeys } from "../lib/keys.js";
+import { keysOf } from "../lib/keymap.js";
 import { Icon } from "./icons.js";
 import { Keys } from "./ui.js";
 import { openModal } from "./overlay.js";
@@ -120,9 +121,10 @@ function Palette({ commands, close, placeholder }) {
   const move = (d) => {
     if (picks.length) setActive((a) => (Math.min(a, picks.length - 1) + d + picks.length) % picks.length);
   };
+  const closeKeys = Object.fromEntries(keysOf("app.palette").map((k) => [k, { fn: () => close(null), allowInInput: true }]));
   useHotkeys({
+    ...closeKeys,
     escape: { fn: () => close(null), allowInInput: true },
-    "mod+k": { fn: () => close(null), allowInInput: true },
     arrowdown: { fn: () => move(1), allowInInput: true },
     arrowup: { fn: () => move(-1), allowInInput: true },
     tab: { fn: () => move(1), allowInInput: true },

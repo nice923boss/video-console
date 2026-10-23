@@ -11,6 +11,7 @@ import { Icon } from "../components/icons.js";
 import { confirmDialog } from "../components/overlay.js";
 import { toast, toastError } from "../components/toast.js";
 import { useSectionDraft, DraftFoot } from "./settings-draft.js";
+import { defaultExportFolder } from "../components/export-folder.js";
 
 const ENCODERS = [
   { value: "auto", label: "自動偵測顯示卡（NVIDIA、AMD、Intel，都沒有就用 CPU）" },
@@ -67,14 +68,18 @@ export function OutputSection() {
   const ffmpegCfg = useStore((s) => s.settings.ffmpeg);
   const exportCfg = useStore((s) => s.settings.export);
   const ffmpeg = useStore((s) => (s.system && s.system.ffmpeg) || { available: false, path: "", version: "" });
+  const defaultFolder = useStore((s) => defaultExportFolder(s.system && s.system.dataDir));
   const saved = { path: ffmpegCfg.path || "", encoder: ffmpegCfg.encoder || "auto", quality: exportCfg.quality,
-    burnCaptions: !!exportCfg.burnCaptions, captionSize: exportCfg.captionSize };
+    burnCaptions: !!exportCfg.burnCaptions, captionSize: exportCfg.captionSize, folder: exportCfg.folder || "" };
   const form = useSectionDraft(saved, (d) => ({
     ffmpeg: { path: d.path.trim().replace(/^"(.*)"$/, "$1"), encoder: d.encoder },
-    export: { quality: d.quality, burnCaptions: d.burnCaptions, captionSize: d.captionSize },
+    export: { quality: d.quality, burnCaptions: d.burnCaptions, captionSize: d.captionSize,
+      folder: d.folder.trim().replace(/^"(.*)"$/, "$1") },
   }), "已儲存影片輸出設定");
   const { draft, set } = form;
   const pathError = draft.path.trim() && !/\.exe"?$/i.test(draft.path.trim()) ? "請填 ffmpeg.exe 的完整路徑" : "";
+  const folder = draft.folder.trim().replace(/^"(.*)"$/, "$1");
+  const folderError = folder && !/^([a-zA-Z]:[\\/]|\\\\)/.test(folder) ? "請填完整路徑，例如 D:\\影片輸出" : "";
   const save = async () => {
     const pathChanged = draft.path.trim() !== saved.path;
     if (await form.save() && pathChanged) await refreshSystem("/api/system/ffmpeg");
@@ -100,7 +105,14 @@ export function OutputSection() {
     </div>
     <${Toggle} checked=${draft.burnCaptions} onChange=${(burnCaptions) => set({ burnCaptions })} label="預設把字幕燒進畫面"
       hint="關閉時影片不含字幕，SRT 字幕檔可在輸出對話框另外下載" />
-    <${DraftFoot} form=${form} invalid=${!!pathError} onSave=${save} />
+    <${Field} label="匯出資料夾" error=${folderError}
+        hint=${`所有專案輸出的影片與 ZIP 都存到這裡，留白使用預設位置 ${defaultFolder}。改了只影響之後的輸出，舊檔案留在原處，仍列在各專案的輸出成品`}
+        after=${html`<${Button} size="sm" kind="ghost" icon="folder-open" title="開啟目前儲存的匯出資料夾"
+          onClick=${() => revealSystemFolder("exports")}>開啟<//>`}>
+      <${TextInput} mono value=${draft.folder} spellcheck=${false} placeholder=${defaultFolder}
+        onChange=${(folder) => set({ folder })} />
+    <//>
+    <${DraftFoot} form=${form} invalid=${!!pathError || !!folderError} onSave=${save} />
   </div>`;
 }
 

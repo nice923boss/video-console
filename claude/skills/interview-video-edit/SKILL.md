@@ -1,7 +1,7 @@
 ---
 name: interview-video-edit
 description: "訪談影片剪輯：指定一個訪談影片資料夾（攝影機 MXF、MOV、MP4 都可），自動轉成 1080p、每位受訪者在 Video Console 開一個專案、語音轉字幕、依規則標記或剪掉採訪者提問、倒數、NG 與長停頓、整理字幕（18 字、去贅詞、同音字），驗證畫面音軌字幕對齊並輸出 SRT。兩種模式：標記模式（預設，切出片段改顏色寫備註，交給使用者決定刪不刪）與重組模式（移動講者前後的話讓對話更順，直接刪除不要的片段，不標色）。觸發語：剪訪談影片、剪受訪影片、幫我剪這個資料夾的訪談、訪談影片上字幕、用 VC 剪訪談。"
-version: 1.3.0
+version: 1.4.0
 ---
 
 # 訪談影片剪輯（interview-video-edit）
@@ -242,4 +242,4 @@ python "<SKILL>/scripts/interview_edit.py" export "<工作資料夾>"           
 | `scripts/interview_edit.py` | prepare、apply、verify、export |
 | `scripts/vc_client.py` | VC API 用戶端（和 `<VC>/tools/vc_client.py` 相同，只用標準庫） |
 
-VC 的完整 API 在 `<VC>/docs/API.md`。
+VC 的完整 API 在 `<VC>/docs/API.md`。使用者要在時間軸上補剪（某個時間點分割、裁剪、定格、分離原聲、倒放、調整一段音量、加關鍵幀）時，用 `vc.timeline(pid)` 找片段位置，再用 `vc.edit(pid, 指令, ...)`，結果和使用者在剪輯頁按快捷鍵相同，一次呼叫是一個復原步驟（API.md 3.7 節）。

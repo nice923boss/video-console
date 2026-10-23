@@ -20,6 +20,12 @@ const BACKEND_LABEL = { comfy: "ComfyUI", provider: "雲端 API", local: "本機
 
 const nowSec = () => Date.now() / 1000;
 
+// Quick presses on a row's buttons (cancel, then cancel the next one) also make a double click, and once
+// the first press has moved the list the second can land on another row's body. A double click that soon
+// after a button press is that, not "go to the result".
+let buttonPressedAt = 0;
+const DOUBLE_PRESS_MS = 1000;
+
 // "ComfyUI · Z-Image Turbo", "雲端 API · fal.ai 圖片", "本機 ffmpeg".
 export function laneLabel(job, { providers = NONE, workflows = NONE, comfy = NONE } = {}) {
   const p = job.payload || {};
@@ -135,7 +141,9 @@ export function JobRow({ job, project = null, projectName = "" }) {
     finished && { label: "從清單移除", icon: "trash", onClick: () => removeJob(job.id) },
   ]);
 
-  return html`<div class=${`job-row is-${job.status}`} onDblClick=${() => revealJob(job.id)}>
+  const onDblClick = () => { if (Date.now() - buttonPressedAt > DOUBLE_PRESS_MS) revealJob(job.id); };
+
+  return html`<div class=${`job-row is-${job.status}`} onDblClick=${onDblClick}>
     <div class="job-lead"><${JobLead} job=${job} project=${project} /></div>
     <div class="job-main">
       <div class="job-line">
@@ -159,7 +167,7 @@ export function JobRow({ job, project = null, projectName = "" }) {
         <${Icon} name="info" size=${13} />${job.notes[0]}${job.notes.length > 1 ? `（另有 ${job.notes.length - 1} 則）` : ""}
       </div>`}
     </div>
-    <div class="job-actions">
+    <div class="job-actions" onPointerDown=${() => { buttonPressedAt = Date.now(); }}>
       ${job.status === "queued" && html`<${IconButton} icon="to-top" size=${16} title="移到最前面" onClick=${() => moveJobTop(job.id)} />`}
       ${finished && job.status !== "done" && html`<${IconButton} icon="retry" size=${16} title="重試" onClick=${() => retryJob(job.id)} />`}
       ${job.status === "done" && html`<${IconButton} icon="arrow-right" size=${16} title="前往結果" onClick=${() => revealJob(job.id)} />`}

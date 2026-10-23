@@ -3,7 +3,7 @@
 
 const subs = new Set();
 
-// rate: 1 plays forwards, -1 backwards (J/K/L); stopping resets it to forwards.
+// rate: 1 plays forwards, -1 backwards; J/L pressed again doubles it up to 8x. Stopping resets it to 1.
 export const clock = { time: 0, playing: false, duration: 0, rate: 1 };
 
 function emit() {
@@ -29,15 +29,19 @@ export function togglePlay() {
   setPlaying(!clock.playing);
 }
 
-// J/K/L shuttle at normal speed: dir -1 plays backwards, 1 forwards.
+const MAX_SHUTTLE = 8;
+
+// J/L shuttle: dir -1 plays backwards, 1 forwards; pressing the same way again while playing goes 2x, 4x, 8x.
 export function shuttle(dir) {
   if (dir < 0 && clock.time <= 0) {
     setPlaying(false);
     return;
   }
   if (dir > 0 && !clock.playing && clock.duration > 0 && clock.time >= clock.duration - 0.05) clock.time = 0;
-  if (clock.playing && clock.rate === dir) return;
-  clock.rate = dir;
+  const same = clock.playing && Math.sign(clock.rate) === dir;
+  const rate = same ? dir * Math.min(MAX_SHUTTLE, Math.abs(clock.rate) * 2) : dir;
+  if (clock.playing && clock.rate === rate) return;
+  clock.rate = rate;
   clock.playing = true;
   emit();
 }

@@ -151,22 +151,28 @@ class FalVideo(_Fal):
     modes = ("i2v", "t2v")
     key_owner = "fal-image"
     expected_seconds = 180
-    notes = ("共用「fal.ai 圖片」的金鑰。可靈（Kling）、海螺（MiniMax Hailuo）、Wan 等較新的版本都從這裡選，"
+    notes = ("共用「fal.ai 圖片」的金鑰。Lightricks LTX、Luma Ray、可靈（Kling）、海螺（MiniMax Hailuo）、Wan 等較新的版本都從這裡選，"
              "模型清單會自動向 fal.ai 查詢，每個模型能設定的秒數也一起偵測，鏡頭的「影片秒數」只會列出該模型支援的值。"
+             "LTX 2.5 文字轉影片只有 16:9 與 9:16，1:1 專案請改用 Luma Ray 或可靈。"
              "Wan 沒有秒數參數，用影格數控制長度，請在額外參數填 num_frames。")
     model_keys = {"i2v": "model", "t2v": "modelT2V"}
     fields = (
         combo("model", "圖轉影片模型",
-              ["fal-ai/kling-video/v3/turbo/standard/image-to-video", "fal-ai/kling-video/v3/turbo/pro/image-to-video",
+              ["lightricks/ltx-2.5/image-to-video/fast", "lightricks/ltx-2.5/image-to-video/pro",
+               "luma/agent/ray/v3.2/image-to-video",
+               "fal-ai/kling-video/v3/turbo/standard/image-to-video", "fal-ai/kling-video/v3/turbo/pro/image-to-video",
                "fal-ai/minimax/hailuo-02/standard/image-to-video", "fal-ai/wan-i2v"],
-              "fal-ai/kling-video/v3/turbo/standard/image-to-video"),
+              "lightricks/ltx-2.5/image-to-video/fast"),
         combo("modelT2V", "文字轉影片模型",
-              ["fal-ai/kling-video/v3/turbo/pro/text-to-video", "fal-ai/kling-video/v3/turbo/standard/text-to-video",
+              ["lightricks/ltx-2.5/text-to-video/fast", "lightricks/ltx-2.5/text-to-video/pro",
+               "luma/agent/ray/v3.2/text-to-video",
+               "fal-ai/kling-video/v3/turbo/pro/text-to-video", "fal-ai/kling-video/v3/turbo/standard/text-to-video",
                "fal-ai/wan-t2v"],
-              "fal-ai/kling-video/v3/turbo/pro/text-to-video"),
-        text("durations", "可用秒數", "5,10",
+              "lightricks/ltx-2.5/text-to-video/fast"),
+        text("durations", "可用秒數", "6,8,10",
              help="偵測不到模型的秒數時才使用：以逗號分隔，送出時取最接近的值；清空表示不送秒數"),
-        toggle("sendNegative", "送出負向提示詞", False, help="模型有 negative_prompt 參數時再開啟（Kling v3、海螺沒有）"),
+        toggle("sendNegative", "送出負向提示詞", False,
+               help="模型有 negative_prompt 參數時再開啟（LTX 2.5、Luma Ray、Kling v3、海螺沒有）"),
         json_field("extra", "額外參數（JSON）", "{}"),
     )
 
@@ -334,13 +340,15 @@ class ReplicateVideo(_Replicate):
     modes = ("i2v", "t2v")
     key_owner = "replicate-image"
     expected_seconds = 240
-    notes = ("共用「Replicate 圖片」的 Token。首格圖片欄位：Kling 是 start_image，Hailuo 02 是 first_frame_image，"
-             "Wan 是 image；秒數選項：Kling 5、10，Hailuo 02 6、10，Wan 沒有秒數參數請清空。")
+    notes = ("共用「Replicate 圖片」的 Token。首格圖片欄位：LTX 2.5 與 Wan 是 image，Kling 是 start_image，"
+             "Hailuo 02 是 first_frame_image；秒數選項：LTX 2.5 6、8、10（最長 20），Kling 5、10，Hailuo 02 6、10，"
+             "Wan 沒有秒數參數請清空。")
     fields = (
-        combo("model", "模型", ["kwaivgi/kling-v2.1", "minimax/hailuo-02", "wan-video/wan-2.2-i2v-fast"],
-              "kwaivgi/kling-v2.1"),
-        text("imageField", "首格圖片欄位名稱", "start_image"),
-        text("durations", "可用秒數", "5,10", help="以逗號分隔，鏡頭的「影片秒數」從這些值挑選；清空表示不送秒數"),
+        combo("model", "模型", ["lightricks/ltx-2.5-fast", "kwaivgi/kling-v2.1", "minimax/hailuo-02",
+                               "wan-video/wan-2.2-i2v-fast"],
+              "lightricks/ltx-2.5-fast"),
+        text("imageField", "首格圖片欄位名稱", "image"),
+        text("durations", "可用秒數", "6,8,10", help="以逗號分隔，鏡頭的「影片秒數」從這些值挑選；清空表示不送秒數"),
         toggle("sendNegative", "送出負向提示詞", False, help="模型有 negative_prompt 參數時再開啟"),
         json_field("extra", "額外參數（JSON）", "{}"),
     )

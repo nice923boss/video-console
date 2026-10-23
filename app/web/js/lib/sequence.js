@@ -37,20 +37,30 @@ export function clipBounds(project, shot) {
   return [0, Number(shot.duration || 0.1)];
 }
 
+// Mirror of clip_speed: playback speed of a shot's video; stills always play at 1.
+export const clipSpeed = (shot, source) => (source === "video" ? Math.min(4, Math.max(0.25, Number(shot.speed || 1))) : 1);
+
+// Mirror of audio_media: a library item, or the take a shot's sound was detached from.
+export const audioMedia = (project, item) =>
+  (project.media || {})[item.mediaId] || (item.takeId ? (project.takes || {})[item.takeId] : null) || null;
+
 export function buildSequence(project, includeAll = false) {
   const shots = project.shots.filter((s) => includeAll || s.inSequence !== false);
   const clips = shots.map((shot) => {
     const vid = videoTake(project, shot);
     const img = vid ? null : imageTake(project, shot);
     const [a, b] = clipBounds(project, shot);
+    const source = vid ? "video" : img ? "image" : "empty";
+    const speed = clipSpeed(shot, source);
     return {
       shot,
       index: project.shots.indexOf(shot),
-      source: vid ? "video" : img ? "image" : "empty",
+      source,
       take: vid || img,
       in: a,
       out: b,
-      length: b - a,
+      speed,
+      length: (b - a) / speed,
     };
   });
   let start = 0;

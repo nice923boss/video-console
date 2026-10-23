@@ -94,7 +94,7 @@ export function LlmTab() {
         <${IconButton} icon="chevron-down" size=${15} title="從常用服務挑選" onClick=${pickService} />
       </div>
     <//>
-    <${Field} label="模型名稱" hint="Ollama 的寫法例如 qwen2.5:7b-instruct；按「儲存並測試」可以列出服務上的模型">
+    <${Field} label="模型名稱" hint="Ollama 的寫法例如 gemma3:4b；按「儲存並測試」可以列出服務上的模型">
       <${TextInput} mono value=${draft.model} maxLength=${120} spellcheck=${false} onChange=${(model) => set({ model })} />
     <//>
     <${Field} label=${`溫度 ${Number(draft.temperature).toFixed(1)}`} hint="越低越保守穩定，越高越有變化；潤飾提示詞建議 0.5 到 0.8">

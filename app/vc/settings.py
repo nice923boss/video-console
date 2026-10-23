@@ -29,8 +29,8 @@ DEFAULTS: dict[str, Any] = {
         "confirmDelete": True,
     },
     "defaults": {
-        "width": 1280,
-        "height": 720,
+        "width": 1920,
+        "height": 1080,
         "fps": 24,
         "aspect": "16:9",
         "shotDuration": 5.0,
@@ -60,12 +60,14 @@ DEFAULTS: dict[str, Any] = {
             "name": "雲端 API",
             "color": "#6ea8ff",
             "image": {"backend": "provider", "provider": "openai-images"},
-            "video": {"backend": "provider", "provider": "kling"},
+            "video": {"backend": "provider", "provider": "veo"},
         },
     ],
     "providers": {},
     "ffmpeg": {"path": "", "encoder": "auto"},
-    "export": {"quality": "high", "burnCaptions": False, "captionSize": 52, "fadeIn": 0.0, "fadeOut": 0.0},
+    # folder: where every project's videos and ZIP files go; empty means <data>/exports
+    "export": {"quality": "high", "burnCaptions": False, "captionSize": 52, "fadeIn": 0.0, "fadeOut": 0.0,
+               "folder": ""},
     "notify": {
         "desktop": True,
         "sound": True,
@@ -74,7 +76,7 @@ DEFAULTS: dict[str, Any] = {
     "llm": {
         "enabled": False,
         "baseUrl": "http://127.0.0.1:11434/v1",
-        "model": "qwen2.5:7b-instruct",
+        "model": "gemma3:4b",
         "temperature": 0.7,
     },
     "history": {"keep": 50, "intervalSec": 120},
@@ -151,6 +153,13 @@ def _validate(cfg: dict) -> None:
     voice["url"] = voice_url
     stt = cfg["stt"]
     stt.update(folder=str(stt.get("folder") or "").strip()[:500], python=str(stt.get("python") or "").strip()[:500])
+    export = cfg["export"]
+    out_folder = str(export.get("folder") or "").strip().strip('"').strip()
+    # Only the form is checked: a drive that is unplugged now must not reset every setting on the next start.
+    if out_folder and (len(out_folder) > 500 or re.search(r"[\x00-\x1f]", out_folder)
+                       or not Path(out_folder).is_absolute()):
+        raise AppError("匯出資料夾要填完整路徑，例如 D:\\影片輸出")
+    export["folder"] = out_folder
     upscale = cfg["video2x"]
     upscale.update(enabled=bool(upscale.get("enabled")),
                    method=upscale.get("method") if upscale.get("method") in video2x.METHODS else "anime4k")

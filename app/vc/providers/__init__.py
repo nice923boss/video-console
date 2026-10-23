@@ -15,12 +15,12 @@ _ORDER: tuple[Provider, ...] = (
     ReplicateImage(),
     StabilityImage(),
     CustomHttp("custom-image", "image"),
-    Kling(),
-    Runway(),
-    MiniMax(),
     GeminiOmni(),
+    Runway(),
     FalVideo(),
     ReplicateVideo(),
+    Kling(),
+    MiniMax(),
     CustomHttp("custom-video", "video"),
 )
 REGISTRY: dict[str, Provider] = {p.id: p for p in _ORDER}

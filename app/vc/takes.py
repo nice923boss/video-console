@@ -109,6 +109,8 @@ def _stage_video(media: Media, path: Path, thumbs: Path, item_id: str, info: dic
     duration = float(probe["duration"] or 0.0)
     info.update(width=probe["width"], height=probe["height"], duration=round(duration, 3),
                 fps=round(float(probe["fps"] or 0.0), 3), hasAudio=bool(probe["hasAudio"]))
+    if probe.get("alpha"):
+        info["alphaCodec"] = probe["vcodec"]  # the export decodes it with libvpx so the clip stays see-through
     thumb = thumbs / f"{item_id}.jpg"
     try:
         media.thumbnail(path, thumb, at=round(duration * 0.4, 2) if duration > 1 else None)
@@ -165,6 +167,8 @@ def new_take(shot_id: str | None, staged: dict, *, source: dict, prompt: str = "
     }
     if staged.get("wave"):
         take["wave"] = staged["wave"]
+    if staged.get("alphaCodec"):
+        take["alphaCodec"] = staged["alphaCodec"]
     return take
 
 
@@ -174,6 +178,8 @@ def new_media(staged: dict, name: str, media_id: str) -> dict:
                                              "hasAudio")})
     if staged.get("wave"):
         item["wave"] = staged["wave"]
+    if staged.get("alphaCodec"):
+        item["alphaCodec"] = staged["alphaCodec"]
     return item
 
 

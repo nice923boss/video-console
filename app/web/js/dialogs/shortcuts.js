@@ -5,6 +5,7 @@ import { useStore } from "../lib/store.js";
 import { GROUPS, allCommands, keysOf, readKeymap, selectKeymap } from "../lib/keymap.js";
 import { openModal, Modal } from "../components/overlay.js";
 import { Button, Keys } from "../components/ui.js";
+import { openEditHelp } from "./edit-help.js";
 
 const DIALOG_KEYS = [
   [["escape"], "關閉對話框或選單"],
@@ -38,6 +39,7 @@ export function openShortcuts() {
   open = true;
   return openModal((close) => html`<${Modal} title="快捷鍵一覽" width=${760} onClose=${() => close(null)}
       footer=${html`<span class="modal-foot-note dim">輸入文字時，單鍵快捷鍵不會作用；到「設定」的「快捷鍵」可以改鍵</span>
+        <${Button} icon="book" onClick=${() => { close(null); openEditHelp(); }}>剪輯功能說明<//>
         <${Button} kind="primary" onClick=${() => close(null)}>知道了<//>`}>
     <${ShortcutList} />
   <//>`).finally(() => { open = false; });

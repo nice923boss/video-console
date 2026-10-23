@@ -7,6 +7,7 @@ from __future__ import annotations
 import array
 import collections
 import logging
+import math
 import os
 import re
 import shutil
@@ -25,6 +26,8 @@ log = logging.getLogger("vc.media")
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 WEB_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
 WEB_PIX_FMTS = {"yuv420p", "yuvj420p"}
+# ffmpeg's own VP8/VP9 decoders drop the transparency a WebM carries beside the picture; libvpx keeps it.
+ALPHA_DECODERS = {"vp8": "libvpx", "vp9": "libvpx-vp9"}
 
 QUALITY = {
     "high": {"crf": 18, "x264": "slow", "cq": 19, "nv": "p6", "abr": "192k"},
@@ -149,6 +152,7 @@ def parse_probe(text: str) -> dict:
         "vcodec": None,
         "pixfmt": None,
         "acodec": None,
+        "alpha": False,
     }
     m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", text)
     if m:
@@ -174,6 +178,8 @@ def parse_probe(text: str) -> dict:
     rot = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees", text)
     if rot and info["width"] and abs(round(float(rot.group(1)))) % 180 == 90:
         info["width"], info["height"] = info["height"], info["width"]
+    # A WebM tags a VP8/VP9 stream that carries a transparency plane with alpha_mode 1.
+    info["alpha"] = info["vcodec"] in ALPHA_DECODERS and bool(re.search(r"^\s*alpha_mode\s*:\s*1\s*$", text, re.M))
     return info
 
 
@@ -466,6 +472,36 @@ class Media:
         args = ["-i", str(src), "-vf", vf, "-frames:v", str(frames), "-an",
                 *self.encoder_args("libx264", "high"), "-movflags", "+faststart", str(dst)]
         self.run_progress(args, frames / fps, on_progress, cancelled, timeout=1800)
+
+    def reverse(
+        self,
+        src: Path,
+        dst: Path,
+        duration: float,
+        has_audio: bool,
+        cancelled: Callable[[], bool] | None = None,
+        on_progress: Callable[[float], None] | None = None,
+        piece: float = 5.0,
+    ) -> None:
+        """Play a video backwards (sound too). The reverse filter holds every frame in memory, so the video is
+        reversed a few seconds at a time and the pieces are joined last to first."""
+        work = dst.parent
+        count = max(1, math.ceil(duration / piece - 1e-6))
+        names: list[str] = []
+        for i in range(count):
+            if cancelled and cancelled():
+                raise AppError("已取消", 499)
+            name = f"rev-{i:04d}.mp4"
+            args = ["-ss", f"{i * piece:.3f}", "-t", f"{piece:.3f}", "-i", str(src), "-vf", "reverse",
+                    *self.encoder_args("libx264", "high")]
+            args += ["-af", "areverse", "-c:a", "aac", "-b:a", "192k"] if has_audio else ["-an"]
+            self.run([*args, str(work / name)], timeout=1800)
+            names.insert(0, name)
+            if on_progress:
+                on_progress((i + 1) / (count + 1))
+        (work / "rev-list.txt").write_text("".join(f"file '{n}'\n" for n in names), encoding="utf-8")
+        self.run(["-f", "concat", "-safe", "0", "-i", "rev-list.txt", "-c", "copy", "-movflags", "+faststart",
+                  dst.name], timeout=1800, cwd=work)
 
     def to_web_video(self, src: Path, dst: Path, cancelled: Callable[[], bool] | None = None) -> None:
         """Re-encode a video the browser cannot play (HEVC, ProRes, 10-bit...) into H.264 MP4."""

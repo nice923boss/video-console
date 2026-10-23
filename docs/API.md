@@ -48,7 +48,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | 欄位 | 內容 |
 |---|---|
 | `id`、`name`、`rev` | `rev` 每次修改加 1 |
-| `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（整數 1~60，29.97 素材用 30）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
+| `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
 | `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本 |
 | `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot}`，時間是序列上的秒數 |
@@ -56,6 +56,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `overlays`、`layers` | 上層畫面與軌道 |
 | `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用） |
+| `markers` | 時間軸標記陣列 `{id, start, color, name}`，`start` 是序列秒數；color 可用 `blue`、`red`、`orange`、`yellow`、`green`、`purple` |
 | `media` | 素材庫 |
 
 鏡頭常用欄位：
@@ -70,6 +71,11 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `color` | 標籤顏色，時間軸片段整段染色；見下表 |
 | `notes` | 備註（4000 字內），滑鼠停在片段上會顯示 |
 | `duration` | 只有圖片或空白鏡頭時使用的長度 |
+| `speed` | 影片播放速度 0.25~4（預設 1），聲音一起變速；時間軸上的長度是 `(trimOut - trimIn) / speed` |
+| `disabled` | `true` 時保留位置，預覽與輸出都是黑畫面加靜音 |
+| `audioDetached` | `true` 時鏡頭本身無聲，原聲改由音訊軌上 `shotId` 指向它的片段播放（見 3.7 的 `detach`） |
+
+停用片段在各軌用的欄位：鏡頭、字幕、上方畫面是 `disabled`，音訊是 `muted`，調整圖層是 `hidden`。
 
 標籤顏色（介面上的 7 個選項）：
 
@@ -95,6 +101,16 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `tint` | -100~100 | 0 | 色調，正值偏洋紅、負值偏綠 |
 | `hue` | -180~180 | 0 | 色相旋轉（度） |
 | `mix` | 0~1 | 1 | 混合比例 |
+
+關鍵幀 `keyframes`：`[{"t": 0, "opacity": 0}, {"t": 2.5, "opacity": 1}]`，`t` 是片段內的秒數（取到 0.001 秒），最多 200 個，同一個 `t` 以後給的為準。兩個關鍵幀之間平順變化，第一個之前、最後一個之後維持端點的值。某個欄位只要有關鍵幀，就以關鍵幀為準，片段本身的那個欄位不再使用；沒有關鍵幀的欄位照舊。
+
+| 片段 | 可加關鍵幀的欄位 |
+|---|---|
+| 音訊 `audio` | `volume`（0~4，1 是原音量） |
+| 上方畫面 `overlays` | `x`、`y`、`w`、`opacity`、`volume`（圖片沒有 `volume`） |
+| 調整圖層 `adjustments` | `grade`（整組調色，格式同上表） |
+
+鏡頭與字幕不能加關鍵幀：要動的畫面放上方軌，要漸變的調色用調整圖層。
 
 鏡頭在序列上的位置：依 `shots` 順序把 `inSequence` 的鏡頭接起來，每段長度是 `trimOut - trimIn`（影片）或 `duration`（圖片），有轉場時與下一段重疊轉場長度。
 
@@ -126,12 +142,15 @@ POST /api/projects/{pid}/ops
 | `adjust.add` | `{"item": {"id": "adj_...", "start": 0, "length": 6, "grade": {"temp": 6500}}}` |
 | `adjust.update` | `{"id": "adj_...", "patch": {"start": 1.5, "grade": {...}}}`；`grade` 整組取代，沒給的欄位回到中性值 |
 | `adjust.delete` | `{"id": "adj_..."}` |
+| `marker.add`、`marker.update`、`marker.delete` | 標記，格式同 caption |
 | `captionStyle.*`、`take.*`、`media.*`、`layer.*` | 樣式庫、版本、素材、軌道 |
 | `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks"}}` |
 | `batch` | `{"op": "batch", "ops": [...]}`：多個 op 包成一組 |
 | `linked` | `{"op": "linked", "ops": [...]}`：鏡頭變動時字幕、配音、上層畫面跟著移動 |
 
 字幕文字上限 500 字。
+
+各種 `*.update` 可以多帶 `"unset": ["欄位", ...]` 把欄位整個拿掉（例如 `{"op": "audio.update", "id": "a_...", "patch": {}, "unset": ["keyframes"]}`）；和設成 `null` 不同，拿掉後回到「沒有這個欄位」的預設行為。
 
 ### 3.2 連動（linked）
 
@@ -141,7 +160,7 @@ POST /api/projects/{pid}/ops
 
 ### 3.3 範例：在原始影片第 12.5 秒分割鏡頭
 
-分割就是「前段改出點」加上「複製一份當後段」：
+依時間軸位置分割時，直接用 3.7 的 `vc.edit(pid, "split", t=...)` 比較簡單。以下是依原始影片秒數自己組 op 的做法，分割就是「前段改出點」加上「複製一份當後段」：
 
 ```python
 shot = next(s for s in project["shots"] if s["id"] == sid)
@@ -174,6 +193,64 @@ vc.ops(pid, [{"op": "linked", "ops": [{"op": "shot.delete", "id": sid}]}], label
 | `GET /api/projects/{pid}/history` | 伺服器端快照列表 |
 | `POST /api/projects/{pid}/history/{rev}/restore` | 還原到某個快照（可再復原） |
 
+### 3.7 剪輯指令：/timeline 與 /edit
+
+剪輯頁的快捷鍵功能（分割、裁剪、定格、分離原聲、倒放、音量、關鍵幀）都有對應的指令。指令用時間軸上的秒數指定位置，伺服器算出和按快捷鍵完全相同的 op 再送出：鏡頭變動一律用 `linked` 包起來（字幕、音訊、上方畫面跟著移動），一次呼叫是一個復原步驟。
+
+先讀時間軸，知道每個片段在哪裡：
+
+```
+GET /api/projects/{pid}/timeline
+→ {"duration": 42.5,
+   "clips": [{"shotId", "index", "name", "source", "takeId", "start", "length", "in", "out", "speed", "disabled", "audioDetached"}],
+   "items": [{"type", "id", "start", "length", "name", "keyframes"}],
+   "markers": [{"id", "start", "color", "name"}]}
+```
+
+- `clips`：畫面軌依序排列；`start`、`length` 是序列秒數，`in`、`out` 是原始影片秒數，`index` 是在 `shots` 陣列中的位置；`source` 是 `video`、`image` 或 `empty`（空白鏡頭）。
+- `items`：其他軌的片段，`type` 是 `overlay`、`audio`、`caption`、`adjust`；`keyframes` 是關鍵幀數量。
+
+再送指令：
+
+```
+POST /api/projects/{pid}/edit
+{"cmd": "split", "t": 12.5}
+→ {"label": "分割鏡頭", "changed": [...], "rev": 13, "id": "s_..."}
+```
+
+共用參數：`t` 是序列秒數；`type` 是片段種類 `shot`（預設）、`overlay`、`audio`、`caption`、`adjust`；`id` 是片段 id。沒給 `id` 時取 `t` 下方的片段（鏡頭取畫面軌，其他種類取第一個蓋到 `t` 的片段）。
+
+| cmd | 參數 | 作用 | 回傳的 `id` |
+|---|---|---|---|
+| `split` | `t`，可選 `type`、`id` | 在 `t` 切開片段；關鍵幀分到兩段，切點補一個關鍵幀保持值不變 | 後段 |
+| `splitAll` | `t` | 把 `t` 經過的每一軌一起切開 | |
+| `trim` | `t`、`side`（`start` 或 `end`），可選 `type`、`id` | `start` 刪掉 `t` 之前的部分，`end` 刪掉之後的部分；畫面軌後面的鏡頭往前補 | |
+| `freeze` | `t` | 在 `t` 切開影片鏡頭，中間插 2 秒靜止畫面，並送出 `lastframe` 工作擷取那一格（回傳的 `job`）；`t` 在鏡頭頭尾時定格加在前面或後面 | 定格鏡頭 |
+| `detach` | `id` 或 `t` | 把鏡頭原聲拆成音訊片段，鏡頭改成無聲 | 新的音訊片段 |
+| `restore` | `id`（鏡頭或它的原聲片段） | 刪掉原聲片段，鏡頭恢復有聲 | |
+| `reverse` | `id` 或 `t` | 第一次送出 `reverse` 工作產生倒放影片（不改專案，回傳 `job`）；已有倒放版本時在正放、倒放之間切換，修剪範圍跟著鏡像 | |
+| `volume` | `type`、`id`、`db`，可選 `in`、`out` | 音量加減 `db`（例如 1 或 -1）；給 `in`、`out`（序列秒數）時只調區域內，兩端自動加關鍵幀，前後各 0.1 秒漸變 | |
+| `keyframe` | `type`、`id`、`t`，可選 `values` | 在 `t` 記下片段目前的值當關鍵幀；`values` 例如 `{"opacity": 0}` 覆蓋要記的值 | |
+
+限制（違反時回 400 與中文說明）：
+
+- `volume` 只能用在 `audio` 與上方影片（`overlay`）。鏡頭原聲要先 `detach`；圖片沒有聲音。
+- `keyframe` 只能用在 `audio`、`overlay`、`adjust`，`values` 只能用 2 節關鍵幀表裡的欄位。
+- 變速中的鏡頭不能 `detach`；已分離原聲的鏡頭不能 `freeze`、`reverse`（先 `restore`）。
+- `freeze`、`reverse` 只能用在影片鏡頭。
+- 切點離片段邊緣太近（0.1 秒內，圖片 0.2 秒內）時不能 `split`、`trim`。
+
+範例：把第 20 到 25 秒的配樂降 6dB，再讓上方圖片在 29 到 30 秒淡出。`in` 是 Python 保留字，要用 `**{...}` 傳。
+
+```python
+tl = vc.timeline(pid)
+music = next(i for i in tl["items"] if i["type"] == "audio" and i["name"] == "配樂")
+vc.edit(pid, "volume", type="audio", id=music["id"], db=-6, **{"in": 20, "out": 25})
+logo = next(i for i in tl["items"] if i["type"] == "overlay")
+vc.edit(pid, "keyframe", type="overlay", id=logo["id"], t=29)
+vc.edit(pid, "keyframe", type="overlay", id=logo["id"], t=30, values={"opacity": 0})
+```
+
 ## 4. 匯入檔案
 
 ```
@@ -190,6 +267,8 @@ POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
 | `track`、`start`、`layer` | 放到時間軸的音軌或上層軌，`start` 為序列秒數 |
 
 支援格式：影片 .mp4 .webm .mov .mkv .m4v .avi；圖片 .png .jpg .jpeg .webp .bmp .gif；聲音 .mp3 .wav .m4a .aac .flac .ogg .opus。聲音不能放進鏡頭。不是 h264／vp8／vp9／av1 的 .mp4、.m4v、.webm，以及其他容器，會自動轉成瀏覽器可播放的格式（4K 或高位元率素材建議先轉成 1080p，速度差很多）。
+
+透明背景的 .webm（VP8／VP9 帶 alpha，例如 p5.js 逐格輸出後用 `ffmpeg -c:v libvpx-vp9 -pix_fmt yuva420p` 編碼）原檔保留，放在上層軌時輸出會保留透明，下層畫面透出；素材資料多一個 `alphaCodec` 欄位。放在畫面軌（鏡頭）時透明部分不生效。這一版之前匯入的透明 webm 要重新匯入才會被認出。
 
 新專案會有一個空白鏡頭，把第一支影片 `target=shot` 上傳到它即可；多支影片時先 `shot.add` 新鏡頭再上傳。
 
@@ -216,7 +295,9 @@ POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
 | `voice` | 文字轉配音 | 依配音引擎設定 |
 | `image`、`video` | ComfyUI 或雲端生成 | 依工作流程設定 |
 | `upscale`、`upscalevideo` | 放大 | 需要 video2x |
-| `kenburns`、`lastframe` | 圖片推拉、擷取最後一格 | |
+| `kenburns` | 圖片推拉 | |
+| `lastframe` | 擷取一格畫面成圖片 | `{"source", "target", "targetShot", "at"}`：`at` 是原始影片秒數（不給時取最後一格）；`target` 是 `next`（下一個鏡頭，預設）、`self`（本鏡頭）或 `shot`（`targetShot` 指定的鏡頭，定格用） |
+| `reverse` | 產生倒放影片，完成後換上並鏡像修剪範圍 | `{"source": 版本 id}`，不給時用鏡頭使用中的影片 |
 
 同時執行數量：ComfyUI 與語音轉字幕共用 1 個、雲端服務 2 個、ffmpeg 類 2 個、輸出 1 個。
 
@@ -251,7 +332,7 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 | `clipAudio` | 保留影片片段本身的聲音 |
 | `fit` | 畫面比例不同時 `contain`（完整顯示）或 `cover`（填滿） |
 
-完成後 `job["result"]["file"]` 是相對專案資料夾的路徑（`exports/...mp4`），專案資料夾在 `data/projects/<pid>/`。也可用 `GET /api/projects/{pid}/exports` 列出輸出檔。
+完成後 `job["result"]["file"]` 是輸出檔的完整路徑，位在匯出資料夾：設定 `export.folder`（`PUT /api/settings {"export": {"folder": "D:\\影片輸出"}}`），留白時是 `data/exports/`，所有專案共用，影片與打包 ZIP 都存在這裡。改用共用資料夾前輸出的舊檔留在專案資料夾，`file` 是相對路徑 `exports/...mp4`；`Path(專案資料夾) / file` 兩種都能用，專案資料夾在 `data/projects/<pid>/`。也可用 `GET /api/projects/{pid}/exports` 列出輸出檔。
 
 ## 8. 即時事件（SSE）
 
@@ -269,7 +350,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | GET | `/api/system` | 系統資訊 |
 | GET | `/api/system/fonts` | 可用字型 |
 | POST | `/api/system/ffmpeg` | 重新偵測 ffmpeg |
-| POST | `/api/system/reveal` | 在檔案總管開啟資料夾 `{"what": ...}` |
+| POST | `/api/system/reveal` | 在檔案總管開啟資料夾 `{"what": ...}`：`data`、`logs`、`workflows`、`projects`（所有專案）、`exports`（匯出資料夾） |
 | GET | `/api/system/deps` | 相依套件狀態 `{"items": [{id, required, ready, path, version}]}` |
 | POST | `/api/system/deps/install` | 安裝相依套件 `{"id": ...}` |
 | POST | `/api/shutdown` | 關閉 VC |
@@ -282,13 +363,15 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/open` | 設為最近開啟的專案 |
 | POST | `/api/projects/{pid}/duplicate` | 複製專案，回傳 `{"project": {...}}`，鏡頭與字幕代號和原專案相同 |
 | POST | `/api/projects/{pid}/ops` | 修改（第 3 節） |
+| GET | `/api/projects/{pid}/timeline` | 時間軸位置（3.7 節） |
+| POST | `/api/projects/{pid}/edit` | 剪輯指令（3.7 節） |
 | POST | `/api/projects/{pid}/undo`、`/redo` | 復原、重做 |
 | GET | `/api/projects/{pid}/history` | 版本紀錄 |
 | POST | `/api/projects/{pid}/history/{rev}/restore` | 還原版本 |
 | POST | `/api/projects/{pid}/upload` | 上傳檔案（第 4 節） |
-| GET | `/api/projects/{pid}/file?path=...` | 讀取專案內的檔案 |
-| GET | `/api/projects/{pid}/exports` | 輸出檔列表 |
-| DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔 |
+| GET | `/api/projects/{pid}/file?path=...` | 讀取專案內的檔案；`path` 也可以是這個專案輸出到匯出資料夾的完整路徑 |
+| GET | `/api/projects/{pid}/exports` | 輸出檔列表：匯出資料夾裡這個專案輸出的檔案，加上專案資料夾的舊檔，`path` 可直接給 `file?path=` |
+| DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔（`name` 是檔名，只能刪這個專案輸出的檔） |
 | GET | `/api/projects/{pid}/captions.srt` | 字幕 SRT |
 | GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |
 | GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
@@ -296,7 +379,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | GET | `/api/projects/{pid}/usage` | 檔案使用量 |
 | POST | `/api/projects/{pid}/purge` | 清除沒用到的檔案 |
 | POST | `/api/projects/{pid}/script/apply` | 套用劇本 |
-| POST | `/api/script/parse`、`/api/script/docx` | 解析劇本文字、Word 檔 |
+| POST | `/api/script/parse`、`/api/script/docx` | 解析劇本文字、Word 檔。parse 收 `{"text", "mode", "detail"}`，回 `{"shots", "mode", "notes"}`；`detail: true` 時，劇本已寫好分鏡的段落（有標題列的分鏡表、編號動作）照原文切：每個動作一鏡，台詞放到說話者出現的鏡頭，備註欄的運鏡指示另成一鏡；其餘段落拆成 2 到 5 個不同景別的鏡頭；秒數依節奏與旁白長度安排，每個鏡頭多帶 `beat`（第幾段）與 `pace`（`slow`、`medium`、`fast`），套用時這兩欄不會存進鏡頭 |
 | GET／DELETE | `/api/trash` | 垃圾桶列表／清空 |
 | POST | `/api/trash/{folder}/restore` | 從垃圾桶還原 |
 | | `/api/jobs...` | 背景工作（第 5 節） |

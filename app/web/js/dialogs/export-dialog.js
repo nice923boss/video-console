@@ -9,6 +9,7 @@ import { fmtDuration } from "../lib/format.js";
 import { openModal, Modal } from "../components/overlay.js";
 import { Button, Field, Select, Segmented, Toggle, NumberInput, Tabs } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
+import { ExportFolderNote } from "../components/export-folder.js";
 import { toast } from "../components/toast.js";
 
 const QUALITY = [
@@ -100,7 +101,7 @@ function useVideoForm(project, clips, close) {
   };
 
   const footer = html`
-    <span class="modal-foot-note dim"><${Icon} name="folder" size=${14} />存到專案的 exports 資料夾</span>
+    <${ExportFolderNote} class="modal-foot-note" />
     <${Button} icon="captions" disabled=${!hasCaptions}
       title=${hasCaptions ? "不輸出影片，直接下載目前的字幕" : "這個專案還沒有字幕"} onClick=${srtOnly}>只下載 SRT<//>
     <${Button} onClick=${() => close(null)}>取消<//>
@@ -164,7 +165,7 @@ function usePackageForm(project, close, fullBackup) {
     close(job);
   };
   const footer = html`
-    <span class="modal-foot-note dim"><${Icon} name="folder" size=${14} />ZIP 檔存到專案的 exports 資料夾</span>
+    <${ExportFolderNote} class="modal-foot-note" label="ZIP 檔存到" />
     <${Button} onClick=${() => close(null)}>取消<//>
     <${Button} kind="primary" icon="package" busy=${busy} disabled=${!project.shots.length} onClick=${submit}>開始打包<//>`;
   const body = html`

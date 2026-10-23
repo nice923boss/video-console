@@ -71,6 +71,12 @@ def _int(lo: int, hi: int) -> Callable[[Any], int]:
     return conv
 
 
+def _fps(v: Any) -> int | float:
+    """Frame rate 1~60: whole rates stay int, 29.97 keeps its decimals."""
+    f = _float(1, 60)(v)
+    return int(f) if f.is_integer() else f
+
+
 def _bool(v: Any) -> bool:
     return bool(v)
 
@@ -143,6 +149,27 @@ def _transition(v: Any) -> dict:
 
 
 MAX_SEED = 2**53 - 1
+MAX_KEYFRAMES = 200
+
+
+def _keyframes(fields: dict[str, Callable[[Any], Any]]) -> Callable[[Any], list]:
+    """[{t, <field>: value, ...}]: t is seconds into the clip; later values win on a repeated t."""
+
+    def conv(v: Any) -> list:
+        if v is None:
+            return []
+        if not isinstance(v, list) or len(v) > MAX_KEYFRAMES:
+            raise AppError("關鍵幀格式不正確")
+        out: dict[float, dict] = {}
+        for k in v:
+            if not isinstance(k, dict):
+                raise AppError("關鍵幀格式不正確")
+            t = round(_float(0, 36000)(k.get("t")), 3)
+            out[t] = {"t": t, **_clean_patch({f: v for f, v in k.items() if f != "t"}, fields)}
+        return [out[t] for t in sorted(out)]
+
+    return conv
+
 
 SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "name": _str(120),
@@ -166,6 +193,9 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "trimIn": _float(0, 36000),
     "trimOut": _opt_float(0, 36000),
     "transition": _transition,
+    "disabled": _bool,  # kept on the timeline but shown as black and silent
+    "speed": _float(0.25, 4),  # playback speed of a video shot; its length on the timeline is (out - in) / speed
+    "audioDetached": _bool,  # the shot's own sound plays from an audio clip instead (see AUDIO_FIELDS takeId)
     "notes": _str(4000),
     "color": _opt_str(20),
     "imageWorkflow": _str(80),
@@ -184,13 +214,17 @@ AUDIO_FIELDS = {
     "fadeOut": _float(0, 30),
     "muted": _bool,
     "captionId": _opt_id,  # set on voice-over clips: the caption they speak
+    "shotId": _opt_id,  # detached sound of this shot ...
+    "takeId": _opt_id,  # ... read from this take's file instead of a library item
+    "keyframes": _keyframes({"volume": _float(0, 4)}),
 }
 CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _str(500), "position": _str(10),
                   "speaker": _opt_id,
                   "style": _opt_id,  # a project caption style; None: the project default
                   "x": _opt_float(0, 1),  # dragged to this point (fractions of the frame); None: the style decides
                   "y": _opt_float(0, 1),
-                  "shot": _opt_id}  # the storyboard shot showing this text; timing stays the caption's own
+                  "shot": _opt_id,  # the storyboard shot showing this text; timing stays the caption's own
+                  "disabled": _bool}
 # Sizes and distances are pixels on a 1080-high frame, as in the burnt-in ASS script.
 CAPTION_STYLE_FIELDS = {
     "name": _str(40),
@@ -233,7 +267,7 @@ CAST_FIELDS = {"name": _str(40), "voice": _str(200), "voiceName": _str(80), "spe
 SETTINGS_FIELDS = {
     "width": _int(64, 4096),
     "height": _int(64, 4096),
-    "fps": _int(1, 60),
+    "fps": _fps,
     "aspect": _str(10),
     "fadeIn": _float(0, 10),
     "fadeOut": _float(0, 10),
@@ -255,6 +289,9 @@ OVERLAY_FIELDS = {
     "w": _float(0.05, 1),  # width as a fraction of the frame width; height follows the file's aspect
     "opacity": _float(0, 1),
     "volume": _float(0, 4),
+    "disabled": _bool,
+    "keyframes": _keyframes({"x": _float(-1, 1), "y": _float(-1, 1), "w": _float(0.05, 1), "opacity": _float(0, 1),
+                             "volume": _float(0, 4)}),
 }
 # Adjustment layers: a span of the timeline whose grade applies to every picture underneath it.
 ADJUST_FIELDS = {
@@ -263,7 +300,10 @@ ADJUST_FIELDS = {
     "length": _float(0.1, 36000),
     "hidden": _bool,
     "grade": clean_grade,
+    "keyframes": _keyframes({"grade": clean_grade}),
 }
+MARKER_COLORS = ("blue", "red", "orange", "yellow", "green", "purple")
+MARKER_FIELDS = {"start": _float(0, 36000), "color": _choice(*MARKER_COLORS), "name": _str(80)}
 
 
 def _clean_patch(patch: Any, fields: dict[str, Callable[[Any], Any]]) -> dict:
@@ -276,6 +316,23 @@ def _clean_patch(patch: Any, fields: dict[str, Callable[[Any], Any]]) -> dict:
             raise AppError(f"不允許修改的欄位：{key}")
         out[key] = conv(value)
     return out
+
+
+def _update_item(item: dict, op: dict, patch: dict, fields: dict) -> dict:
+    """Apply patch and drop op["unset"]; returns the patch/unset pair that undoes it.
+
+    Fields the item did not have go into the undo's unset list: writing None back would fail
+    validators such as _float."""
+    unset = op.get("unset") or []
+    if not isinstance(unset, list) or any(k not in fields for k in unset):
+        raise AppError("修改內容格式不正確")
+    keys = [*patch, *unset]
+    old = {k: copy.deepcopy(item[k]) for k in keys if k in item}
+    gone = [k for k in dict.fromkeys(keys) if k not in item]
+    item.update(patch)
+    for k in unset:
+        item.pop(k, None)
+    return {"patch": old, "unset": gone} if gone else {"patch": old}
 
 
 def snap16(v: int) -> int:
@@ -441,9 +498,8 @@ def _shot_update(p: dict, op: dict) -> dict | None:
         tid = patch.get(key)
         if tid and tid not in p["takes"]:
             raise AppError("指定的 Take 不存在")
-    inverse = {k: copy.deepcopy(shot.get(k)) for k in patch}
-    shot.update(patch)
-    return {"op": "shot.update", "id": shot["id"], "patch": inverse}
+    undo = _update_item(shot, op, patch, SHOT_FIELDS)
+    return {"op": "shot.update", "id": shot["id"], **undo}
 
 
 def _shot_move(p: dict, op: dict) -> dict | None:
@@ -510,9 +566,8 @@ def _take_update(p: dict, op: dict) -> dict | None:
     if take is None:
         return None
     patch = _clean_patch(op.get("patch"), TAKE_FIELDS)
-    inverse = {k: take.get(k) for k in patch}
-    take.update(patch)
-    return {"op": "take.update", "id": take["id"], "patch": inverse}
+    undo = _update_item(take, op, patch, TAKE_FIELDS)
+    return {"op": "take.update", "id": take["id"], **undo}
 
 
 def _list_add(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
@@ -526,7 +581,7 @@ def _list_add(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
         for extra in ("mediaId", "file"):
             if extra in item:
                 clean[extra] = item[extra]
-        if key == "audio" and clean.get("mediaId") not in p["media"]:
+        if key == "audio" and clean.get("mediaId") not in p["media"] and clean.get("takeId") not in p["takes"]:
             raise AppError("音訊素材不存在")
         if key == "overlays":
             media = p["media"].get(clean.get("mediaId"))
@@ -550,10 +605,9 @@ def _list_update(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
         if key == "overlays" and "layer" in patch and _find(p["layers"], patch["layer"]) < 0:
             raise AppError("畫面軌道不存在")
         item = p[key][i]
-        inverse = {k: item.get(k) for k in patch}
-        item.update(patch)
+        undo = _update_item(item, op, patch, fields)
         p[key].sort(key=lambda it: it.get("start", 0))
-        return {"op": f"{_SINGULAR[key]}.update", "id": item["id"], "patch": inverse}
+        return {"op": f"{_SINGULAR[key]}.update", "id": item["id"], **undo}
 
     return handler
 
@@ -570,7 +624,7 @@ def _list_delete(key: str) -> Callable[[dict, dict], dict | None]:
 
 
 _SINGULAR = {"audio": "audio", "captions": "caption", "cast": "cast", "overlays": "overlay",
-             "captionStyles": "captionStyle", "adjustments": "adjust"}
+             "captionStyles": "captionStyle", "adjustments": "adjust", "markers": "marker"}
 
 
 def _caption_style_add(p: dict, op: dict) -> dict | None:
@@ -624,9 +678,8 @@ def _layer_update(p: dict, op: dict) -> dict | None:
         return None
     patch = _clean_patch(op.get("patch"), LAYER_FIELDS)
     layer = p["layers"][i]
-    inverse = {k: layer.get(k) for k in patch}
-    layer.update(patch)
-    return {"op": "layer.update", "id": layer["id"], "patch": inverse}
+    undo = _update_item(layer, op, patch, LAYER_FIELDS)
+    return {"op": "layer.update", "id": layer["id"], **undo}
 
 
 def _layer_delete(p: dict, op: dict) -> dict | None:
@@ -691,10 +744,10 @@ def _media_update(p: dict, op: dict) -> dict | None:
     media = p["media"].get(op.get("id"))
     if media is None:
         return None
-    patch = _clean_patch(op.get("patch"), {"name": _str(200), "note": _str(1000), "favorite": _bool})
-    inverse = {k: media.get(k) for k in patch}
-    media.update(patch)
-    return {"op": "media.update", "id": media["id"], "patch": inverse}
+    fields = {"name": _str(200), "note": _str(1000), "favorite": _bool}
+    patch = _clean_patch(op.get("patch"), fields)
+    undo = _update_item(media, op, patch, fields)
+    return {"op": "media.update", "id": media["id"], **undo}
 
 
 HANDLERS: dict[str, Callable[..., dict | None]] = {
@@ -730,6 +783,9 @@ HANDLERS: dict[str, Callable[..., dict | None]] = {
     "adjust.add": _list_add("adjustments", ADJUST_FIELDS),
     "adjust.update": _list_update("adjustments", ADJUST_FIELDS),
     "adjust.delete": _list_delete("adjustments"),
+    "marker.add": _list_add("markers", MARKER_FIELDS),
+    "marker.update": _list_update("markers", MARKER_FIELDS),
+    "marker.delete": _list_delete("markers"),
 }
 
 
