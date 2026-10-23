@@ -757,6 +757,25 @@ def test_launch_defers_to_the_copy_that_answers(app: App) -> None:
         held.close()
 
 
+def test_launch_replaces_a_copy_running_older_code(app: App, monkeypatch: pytest.MonkeyPatch) -> None:
+    pong = Client(app.server.port).json("GET", "/api/ping")
+    assert pong["build"] == launcher.BUILD and pong["running"] == 0
+    assert not launcher.should_replace(pong, True)
+    assert launcher.should_replace({"version": "1.4.0"}, True)  # a copy from before builds were reported
+    assert not launcher.should_replace({"build": "old", "running": 2}, True)  # would interrupt jobs: keep it
+
+    held = launcher.acquire_lock(app.paths.run / "instance.lock")
+    assert held is not None
+    threading.Thread(target=lambda: app._stopped.wait(10) and held.close(), daemon=True).start()
+    info = {"port": app.server.port, "instance": app.instance}
+    app.paths.pid_file.write_text(json.dumps(info), encoding="utf-8")
+    monkeypatch.setattr(launcher, "BUILD", "newer")
+    claimed = launcher.claim_instance(app.paths, True)
+    assert not isinstance(claimed, int)  # the old copy was stopped and this launch serves
+    claimed.close()
+    assert not launcher.alive(info, 0.5)
+
+
 def test_launch_waits_out_a_copy_that_is_shutting_down(tmp_path: Path) -> None:
     paths = Paths(tmp_path / "data")
     paths.ensure()

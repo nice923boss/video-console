@@ -222,8 +222,9 @@ async function step(kind) {
     return;
   }
   try {
-    await api.post(`/api/projects/${enc(pid)}/${kind}`);
-    toast(`${kind === "undo" ? "已復原" : "已重做"}：${label || "上一步"}`, { duration: 1600 });
+    // a quick second press reads the label before the first step's state arrives; the server knows which step it took
+    const res = await api.post(`/api/projects/${enc(pid)}/${kind}`);
+    toast(`${kind === "undo" ? "已復原" : "已重做"}：${res?.label || label || "上一步"}`, { duration: 1600 });
   } catch (err) {
     toastError(err);
   }

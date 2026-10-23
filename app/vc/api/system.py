@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .. import VERSION
+from .. import BUILD, VERSION, explorer
 from ..captions import list_fonts
 from ..exportdir import ensure_root, export_root
 from ..presets import all_presets
@@ -54,13 +54,14 @@ def open_folder(path: Path) -> None:
     if sys.platform != "win32":
         raise AppError("只有 Windows 支援開啟資料夾", 501)
     path.mkdir(parents=True, exist_ok=True)
-    os.startfile(path)  # noqa: S606 - a data folder or the export folder from settings
+    explorer.show(path)
 
 
 def register(router: Router, app: App) -> None:
     @router.route("GET", "/api/ping")
     def ping(req: Request) -> dict:
-        return {"ok": True, "instance": app.instance, "version": VERSION}
+        running = app.jobs.state()["counts"].get("running") or 0
+        return {"ok": True, "instance": app.instance, "version": VERSION, "build": BUILD, "running": running}
 
     @router.route("GET", "/api/bootstrap")
     def bootstrap(req: Request) -> dict:

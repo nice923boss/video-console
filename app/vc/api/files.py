@@ -4,12 +4,12 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from .. import explorer
 from ..export import captions_srt, export_filename, shots_csv
 from ..exportdir import file_ref, find_export, forget_export, project_exports
 from ..server import FileResponse, Request, Response, Router
@@ -163,4 +163,4 @@ def register(router: Router, app: App) -> None:
         path = resolve(pid, rel)
         if not path.exists():
             raise AppError("找不到檔案（可能已被刪除）", 404)
-        subprocess.Popen(f'explorer /select,"{path}"')  # noqa: S602 - a project file or one of its exports
+        explorer.show(path, select=True)

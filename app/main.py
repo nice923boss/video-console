@@ -21,7 +21,7 @@ from typing import IO, Any
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from vc import APP_NAME, DEFAULT_PORT, VERSION  # noqa: E402
+from vc import APP_NAME, BUILD, DEFAULT_PORT, VERSION  # noqa: E402
 from vc.logsetup import setup_logging  # noqa: E402
 from vc.paths import Paths  # noqa: E402
 from vc.tray import Tray  # noqa: E402
@@ -46,16 +46,21 @@ def read_server_info(paths: Paths) -> dict | None:
     return info if isinstance(info, dict) and isinstance(info.get("port"), int) else None
 
 
-def alive(info: dict | None, timeout: float = 2.0) -> bool:
-    """True when the server described by server.json answers as that same instance."""
+def ping(info: dict | None, timeout: float = 2.0) -> dict | None:
+    """The ping answer of the server described by server.json, when it answers as that same instance."""
     if not info:
-        return False
+        return None
     try:
         with LOCAL.open(f"http://127.0.0.1:{info['port']}/api/ping", timeout=timeout) as resp:
             pong = json.loads(resp.read().decode("utf-8"))
     except (OSError, ValueError):
-        return False
-    return isinstance(pong, dict) and pong.get("instance") == info.get("instance")
+        return None
+    return pong if isinstance(pong, dict) and pong.get("instance") == info.get("instance") else None
+
+
+def alive(info: dict | None, timeout: float = 2.0) -> bool:
+    """True when the server described by server.json answers as that same instance."""
+    return ping(info, timeout) is not None
 
 
 def stop_running(paths: Paths) -> int:
@@ -161,17 +166,42 @@ def fail(message: str, quiet: bool) -> int:
     return 1
 
 
+def should_replace(pong: dict, no_window: bool) -> bool:
+    """A copy left running in the tray from before an update serves old code to the new pages, so restart it.
+    When that would interrupt running jobs, a window launch asks first and any other launch keeps it."""
+    if pong.get("build") == BUILD:
+        return False
+    running = pong.get("running") or 0  # older copies do not report it
+    if not running:
+        return True
+    if no_window or sys.platform != "win32":
+        return False
+    import ctypes
+    message = (f"正在執行的 Video Console 是更新前的程式（{pong.get('version') or '舊版'}），重新啟動後才會用到 {VERSION}。\n"
+               f"還有 {running} 個工作在執行，重新啟動會中斷它們。\n\n"
+               "要現在重新啟動嗎？選「否」會先開啟目前執行中的程式。")
+    return ctypes.windll.user32.MessageBoxW(None, message, APP_NAME, 0x34) == 6  # MB_YESNO | MB_ICONWARNING, IDYES
+
+
 def claim_instance(paths: Paths, no_window: bool, wait: float = 10.0) -> IO[bytes] | int:
     """The instance lock when this launch should serve; otherwise the exit code after opening a window
     onto the copy that holds it. A copy that is shutting down keeps the lock for a moment after its
     server stops answering, so keep trying for a while before calling it stuck."""
     deadline = time.monotonic() + wait
+    replaced = False
     while True:
         lock = acquire_lock(paths.run / "instance.lock")
         if lock is not None:
             return lock
         info = read_server_info(paths)
-        if alive(info):
+        pong = ping(info)
+        if pong is not None and not replaced and should_replace(pong, no_window):
+            log.info("Restarting the running copy (%s) to run %s", pong.get("build") or pong.get("version"), BUILD)
+            replaced = True
+            stop_running(paths)
+            deadline = time.monotonic() + wait
+            continue
+        if pong is not None:
             if not no_window:
                 request_tray(info)
                 open_window(f"http://127.0.0.1:{info['port']}/", paths)
