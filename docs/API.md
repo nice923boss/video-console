@@ -14,7 +14,7 @@
 |---|---|
 | 位址 | 只聽 `127.0.0.1`，連接埠 8790；被占用時往後找到 8799 |
 | 目前連接埠 | `data/run/server.json` 的 `port` 欄位（VC 執行中才有） |
-| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.8.0", "build": "1.8.0+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
+| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.8.1", "build": "1.8.1+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
 | 必要標頭 | POST、PUT、DELETE 一律加 `X-VC: 1`，否則 403 |
 | 主機檢查 | `Host` 必須是 `127.0.0.1:<port>` 或 `localhost:<port>`，跨站請求一律 403 |
 | 資料格式 | JSON 本文，UTF-8；上傳檔案用原始位元組本文（不是 multipart） |

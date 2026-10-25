@@ -917,3 +917,9 @@ EditP 移植 `app/vc/explorer.py` 後發現：開新的檔案總管視窗約 25 
 - 輸出 WAV（降噪 Strength 60%、樣本 6.2 至 7.2 秒；去回音 Strength 60%、Release 30%、Dryness 50%），輸出左聲道對原音左聲道：雜音樣本段 -29.7 → -35.4 dBFS（-5.7 dB），語音 20 至 30 秒 -2.3 dB、60 至 90 秒 -2.2 dB，整段 -1.7 dB；峰值 0.739（原音 0.735），沒有 NaN。
 - 打包 exe（1.8.0，zip 27.2 MB）：`--no-window --port 8790` 啟動，ping 回 1.8.0，`/api/system/help` 200，新增的 JS、CSS 都 200；聲道總覽回應正常；刪掉 stems 後由 exe 重算，181 秒單聲道 3 秒算完，與開發環境算出的檔案逐位元組相同；`--stop` 正常結束。
 - 未驗證：聽感（Claude 無法聽音檔）、mp4 輸出與沒選聲道（立體聲 stems）的真實素材輸出、exe 介面的實機點擊、說明頁窄視窗。
+
+2026-10-26 驗證 1.8.1（時間軸工具列「清除區域」按鈕、字幕四顆按鈕換圖示）：
+- 全套測試 741 過、1 略過；第一次以 `-x` 跑時 `test_comfy.py::test_missing_model_stops_the_job_before_anything_is_queued` 失敗一次，單獨重跑與完整重跑都通過，判定為偶發，原因沒查。
+- 開發版在瀏覽器 800 寬：按 I 後按鈕可按，按下後區域消失、按鈕變灰；四個新圖示正常顯示。
+- 打包 exe（1.8.1，zip 27.2 MB）：`--no-window --port 8778` 啟動，ping 回 1.8.1，提供的 icons.js、timeline.js 含新圖示與按鈕，`/api/system/help` 200 且含清除區域說明；`--stop` 正常結束。
+- 未驗證：1920 寬且開著音量表時工具列的排版、exe 介面的實機點擊。
