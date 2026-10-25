@@ -676,13 +676,13 @@ export function Timeline({ project, clips, hotkeys = true }) {
     <div class="tl-toolbar">
       ${watch ? html`<span class="tl-watch-note"><${Icon} name="eye" size=${14} />觀看模式：只能看，不會修改專案</span>
         <${Button} size="sm" icon="x" onClick=${() => setWatch(false)}>結束觀看<//>` : html`
-      <${Button} size="sm" kind="ghost" icon="captions" onClick=${addCaption} title=${`在播放頭位置新增 2 秒字幕${keyHint("edit.addCaption")}`}>新增字幕<//>
-      <${Button} size="sm" kind="ghost" icon="type" onClick=${() => openTitleDialog()}
+      <${Button} size="sm" kind="ghost" icon="caption-plus" onClick=${addCaption} title=${`在播放頭位置新增 2 秒字幕${keyHint("edit.addCaption")}`}>新增字幕<//>
+      <${Button} size="sm" kind="ghost" icon="title-card" onClick=${() => openTitleDialog()}
         title="片頭標題、下標字卡等範本，可改字與顏色，加在播放頭位置">標題字卡<//>
-      <${Button} size="sm" kind="ghost" icon="upload" onClick=${() => srtRef.current && srtRef.current.click()}
+      <${Button} size="sm" kind="ghost" icon="file-import" onClick=${() => srtRef.current && srtRef.current.click()}
         title="匯入 SRT 字幕檔，字幕放在檔案記載的時間；也可以把 .srt 拖進時間軸">匯入 SRT<//>
       <input ref=${srtRef} type="file" accept=".srt" hidden onChange=${pickSrt} />
-      <${Button} size="sm" kind="ghost" icon="globe" onClick=${() => openBilingualImport(project)}
+      <${Button} size="sm" kind="ghost" icon="languages" onClick=${() => openBilingualImport(project)}
         title="匯入中英對照的 Word 或文字檔，中文、英文分成上下兩條字幕軌，可用語音對齊到影片">雙語字幕<//>
       <${Button} size="sm" kind="ghost" icon="music" onClick=${() => importFiles(fileRef, { track: true, start: round(clock.time, 2) }, true)}
         title="在播放頭位置加入音樂或旁白">加入音訊<//>
@@ -699,7 +699,9 @@ export function Timeline({ project, clips, hotkeys = true }) {
         title=${`${snapOn ? "磁吸對齊：開，拖曳時按住 Alt 暫停" : "磁吸對齊：關"}${keyHint("edit.snap")}`} onClick=${() => setSnapOn(!snapOn)} />
       <${IconButton} icon="link" size=${16} active=${linkOn}
         title=${`${linkOn ? "連動上下軌：開，鏡頭移動或改長度時，字幕、上層畫面、音樂、音效跟著移動" : "連動上下軌：關"}${keyHint("edit.link")}`}
-        onClick=${() => setLinkOn(!linkOn)} />`}
+        onClick=${() => setLinkOn(!linkOn)} />
+      <${IconButton} icon="range-x" size=${16} title=${`清除區域（入點、出點）${keyHint("edit.clearRange")}`}
+        disabled=${!editRange} onClick=${clearRange} />`}
       <span class="grow"></span>
       ${!watch && html`<${Button} size="sm" kind="ghost" icon="eye" onClick=${() => setWatch(true)}
         title="只看不改：即時看 Claude 透過 API 剪輯，這個視窗不會修改專案">觀看模式<//>`}
