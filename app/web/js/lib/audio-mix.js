@@ -4,10 +4,13 @@
 // Elements of one timeline row share a track bus between their gain and the mix, so each row has its own
 // level (MX-02). The mix also feeds the loudness meter (loudness-worklet.js, MX-01).
 // One context for the page; it is created on first playback, since browsers start it only after a gesture.
+import { LOW_HZ, HIGH_HZ, BASS_HZ, BODY_HZ, BODY_Q, TONE_HZ } from "./voice-mix.js";
+
 const FFT = 2048;
 const TRACK_FFT = 1024;
 const SMOOTH = 0.01; // seconds; a gain change ramps this fast instead of clicking
 const QUIET = 1e-8; // mean square below this (-80 dB) is silence for the correlation
+const LP_Q_DB = 20 * Math.log10(Math.SQRT1_2); // Butterworth; a Web Audio low pass takes its Q in dB
 
 let ctx = null;
 let bus = null;
@@ -16,7 +19,7 @@ let analysers = null;
 let monitorGain = 1;
 let loudnessNode = null;
 let loudness = null; // the worklet's latest reading
-const routes = new WeakMap(); // element -> {src, gain, value, track}
+const routes = new WeakMap(); // element -> {src, gain, value, track, c, voice}
 const trackBuses = new Map(); // row key -> {input, analysers}
 const bufs = [new Float32Array(FFT), new Float32Array(FFT)];
 const trackBuf = new Float32Array(TRACK_FFT);
@@ -83,20 +86,123 @@ export function wakeMix() {
   return c.state === "running";
 }
 
+function gainNode(value = 1) {
+  const node = ctx.createGain();
+  node.gain.value = value;
+  return node;
+}
+
+function biquadNode(type, hz, q = null) {
+  const node = ctx.createBiquadFilter();
+  node.type = type;
+  node.frequency.value = hz;
+  if (q !== null) node.Q.value = q;
+  return node;
+}
+
+// The remix of a stems element (voice-mix.js mixPlan, as voiceclean.mix_lines renders it for the export): its 3c
+// channels are the source X, the denoised D and V, D with the echo taken out. Per side Y = gh*X + (gr-gh)*D +
+// (1-gr)*V + (gm-gh)*LP4k(X-D) + (gl-gm)*LP250(X-D), then the EQ; one picked channel (c 1) plays on both sides.
+// The gains start at 0 and are set by tuneVoice.
+function buildVoice(src, out, c) {
+  const split = ctx.createChannelSplitter(3 * c);
+  src.connect(split);
+  const merge = ctx.createChannelMerger(2);
+  const sides = [];
+  for (let o = 0; o < c; o += 1) {
+    const at = (stem) => stem * c + o;
+    const pre = gainNode(); // Y before the EQ
+    const [x, d, v] = [0, 1, 2].map((stem) => {
+      const g = gainNode(0);
+      split.connect(g, at(stem));
+      g.connect(pre);
+      return g;
+    });
+    const noise = gainNode(); // X - D
+    const minusD = gainNode(-1);
+    split.connect(noise, at(0));
+    split.connect(minusD, at(1));
+    minusD.connect(noise);
+    const bands = [LOW_HZ, HIGH_HZ].map((hz) => {
+      const lp = biquadNode("lowpass", hz, LP_Q_DB);
+      const g = gainNode(0);
+      noise.connect(lp);
+      lp.connect(g);
+      g.connect(pre);
+      return g;
+    });
+    const eq = [biquadNode("lowshelf", BASS_HZ), biquadNode("peaking", BODY_HZ, BODY_Q), biquadNode("highshelf", TONE_HZ)];
+    pre.connect(eq[0]);
+    eq[0].connect(eq[1]);
+    eq[1].connect(eq[2]);
+    const removed = gainNode(); // X - Y before the EQ: what the cleanup takes out
+    const minusPre = gainNode(-1);
+    split.connect(removed, at(0));
+    pre.connect(minusPre);
+    minusPre.connect(removed);
+    const fx = gainNode(0);
+    const dry = gainNode(0);
+    const delta = gainNode(0);
+    eq[2].connect(fx);
+    split.connect(dry, at(0));
+    removed.connect(delta);
+    for (const node of [fx, dry, delta]) {
+      for (const side of c === 1 ? [0, 1] : [o]) node.connect(merge, 0, side);
+    }
+    sides.push({ x, d, v, bands, eq, fx, dry, delta });
+  }
+  merge.connect(out);
+  return { c, merge, sides, key: "" };
+}
+
+// plan: mixPlan of the clip; monitor: what is heard, "fx" the cleaned sound, "dry" the source as it is (unity, not
+// level-matched), "delta" only what the cleanup takes out.
+function tuneVoice(voice, plan, monitor) {
+  const key = JSON.stringify([plan, monitor]);
+  if (voice.key === key) return;
+  const now = !voice.key;
+  voice.key = key;
+  const set = (param, value) => {
+    if (now) param.value = value;
+    else param.setTargetAtTime(value, ctx.currentTime, SMOOTH);
+  };
+  const db = Object.fromEntries(plan.eq.map(([kind, , gain]) => [kind, gain]));
+  for (const s of voice.sides) {
+    set(s.x.gain, plan.gh);
+    set(s.d.gain, plan.gr - plan.gh);
+    set(s.v.gain, 1 - plan.gr);
+    set(s.bands[0].gain, plan.gl - plan.gm);
+    set(s.bands[1].gain, plan.gm - plan.gh);
+    s.eq.forEach((f) => set(f.gain, db[f.type] || 0));
+    set(s.fx.gain, monitor === "fx" ? 1 : 0);
+    set(s.dry.gain, monitor === "dry" ? 1 : 0);
+    set(s.delta.gain, monitor === "delta" ? 1 : 0);
+  }
+}
+
 // Sets an element's gain (linear, may exceed 1), routing it into the mix the first time, through the bus of
 // timeline row `track`. False while the mix is not running and the element is not routed yet; the caller
-// then uses element.volume instead.
-export function routeGain(media, gain, track = "") {
+// then uses element.volume instead. voice {channels, plan, monitor}: the element plays stems (voiceclean.py) of
+// that many channels per stem, remixed by buildVoice.
+export function routeGain(media, gain, track = "", voice = null) {
   let r = routes.get(media);
   if (!r) {
     if (!ctx || ctx.state !== "running") return false;
     const src = ctx.createMediaElementSource(media);
     const node = ctx.createGain();
     node.gain.value = gain;
-    src.connect(node);
-    r = { src, gain: node, value: gain, track: null };
+    r = { src, gain: node, value: gain, track: null, c: -1, voice: null };
     routes.set(media, r);
   }
+  const c = voice ? voice.channels : 0;
+  if (r.c !== c) {
+    r.src.disconnect();
+    if (r.voice) r.voice.merge.disconnect();
+    r.voice = c ? buildVoice(r.src, r.gain, c) : null;
+    if (!c) r.src.connect(r.gain);
+    r.c = c;
+  }
+  if (voice) tuneVoice(r.voice, voice.plan, voice.monitor);
   if (r.track !== track) {
     if (r.track !== null) r.gain.disconnect();
     r.gain.connect(track ? trackBus(track).input : bus);
@@ -114,6 +220,7 @@ export function unroute(media) {
   const r = routes.get(media);
   if (!r) return;
   r.src.disconnect();
+  if (r.voice) r.voice.merge.disconnect();
   r.gain.disconnect();
   routes.delete(media);
 }

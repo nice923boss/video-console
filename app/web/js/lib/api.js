@@ -16,7 +16,9 @@ const OFFLINE = "無法連線到 Video Console 伺服器，請確認程式仍在
 const WATCHED = "觀看模式中，不會修改專案";
 
 // Watch mode backstop (lib/watch.js): no write to the open project leaves this window, whichever
-// control sent it. Marking it opened, showing its folder and copying it (open / reveal / duplicate) stay allowed.
+// control sent it. Marking it opened, showing its folder and copying it (open / reveal / duplicate) stay allowed, and
+// so do voice-clean and voice-channels, which only render the stems the preview plays a clip's 降噪 / 去回音 from
+// and read its channels' levels.
 function watchBlocks(method, path, body) {
   const { watch, pid } = getState();
   if (!watch || !pid || !UNSAFE.has(method)) return false;
@@ -24,7 +26,7 @@ function watchBlocks(method, path, body) {
     return !!body && (body.pid === pid || (body.jobs || []).some((j) => j.pid === pid));
   }
   const base = `/api/projects/${encodeURIComponent(pid)}`;
-  return (path === base || path.startsWith(`${base}/`)) && !/^\/(open|reveal|duplicate)$/.test(path.slice(base.length));
+  return (path === base || path.startsWith(`${base}/`)) && !/^\/(open|reveal|duplicate|voice-clean|voice-channels)$/.test(path.slice(base.length));
 }
 
 export async function request(method, path, body, { signal } = {}) {

@@ -11,6 +11,7 @@ import { sequenceDuration, clipIndexAt } from "../lib/sequence.js";
 import { ops, saveSettings, updateProject } from "../lib/actions.js";
 import { api } from "../lib/api.js";
 import { legacySize, resolveStyle, usesStyle, dragScope, moveOps } from "../lib/caption-style.js";
+import { requestStems } from "../lib/voice-stems.js";
 import { createEngine } from "./player-engine.js";
 import { MiniMeter } from "./audio-meter.js";
 import { Icon } from "./icons.js";
@@ -183,6 +184,8 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   const maskDraft = useStore((s) => s.maskDraft);
   const compare = useStore((s) => s.gradeCompare);
   const solo = useStore((s) => (s.solo && s.solo.pid === s.pid ? s.solo.keys : null));
+  const voiceStems = useStore((s) => s.voiceStems);
+  const voiceMonitor = useStore((s) => s.voiceMonitor);
   const [shown, setShown] = usePref("vc.player.view", DEFAULT_VIEW, validView);
   // Safe area and thirds live in settings (ui.safeArea / ui.thirds); only the captions switch is per browser.
   const safe = useStore((s) => !!(s.settings && s.settings.ui && s.settings.ui.safeArea));
@@ -272,6 +275,14 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   useEffect(() => {
     engineRef.current.setSolo(solo);
   }, [solo]);
+
+  // The stems the audio clips' 降噪 / 去回音 / 聲道 play from, made again whenever their settings or trims change.
+  useEffect(() => {
+    requestStems(project);
+  }, [project]);
+  useEffect(() => {
+    engineRef.current.setVoice(voiceStems, voiceMonitor);
+  }, [voiceStems, voiceMonitor]);
 
   // Smaller preview copies: the engine plays each one as it arrives; the server makes the missing ones once.
   const played = res > 1 ? playedVideos(project) : [];

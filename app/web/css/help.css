@@ -1,0 +1,30 @@
+/* 說明 page (views/help.js): the manual rendered from Markdown (lib/markdown.js), chapters in the settings-style nav */
+
+.view-help { flex-direction: row; background: var(--bg); }
+.help-tools { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 0 4px 14px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.help-tools .btn { justify-content: flex-start; }
+.help-nav-item { height: auto; min-height: 32px; padding-block: 6px; line-height: 1.4; }
+.help-nav-item.lv3 { min-height: 28px; padding-left: 34px; font-size: calc(12px * var(--text-scale)); }
+.help-loading { display: flex; align-items: center; gap: 8px; padding: 24px 0; }
+
+.help-doc { color: var(--text-2); font-size: calc(13.5px * var(--text-scale)); line-height: 1.75; }
+.help-doc h1, .help-doc h2, .help-doc h3, .help-doc h4 { color: var(--text); scroll-margin-top: 20px; line-height: 1.4; }
+.help-doc h1 { margin: 0 0 12px; font-size: calc(24px * var(--text-scale)); }
+.help-doc h2 { margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-size: calc(19px * var(--text-scale)); }
+.help-doc h3 { margin: 24px 0 8px; font-size: calc(15.5px * var(--text-scale)); }
+.help-doc h4 { margin: 18px 0 6px; font-size: calc(14px * var(--text-scale)); }
+.help-doc p { margin: 0 0 12px; }
+.help-doc ul, .help-doc ol { margin: 0 0 12px; padding-left: 22px; }
+.help-doc li { margin: 3px 0; }
+.help-doc li > ul, .help-doc li > ol { margin: 4px 0 6px; }
+.help-doc b { color: var(--text); }
+.help-doc code { padding: 1px 5px; border-radius: var(--r-sm); background: var(--surface-3); color: var(--text); font-family: var(--mono); font-size: 0.92em; }
+.help-doc pre { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--r-input); background: var(--surface-2); overflow-x: auto; }
+.help-doc pre code { padding: 0; background: none; }
+.help-doc a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+.help-file { color: var(--text); text-decoration: underline dotted; text-underline-offset: 2px; cursor: help; }
+.md-table { margin: 0 0 14px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r-input); }
+.md-table table { width: 100%; border-collapse: collapse; }
+.md-table th, .md-table td { padding: 7px 12px; text-align: left; vertical-align: top; }
+.md-table th { background: var(--surface-2); color: var(--text); font-weight: 600; white-space: nowrap; }
+.md-table tr + tr td, .md-table tbody tr:first-child td { border-top: 1px solid var(--border); }

@@ -40,6 +40,8 @@ const INITIAL = {
   audioSel: null,           // audio clip ids Ctrl+clicked together; counts only while it holds editSel (tl-tracks.js)
   editTool: "select",       // timeline click tool: "select" | "trim" | "blade"
   keyPanel: false,          // the keyframe list in the edit properties panel is open
+  voiceStems: {},           // audio clip id -> its 降噪 / 去回音 stems (lib/voice-stems.js)
+  voiceMonitor: null,       // {id, mode}: what of that clip's cleanup the preview plays, "fx" | "dry" | "delta"
   watch: false,             // watch mode (lib/watch.js): this window only shows the open project
 };
 

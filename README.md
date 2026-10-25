@@ -96,7 +96,7 @@
 | ComfyUI（選用） | 本機或其他電腦上的 ComfyUI，預設連 `http://127.0.0.1:8000` |
 | Video2X（選用） | 把 ComfyUI 生的 480P 影片放大到 1080P。在 APP 內安裝 6.4 版可攜版（約 197 MB），或沿用裝在 `C:\Program Files\Video2X Qt6` 的版本 |
 | Speech-to-subtitle（選用） | 影片原聲轉字幕，需要 NVIDIA 顯示卡。另一個開源專案，安裝方式見上方「搭配工具」 |
-| Python（只有從原始碼執行才需要） | 3.10 以上（安裝時勾選 Add python.exe to PATH） |
+| Python（只有從原始碼執行才需要） | 3.10 以上（安裝時勾選 Add python.exe to PATH）；降噪、去回音另需 numpy，`安裝相依套件.bat` 會裝 |
 
 ## 安裝與啟動
 
@@ -110,7 +110,7 @@
 ### 從原始碼執行
 
 1. 安裝 Python 3.10 以上。
-2. 執行 `啟動 Video Console.bat`。ffmpeg 一樣可以在「依賴元件」一鍵安裝；也可以執行 `安裝相依套件.bat`，改用 pip 安裝 imageio-ffmpeg（已經裝過的套件會略過，不會強制升級）。
+2. 執行 `啟動 Video Console.bat`。ffmpeg 一樣可以在「依賴元件」一鍵安裝；也可以執行 `安裝相依套件.bat`，改用 pip 安裝 imageio-ffmpeg；降噪、去回音要用的 numpy 也由它安裝（已經裝過的套件會略過，不會強制升級）。
 3. 要立刻停止，執行 `停止 Video Console.bat`。
 
 ### 執行中的行為
@@ -224,8 +224,10 @@ Google 在 2026-10-22 停用 Gemini API 上的所有 Veo 模型，原本的「Go
 - **標題字卡**：剪輯頁時間軸工具列「標題字卡」或指令面板「加入標題字卡…」，選片頭標題、章節標題、下標字卡或角落標籤，改字與顏色後加在播放頭，會燒進輸出影片，不會寫進 SRT。
 - **背景音樂自動避讓**：音軌名稱旁的用途按鈕把音軌設成「人聲」或「背景音樂」，人聲出聲時背景音樂自動降低 6～12dB（預設 10dB），說完再拉回；設成「一般」的音軌（例如音效）不受影響。
 - **客戶審稿網頁**：「素材 › 輸出成品 › 文件 › 客戶審稿網頁」下載單一 .html 檔傳給客戶，客戶用瀏覽器開啟後逐鏡留言、下載意見檔傳回來；按「匯入審稿意見」，意見會出現在分鏡卡片與各鏡頭的屬性。
+- **降噪、去回音與選聲道**：剪輯頁選音訊片段，按「降噪／去回音」。降噪先在只有雜音的地方取樣再調強度；去回音不用取樣，是傳統訊號處理（不是 AI）；多聲道的檔案可以看每個聲道的音量，只播其中一個。詳見[使用說明](docs/使用說明.md#降噪去回音與選聲道)。
+- **說明頁**：左側「說明」（`Alt+8`）在 APP 裡顯示使用說明，左邊列出章節，也能開快捷鍵一覽、剪輯功能說明與新手導覽。
 
-詳細操作（匯入、分割修剪、標記顏色、字幕、輸出）見 [docs/使用說明.md](docs/使用說明.md)。還可以改進的 200 個項目整理在 [docs/改進清單.html](docs/改進清單.html)，用瀏覽器打開就能勾選要做的項目。
+詳細操作（匯入、分割修剪、標記顏色、字幕、輸出）見 [docs/使用說明.md](docs/使用說明.md)，APP 的「說明」頁顯示的是同一份。還可以改進的 200 個項目整理在 [docs/改進清單.html](docs/改進清單.html)，用瀏覽器打開就能勾選要做的項目。
 
 ## 讓 Claude Code 操作 Video Console
 
@@ -274,11 +276,11 @@ Video Console/
 ## 自己打包執行檔
 
 ```bash
-python -m pip install pyinstaller
+python -m pip install pyinstaller numpy
 python packaging/build_exe.py
 ```
 
-產出 `dist/Video Console/`（執行檔與 `_internal`）和 `dist/VideoConsole-<版本>-win64.zip`。後端只用 Python 標準函式庫，ffmpeg 與 Video2X 不打包進去，由使用者在「依賴元件」安裝。
+產出 `dist/Video Console/`（執行檔與 `_internal`）和 `dist/VideoConsole-<版本>-win64.zip`。後端用 Python 標準函式庫加 numpy（降噪、去回音用，沒裝時打包腳本會停下來），ffmpeg 與 Video2X 不打包進去，由使用者在「依賴元件」安裝。
 
 ## 授權
 

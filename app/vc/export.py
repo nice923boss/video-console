@@ -30,6 +30,7 @@ from .keyframes import steps as kf_steps
 from .media import ALPHA_DECODERS, AS_709, TAGS_709, TO_709, Media
 from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, total_duration
 from .util import AppError, safe_filename
+from .voiceclean import ensure_stems, mix_lines, stems_for
 
 log = logging.getLogger("vc.export")
 
@@ -528,11 +529,17 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         length = min((a_out - a_in) / speed, total - start)
         if length <= 0.05:
             continue
-        inputs.append(["-i", media["file"]])
+        # A clip with 降噪 / 去回音 or one channel picked plays its stems (voiceclean.py), rendered before planning.
+        stems = stems_for(project, project_dir, track)
+        inputs.append(["-i", stems["file"] if stems else media["file"]])
         idx = len(inputs) - 1
+        head = f"{idx}:a"
+        if stems:
+            graph.extend(mix_lines(track, head, f"vc{k}"))
+            head = f"vc{k}"
         fi = min(float(track.get("fadeIn") or 0.0), length / 2)
         fo = min(float(track.get("fadeOut") or 0.0), length / 2)
-        chain = [aformat, f"atrim=start={a_in:.3f}:duration={length * speed:.3f}", "asetpts=PTS-STARTPTS",
+        chain = [aformat, f"atrim=start={a_in - (stems['from'] if stems else 0.0):.3f}:duration={length * speed:.3f}", "asetpts=PTS-STARTPTS",
                  *([_atempo(speed).rstrip(",")] if _atempo(speed) else []),
                  f"volume='{kf_expr(track, 'volume', 't', 0.0, 1.0)}':eval=frame"]
         duck = duck_expr(spans, start, length, duck_db(project["settings"])) if audio_track(track) in bgm else None
@@ -543,7 +550,7 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         if fo > 0:
             chain.append(f"afade=t=out:st={length - fo:.3f}:d={fo:.3f}")
         chain += [f"adelay=delays={int(round(start * 1000))}:all=1", fix_pts]
-        graph.append(f"[{idx}:a]{','.join(chain)}[ta{k}]")
+        graph.append(f"[{head}]{','.join(chain)}[ta{k}]")
         a_labels.append(f"ta{k}")
 
     # A bare apad never ends (the export then hangs); whole_dur pads to exactly the video length.
@@ -653,6 +660,10 @@ def render(
     part = out_dir / f".{out_path.name}.part"
     work_path = cache / f"{stamp}.{fmt}"  # rendered here and moved to out_dir only once complete
 
+    for item in project.get("audio") or []:  # the stems _plan_audio plays for 降噪 / 去回音 / one channel
+        src = audio_media(project, item)
+        if not item.get("muted") and src and (project_dir / src["file"]).is_file():
+            ensure_stems(media, project, project_dir, item, cancelled)
     clips = prepare_clips(project, project_dir)
     ass = None if sound_only else build_ass(project, clips, opts, int(project["settings"]["width"]),
                                             int(project["settings"]["height"]))

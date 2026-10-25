@@ -4,12 +4,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..server import Router
-from . import captions, chat, deps, engine, files, jobs, projects, stt, styles, system, voice
+from . import captions, chat, clean, deps, engine, files, jobs, projects, stt, styles, system, voice
 
 if TYPE_CHECKING:
     from ..app import App
 
 
 def register(router: Router, app: App) -> None:
-    for module in (system, deps, projects, files, jobs, engine, voice, stt, styles, captions, chat):
+    for module in (system, deps, projects, files, jobs, engine, voice, stt, styles, captions, chat, clean):
         module.register(router, app)

@@ -14,7 +14,7 @@
 |---|---|
 | 位址 | 只聽 `127.0.0.1`，連接埠 8790；被占用時往後找到 8799 |
 | 目前連接埠 | `data/run/server.json` 的 `port` 欄位（VC 執行中才有） |
-| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.7.0", "build": "1.7.0+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
+| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.8.0", "build": "1.8.0+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
 | 必要標頭 | POST、PUT、DELETE 一律加 `X-VC: 1`，否則 403 |
 | 主機檢查 | `Host` 必須是 `127.0.0.1:<port>` 或 `localhost:<port>`，跨站請求一律 403 |
 | 資料格式 | JSON 本文，UTF-8；上傳檔案用原始位元組本文（不是 multipart） |
@@ -58,7 +58,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title, track, pair, disabled}`，時間是序列上的秒數。`track` 是所在的字幕軌（`captionTracks` 的 id；沒有或指向已不存在的軌道時算在主字幕軌）。`pair` 是這句所翻譯那句字幕的 id（雙語匯入時英文指向中文），語音對齊時兩句一起移動。`disabled: true` 時保留位置，但不顯示、不輸出、不寫進 SRT。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
 | `captionTracks` | 主字幕軌以外的字幕軌 `{id, name, hidden}`。陣列順序是時間軸上由上到下的順序，主字幕軌永遠在最上面。同時出現在畫面下方的字幕，越下面的軌道越靠近畫面底邊（雙語匯入的英文軌在中文軌下面，所以英文在最下一行、中文在上一行）；畫面上方與中間的字幕相反，越上面的軌道越靠近邊緣。`hidden: true` 的軌道預覽與輸出都不顯示；主字幕軌的開關是 `tracks.captionsHidden` |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
-| `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed` |
+| `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed`。`denoise` 是降噪 `{on, strength, low, mid, high, sample}`：數值 0~1（預設 0.6、1、1、1），`sample` 是原始檔裡只有雜音的一段 `{from, to}`（秒，至少 0.25 秒，超過 10 秒只取前 10 秒），`null` 時還沒取樣、不降噪。`dereverb` 是去回音 `{on, strength, release, dryness, bass, body, tone}`：`body`、`tone` 是 -1~1，其餘 0~1（預設強度 0.6、release 0.3、dryness 0.5，其餘 0）。`channel` 是只播原始檔的哪一個聲道 `{stream, index}`（第幾條音訊串流、其中第幾個聲道，0~63），`null` 時播第一條音訊串流混成的立體聲。`on: false` 保留設定但不處理；有取樣的降噪、去回音或指定聲道時，預覽與輸出播 `media/clean/` 裡處理好的檔（`voice-clean`） |
 | `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背 |
 | `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用）；`musicOrder` 是音樂軌由上到下的代號（片段的 `track`，沒有 `track` 的用片段 id），沒列到的排在後面，只影響顯示 |
@@ -467,6 +467,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/system/deps/install` | 安裝或更新相依套件 `{"id": ...}`；下載中斷時保留已下載的部分，下次從斷點接著下載，來源失敗時換下一個 |
 | GET | `/api/system/release` | 比對 GitHub 上最新 Release `{"current", "latest", "newer", "url", "published", "remark"}`；結果保留 6 小時 |
 | POST | `/api/system/release/check` | 同上，但不用保留的結果，重新查一次 |
+| GET | `/api/system/help` | 使用說明 `docs/使用說明.md` 的內容 `{"markdown"}`，「說明」頁顯示的就是它；檔案不在時 404 |
 | GET | `/api/system/debug-bundle?project=pid` | 除錯資料 ZIP：記錄檔、系統資訊、設定（ntfy 主題遮住）、金鑰只標示有沒有設定、工作清單；加 `project` 時附上該專案的 project.json（找不到 404） |
 | POST | `/api/system/clear-logs` | 清除記錄檔（使用中的清空，其餘刪除），回 `{"freed", "system"}` |
 | POST | `/api/system/client-error` | 頁面錯誤寫入 app.log `{"message", "stack", "view"}` |
@@ -497,6 +498,8 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/captions.srt` | 匯入 SRT 字幕（第 6 節） |
 | POST | `/api/projects/{pid}/captions/bilingual` | 匯入中英對照文字成兩軌字幕（6.1 節） |
 | POST | `/api/projects/{pid}/captions/align` | 語音對齊一條字幕軌（6.2 節） |
+| POST | `/api/projects/{pid}/voice-clean` | 音訊片段的降噪、去回音、指定聲道處理檔 `{"id"}`：沒有符合目前設定的檔就先處理完才回應，回 `{"stems": {file, from, to}}`，不需處理時 `null`。檔案是 48 kHz 16 位元 WAV，依序是原音、降噪後、再去回音後各一組聲道（指定聲道時各 1 聲道，否則各 2），涵蓋片段前後各多 2 秒的原始檔（`from`、`to` 是原始檔秒數）。強度、Low／Mid／High、低頻衰減、厚度、明亮在播放時混合，改這些不用重新處理；同一片段有新的請求時舊的回 499 |
+| POST | `/api/projects/{pid}/voice-channels` | 音訊片段原始檔每條音訊串流、每個聲道在片段範圍內的音量 `{"id"}`，回 `{"streams": [{"stream", "channels": [{"peaks", "peakDb", "rmsDb"}]}]}`：`peaks` 是 200 格 0~100（對應 -60~0 dBFS），整段無聲的聲道 dB 為 `null`；同專案有新的請求時舊的回 499 |
 | POST | `/api/projects/{pid}/chat` | AI 助理對話一輪（第 11 節），等模型做完才回應 |
 | POST | `/api/projects/{pid}/chat/cancel` | 停止進行中的一輪 `{"id"}`，回 `{"stopped": bool}` |
 | GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |

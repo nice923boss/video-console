@@ -15,6 +15,7 @@ import { chromaMarkup } from "../lib/chroma.js";
 import { maskMarkup } from "../lib/masks.js";
 import { wakeMix, routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
 import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
+import { release, playSafe, seekTo, voicePlay, trackElements } from "./player-media.js";
 
 const DRIFT_PLAYING = 0.15;
 const DRIFT_PAUSED = 0.02;
@@ -34,40 +35,6 @@ function el(tag, cls, parent) {
   if (cls) node.className = cls;
   if (parent) parent.appendChild(node);
   return node;
-}
-
-function release(media) {
-  media.pause();
-  if (media.hasAttribute("src")) {
-    media.removeAttribute("src");
-    media.load();
-  }
-}
-
-function playSafe(media) {
-  const p = media.play();
-  if (!p) return;
-  p.catch((err) => {
-    // AbortError: a pause() arrived before playback started, which is normal while scrubbing.
-    // NotAllowedError: the browser refused sound without a user gesture; keep the picture moving.
-    if (err && err.name === "NotAllowedError" && !media.muted) {
-      media.muted = true;
-      media.play().catch(() => {});
-    }
-  });
-}
-
-function seekTo(media, holder, target) {
-  if (media.seeking) {
-    holder.pendingSeek = target;
-    return;
-  }
-  holder.pendingSeek = null;
-  try {
-    media.currentTime = target;
-  } catch {
-    // Not seekable yet; loadedmetadata re-renders and seeks again.
-  }
 }
 
 function slateText(clip) {
@@ -195,6 +162,9 @@ export function createEngine(host, hooks = {}) {
   let level = 1;
   let muted = false;
   let solo = []; // row keys heard alone; empty: every row
+  let stems = {}; // audio clip id -> its 降噪 / 去回音 stems (lib/voice-stems.js)
+  let monitor = null; // {id, mode}: that clip plays its source ("dry") or only what the cleanup takes out ("delta")
+  let mixOn = false; // the Web Audio mix runs, so stems can be remixed
   let voice = []; // merged voice spans the 背景音樂 rows dip under (lib/duck.js)
   let scale = 1; // preview resolution: 1, 2 (half) or 4 (quarter)
   let capKey = "";
@@ -232,9 +202,9 @@ export function createEngine(host, hooks = {}) {
   // Sound goes through the Web Audio mix once it runs (it plays gains above 1 and feeds the meters);
   // before that, and where Web Audio is missing, through the element's own volume, capped at 1.
   // track: the timeline row the sound belongs to (its own meter, and silent when another row is soloed).
-  function setGain(media, gain, track) {
+  function setGain(media, gain, track, voice = null) {
     if (solo.length && !solo.includes(track)) gain = 0;
-    if (routeGain(media, gain, track)) {
+    if (routeGain(media, gain, track, voice)) {
       media.volume = 1;
       media.muted = false;
     } else {
@@ -515,8 +485,10 @@ export function createEngine(host, hooks = {}) {
     }
     for (const [id, tr] of tracks) {
       if (!seen.has(id)) {
-        release(tr.audio);
-        unroute(tr.audio);
+        for (const audio of trackElements(tr)) {
+          release(audio);
+          unroute(audio);
+        }
         tracks.delete(id);
       }
     }
@@ -683,7 +655,7 @@ export function createEngine(host, hooks = {}) {
       const track = audioTrack(item);
       const off = item.muted || flags[track === VOICE_TRACK ? "voiceMuted" : "musicMuted"] || (solo.length && !solo.includes(track));
       if (!playing || off || len <= 0.05 || local < 0 || local >= len) {
-        if (!audio.paused) audio.pause();
+        for (const el of trackElements(tr)) if (!el.paused) el.pause();
         continue;
       }
       const fi = Math.min(Number(item.fadeIn || 0), len / 2);
@@ -692,13 +664,15 @@ export function createEngine(host, hooks = {}) {
       if (fi > 0 && local < fi) gain *= local / fi;
       if (fo > 0 && local > len - fo) gain *= (len - local) / fo;
       if (bgm.includes(track)) gain *= duckGain(voice, t, db);
-      setGain(audio, gain, track);
       const sp = audioSpeed(item);
       const speed = Math.min(MAX_RATE, last.rate * sp);
-      if (audio.playbackRate !== speed) audio.playbackRate = speed;
       const target = Number(item.in || 0) + local * sp;
-      if (Math.abs(audio.currentTime - target) > DRIFT_PLAYING * Math.max(1, speed)) seekTo(audio, tr, target);
-      if (audio.paused) playSafe(audio);
+      const mode = monitor && monitor.id === item.id ? monitor.mode : "fx";
+      const { el, holder, at, voice: fx } = voicePlay(tr, target, project.id, mixOn && stems[item.id], mode);
+      setGain(el, gain, track, fx);
+      if (el.playbackRate !== speed) el.playbackRate = speed;
+      if (Math.abs(el.currentTime - at) > DRIFT_PLAYING * Math.max(1, speed)) seekTo(el, holder, at);
+      if (el.paused) playSafe(el);
     }
   }
 
@@ -706,7 +680,7 @@ export function createEngine(host, hooks = {}) {
   function render(t, playing, rate = 1) {
     last = { t, playing, rate: Math.max(1, Math.abs(rate)) };
     if (!project) return;
-    if (playing) wakeMix();
+    if (playing) mixOn = wakeMix();
     const g = projectFade(t);
     const flags = project.tracks || {};
     drawPicture(t, playing, flags.videoMuted ? 0 : g);
@@ -754,6 +728,12 @@ export function createEngine(host, hooks = {}) {
       solo = keys || [];
       rerender();
     },
+    // next: the store's voiceStems; mode: its voiceMonitor.
+    setVoice(next, mode) {
+      stems = next || {};
+      monitor = mode;
+      rerender();
+    },
     setPreviewScale(n) {
       scale = n;
       if (project) syncOverlays();
@@ -782,7 +762,7 @@ export function createEngine(host, hooks = {}) {
         unroute(media);
       };
       slots.forEach((s) => drop(s.video));
-      tracks.forEach((tr) => drop(tr.audio));
+      tracks.forEach((tr) => trackElements(tr).forEach(drop));
       tracks.clear();
       pips.forEach((ov) => ov.video && drop(ov.node));
       pips.clear();

@@ -17,10 +17,11 @@ if not errorlevel 1 (
 if not defined VC_PY goto nopython
 %VC_PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" 1>nul 2>nul
 if errorlevel 1 goto oldpython
-echo 安裝 imageio-ffmpeg（內附 ffmpeg，用來輸出影片、擷取畫面與產生縮圖）。
+echo 安裝 imageio-ffmpeg（內附 ffmpeg，用來輸出影片、擷取畫面與產生縮圖），
+echo 以及 numpy（音訊的降噪與去回音要用）。
 echo 已經裝過的套件會略過，不會強制升級。
 echo.
-%VC_PY% -m pip install imageio-ffmpeg
+%VC_PY% -m pip install imageio-ffmpeg numpy
 if errorlevel 1 goto failed
 echo.
 echo 安裝完成。可以執行「啟動 Video Console.bat」。

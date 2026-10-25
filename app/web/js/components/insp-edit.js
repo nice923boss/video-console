@@ -2,7 +2,7 @@
 // plays (in/out points) and the transition into the next shot. Numbers here follow sequence.js,
 // so they match what the timeline draws and what the export renders.
 import { html, useMemo } from "../lib/h.js";
-import { useStore } from "../lib/store.js";
+import { setState, useStore } from "../lib/store.js";
 import { updateShot } from "../lib/actions.js";
 import { submitJob } from "../lib/jobs-actions.js";
 import { clock, setTime } from "../lib/clock.js";
@@ -135,8 +135,17 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
     ${vid.hasAudio && html`<${Button} icon="music"
       title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、調音量"}${keyHint("edit.detachAudio")}`}
       onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}
+    ${vid.hasAudio && html`<${Button} icon="wand" title="降噪、去回音與選聲道都在分離出的音訊上調整；還沒分離就先分離原聲"
+      onClick=${() => voiceTools(project, shot, clips, sel)}>降噪／去回音<//>`}
     ${note && html`<${Hint}>${note}<//>`}
   <//>`;
+}
+
+// 降噪 / 去回音 / 聲道 belong to an audio clip (voice-panel.js): opens the shot's detached sound, detaching it first.
+function voiceTools(project, shot, clips, sel) {
+  const audio = shot.audioDetached && (project.audio || []).find((a) => a.shotId === shot.id);
+  if (audio) setState({ editSel: { type: "audio", id: audio.id } });
+  else detachAudio(project, clips, sel);
 }
 
 function StillSection({ shot, img }) {

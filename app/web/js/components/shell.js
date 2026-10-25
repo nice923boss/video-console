@@ -19,6 +19,7 @@ export const VIEWS = [
   { id: "queue", label: "佇列", icon: "queue" },
   { id: "engines", label: "引擎", icon: "cpu" },
   { id: "settings", label: "設定", icon: "settings" },
+  { id: "help", label: "說明", icon: "book" },
 ];
 
 export const VIEW_LABEL = Object.fromEntries(VIEWS.map((v) => [v.id, v.label]));

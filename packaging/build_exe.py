@@ -1,9 +1,10 @@
 """Build the Windows release: dist/Video Console/Video Console.exe plus a zip of that folder.
 
-    python -m pip install pyinstaller
+    python -m pip install pyinstaller numpy
     python packaging/build_exe.py
 
-The app is pure standard library, so PyInstaller needs no hidden imports; only the web UI, the built-in
+The app is standard library plus numpy (降噪 / 去回音 in vc/voiceclean.py, which PyInstaller finds by itself), so
+it needs no hidden imports; only the web UI, the built-in
 ComfyUI workflow templates, the model menus (vc/providers/model_lists.json) and the tool versions (vc/deps.json) are added as data. ffmpeg and Video2X are not bundled: the settings page
 installs them into data/tools on first use.
 """
@@ -27,6 +28,10 @@ EXTRAS = ("README.md", "LICENSE", "docs", "tools", "claude")  # copied beside th
 
 
 def build() -> Path:
+    try:
+        import numpy  # noqa: F401 - an exe built without it would refuse 降噪 / 去回音
+    except ImportError:
+        raise SystemExit("numpy is missing: python -m pip install numpy") from None
     # The packaged vc/BUILD lets the exe report the source build it was made from, and lets vc_client read it.
     stamp = WORK / "stamp" / "BUILD"
     stamp.parent.mkdir(parents=True, exist_ok=True)

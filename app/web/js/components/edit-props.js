@@ -18,6 +18,7 @@ import {
 import { Button, IconButton, Field, DraftText, NumberInput, Slider, Segmented, Toggle, Select, Badge } from "./ui.js";
 import { Icon } from "./icons.js";
 import { Inspector } from "./inspector.js";
+import { VoicePanel } from "./voice-panel.js";
 import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe } from "./tl-commands.js";
@@ -141,6 +142,7 @@ function AudioPanel({ project, item }) {
       ${!item.captionId && html`<${Toggle} checked=${!!item.fixed} label="固定在時間軸"
         hint="開啟連動時，移動、刪除或修剪鏡頭也不會帶動這條音軌，適合跟著節拍剪的配樂"
         onChange=${(fixed) => updateAudio(item.id, { fixed }, fixed ? "固定音軌" : "取消固定音軌")} />`}
+      ${media && html`<${VoicePanel} project=${project} item=${item} media=${media} />`}
       <${KeyList} item=${item} start=${start} length=${len} local=${local}
         update=${(patch, label) => updateAudio(item.id, patch, label)}
         onAdd=${() => addKeyframe(project, null, { type: "audio", id: item.id })} />

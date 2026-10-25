@@ -15,6 +15,7 @@ from .. import BUILD, VERSION, default_updates, explorer, folderpick, release
 from ..captions import list_fonts
 from ..diagnostics import clear_logs, debug_bundle, log_bytes
 from ..exportdir import ensure_root, export_root
+from ..paths import ROOT_DIR
 from ..presets import all_presets
 from ..server import Request, Response, Router
 from ..util import AppError
@@ -29,6 +30,7 @@ FIXED_SECRETS = frozenset({"comfyorg.api_key", "llm.api_key", "ntfy.token", "voa
 COMFY_TOKEN_RE = re.compile(r"^comfy\.[a-z0-9_-]{1,32}\.token$")
 MAX_SECRET_LEN = 4096
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+HELP_FILE = ROOT_DIR / "docs" / "使用說明.md"  # the 說明 page; packaging copies docs/ beside the exe
 
 
 def system_info(app: App) -> dict[str, Any]:
@@ -93,6 +95,13 @@ def register(router: Router, app: App) -> None:
     @router.route("GET", "/api/system/release")
     def get_release(req: Request) -> dict:
         return release.latest()
+
+    @router.route("GET", "/api/system/help")
+    def get_help(req: Request) -> dict:
+        try:
+            return {"markdown": HELP_FILE.read_text(encoding="utf-8")}
+        except FileNotFoundError:
+            raise AppError(f"找不到使用說明檔：{HELP_FILE}", 404) from None
 
     @router.route("POST", "/api/system/release/check")
     def check_release(req: Request) -> dict:

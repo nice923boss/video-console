@@ -24,10 +24,11 @@ import { LibraryView } from "./views/library.js";
 import { QueueView } from "./views/queue.js";
 import { EnginesView } from "./views/engines.js";
 import { SettingsView } from "./views/settings.js";
+import { HelpView } from "./views/help.js";
 
 const VIEW_COMPONENTS = {
   home: HomeView, board: BoardView, edit: EditView, library: LibraryView,
-  queue: QueueView, engines: EnginesView, settings: SettingsView,
+  queue: QueueView, engines: EnginesView, settings: SettingsView, help: HelpView,
 };
 
 // Shared with the rail, the top bar and the command palette.

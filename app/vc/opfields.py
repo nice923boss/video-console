@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .grade import clean_grade
 from .util import AppError
+from .voiceclean import clean_channel, clean_denoise, clean_dereverb
 
 _ID_RE = re.compile(r"^[a-z]{1,3}_[a-z0-9]{6,24}$")
 TRANSITIONS = ("cut", "crossfade", "fade_black", "fade_white", "wipe_left", "slide_left")
@@ -350,6 +351,9 @@ AUDIO_FIELDS = {
     "fixed": _bool,  # stays at its time when linked shot edits move everything else
     "speed": _float(0.25, 4),  # set on the detached sound of a sped-up shot: source seconds per timeline second
     "speech": _bool,  # counts as voice: music on the 背景音樂 rows dips under it (duck.py)
+    "denoise": clean_denoise,  # noise reduction learned from a sample of the clip (voiceclean.py)
+    "dereverb": clean_dereverb,  # the classic echo remover
+    "channel": clean_channel,  # the one channel of its file the clip plays; None: all of them
 }
 CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _str(500), "position": _str(10),
                   "speaker": _opt_id,
