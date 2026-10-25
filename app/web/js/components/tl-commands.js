@@ -10,6 +10,7 @@ import { valueAt, hasKeys, withKey } from "../lib/keyframes.js";
 import { fullGrade } from "../lib/grade.js";
 import { generate } from "../lib/jobs-actions.js";
 import { keyHint } from "../lib/keymap.js";
+import { readPref } from "../lib/prefs.js";
 import { toast } from "./toast.js";
 import { splitOps } from "./tl-edit.js";
 
@@ -19,6 +20,7 @@ const VOLUME_MAX = 4;
 const RAMP = 0.1; // seconds a range's volume takes to rise or fall to its level
 const FREEZE_LEN = 2;
 const EDGE = 0.1;
+const MIN_ITEM = 0.1;
 export const KEYABLE = ["overlay", "audio", "adjust"];
 
 export const MARKER_COLORS = [
@@ -124,7 +126,8 @@ export const clearRange = () => setState({ editRange: null });
 
 let stopRange = null;
 
-// Plays from the in point and stops at the out point; pausing or playing backwards drops the stop.
+// Plays from the in point and stops at the out point, or with the player's loop on (player.js
+// "vc.player.loop") goes back to the in point; pausing or playing backwards drops the stop.
 export function playRange() {
   const r = getState().editRange;
   if (!r) return warn(`先設定區域的入點${keyHint("edit.markIn")}與出點${keyHint("edit.markOut")}`);
@@ -134,6 +137,10 @@ export function playRange() {
   setPlaying(true);
   const off = onClock((c) => {
     if (c.playing && c.rate > 0 && c.time < r.out) return;
+    if (c.playing && c.rate > 0 && readPref("vc.player.loop", false, (v) => typeof v === "boolean")) {
+      setTime(r.in);
+      return;
+    }
     off();
     stopRange = null;
     if (c.playing && c.rate > 0) {
@@ -176,31 +183,57 @@ export function markerJump(project, dir) {
 export function freezeFrame(project, clips) {
   const clip = clips[clipIndexAt(clips, clock.time)];
   if (!clip || clip.source !== "video") return warn("播放頭下方要是影片片段才能定格");
-  if (clip.shot.audioDetached) return warn(`已分離原聲的鏡頭要先還原原聲${keyHint("edit.detachAudio")}，才能定格`);
   const local = clock.time - clip.start;
   const at = round(Math.min(clip.out - 0.04, clip.in + local * clip.speed), 3);
   const id = newId("s");
   const still = { op: "shot.add", shot: { id, name: "定格", duration: FREEZE_LEN }, index: clip.index + 1 };
-  let list;
-  if (local < EDGE) list = [{ ...still, index: clip.index }];
-  else if (clip.length - local < EDGE) list = [still];
-  else list = [...splitOps({ type: "shot", clip, t: round(clock.time, 3), local }), still];
+  let list, place;
+  if (local < EDGE) [list, place] = [[{ ...still, index: clip.index }], clip.start];
+  else if (clip.length - local < EDGE) [list, place] = [[still], clip.start + clip.length];
+  else [list, place] = [[...splitOps({ type: "shot", clip, t: round(clock.time, 3), local }, project), still], clock.time];
+  list.push(...detachedSoundOps(project, clip, place));
   ops(list, { label: "定格" }).then((res) => {
     if (res) generate("lastframe", [clip.shot.id], { payload: { source: clip.take.id, target: "shot", targetShot: id, at } });
   });
 }
 
+// Keeps the shot's detached sound under its picture when a still goes in at `place`, whatever the link
+// toggle: a clip across `place` is cut there and its tail moves past the still, later ones move by its length.
+function detachedSoundOps(project, clip, place) {
+  return footageSound(project, clip.shot.id, fileOf(project, clip.take.id)).flatMap((a) => {
+    const start = Number(a.start || 0);
+    const local = place - start;
+    if (local >= MIN_ITEM && audioLength(a, audioMedia(project, a)) - local >= MIN_ITEM) {
+      const [head, tail] = splitOps({ type: "audio", item: a, t: round(place, 3), local }, project);
+      return [head, { ...tail, item: { ...tail.item, start: round(place + FREEZE_LEN, 3) } }];
+    }
+    return local < MIN_ITEM ? [{ op: "audio.update", id: a.id, patch: { start: round(start + FREEZE_LEN, 3) } }] : [];
+  });
+}
+
+// The footage a version shows; a reversed copy counts as the footage it was made from.
+function fileOf(project, takeId) {
+  const takes = project.takes || {};
+  const take = takes[takeId] || {};
+  return ((isReverse(take) && takes[take.parent]) || take).file;
+}
+
+// The detached sound of a shot and of the shots cut from the same footage.
+const footageSound = (project, shotId, file) =>
+  (project.audio || []).filter((a) => a.shotId && (a.shotId === shotId || (file && fileOf(project, a.takeId) === file)));
+
 // Detach: the shot's sound becomes an audio clip under it (takeId + shotId) and the shot itself plays
 // silent. Again on the shot or that audio: the audio clips go and the shot plays its own sound again.
-// Shots cut from the same footage restore together, since a cut copies the detached flag to both halves.
+// Shots cut from the same footage restore together, since a cut copies the detached flag to both halves
+// (each half has its own copy of the version, so they are matched by file).
 export function detachAudio(project, clips, sel) {
   const cur = current(project, clips, sel);
   const audio = project.audio || [];
   const shotId = cur && (cur.type === "audio" ? cur.item.shotId : cur.type === "shot" && cur.item.audioDetached ? cur.item.id : null);
   if (shotId) {
-    const takes = new Set(audio.filter((a) => a.shotId === shotId).map((a) => a.takeId));
-    const items = audio.filter((a) => a.shotId && (a.shotId === shotId || takes.has(a.takeId)));
-    const shots = project.shots.filter((s) => s.audioDetached && (s.id === shotId || takes.has(s.activeVideo)));
+    const files = new Set(audio.filter((a) => a.shotId === shotId).map((a) => fileOf(project, a.takeId)).filter(Boolean));
+    const items = audio.filter((a) => a.shotId && (a.shotId === shotId || files.has(fileOf(project, a.takeId))));
+    const shots = project.shots.filter((s) => s.audioDetached && (s.id === shotId || files.has(fileOf(project, s.activeVideo))));
     ops([...items.map((a) => ({ op: "audio.delete", id: a.id })),
       ...shots.map((s) => ({ op: "shot.update", id: s.id, patch: { audioDetached: false } }))], { label: "還原原聲" });
     return;
@@ -208,10 +241,10 @@ export function detachAudio(project, clips, sel) {
   const clip = cur && cur.type === "shot" ? cur.clip : null;
   if (!clip) return warn("先選取畫面軌上的鏡頭，或把播放頭移到鏡頭上");
   if (clip.source !== "video" || !clip.take.hasAudio) return warn("這個鏡頭沒有聲音");
-  if (clip.speed !== 1) return warn("變速鏡頭不能分離音訊，先把速度改回 1x");
   const id = newId("a");
+  // A sped shot's sound keeps its speed (the shot's speed is locked while its sound is detached).
   const item = { id, takeId: clip.take.id, shotId: clip.shot.id, start: round(clip.start, 3), in: round(clip.in, 3),
-    out: round(clip.out, 3), name: `${clip.shot.name || "鏡頭"} 原聲` };
+    out: round(clip.out, 3), name: `${clip.shot.name || "鏡頭"} 原聲`, ...(clip.speed !== 1 ? { speed: clip.speed } : {}) };
   ops([{ op: "audio.add", item }, { op: "shot.update", id: clip.shot.id, patch: { audioDetached: true } }], { label: "分離原聲" })
     .then((res) => {
       if (res) setState({ editSel: { type: "audio", id } });
@@ -232,7 +265,6 @@ export function reverseClip(project, clips, sel) {
   const shot = cur && cur.type === "shot" ? cur.item : null;
   const take = shot && videoTake(project, shot);
   if (!take) return warn("倒放只能用在影片鏡頭");
-  if (shot.audioDetached) return warn(`已分離原聲的鏡頭要先還原原聲${keyHint("edit.detachAudio")}，才能倒放`);
   const takes = project.takes || {};
   const other = isReverse(take) ? takes[take.parent]
     : Object.values(takes).find((t) => t.parent === take.id && isReverse(t) && t.kind === "video" && t.duration);
@@ -281,31 +313,6 @@ export function addKeyframe(project, clips, sel, t = clock.time) {
 export function toggleKeyPanel(sel) {
   if (!sel || !KEYABLE.includes(sel.type)) return warn("先選取上方畫面、音訊或調整圖層的片段");
   setState({ keyPanel: !getState().keyPanel });
-}
-
-// ---------------------------------------------------------------- copy and paste
-let copied = null; // the audio clip as it was when copied
-
-// Nothing selected: false lets the browser copy text as usual.
-export function copyItem(project, clips, sel) {
-  if (!sel) return false;
-  if (sel.type !== "audio") return warn("目前只能複製音訊片段");
-  const item = (project.audio || []).find((a) => a.id === sel.id);
-  if (!item) return warn("找不到選取的音訊片段");
-  copied = JSON.parse(JSON.stringify(item));
-  toast("已複製音訊片段", { id: "tl-copy", duration: 1500 });
-}
-
-// The copy starts at the playhead on a track of its own (a clip without `track` is its own track); it no longer
-// belongs to a caption or a shot, so it leaves the voice rows and the detached-sound pairing behind.
-export function pasteItem(project) {
-  if (!copied) return warn(`還沒有複製音訊片段，先選取音訊再按${keyHint("edit.copy")}`);
-  if (!audioMedia(project, copied)) return warn("複製的音訊素材不在這個專案裡");
-  const { captionId, shotId, track, ...rest } = copied;
-  const id = newId("a");
-  ops([{ op: "audio.add", item: { ...rest, id, start: round(clock.time, 3) } }], { label: "貼上音訊" }).then((res) => {
-    if (res) setState({ editSel: { type: "audio", id } });
-  });
 }
 
 // Keys from the shortcut table that have no feature behind them yet (GAPS.md).

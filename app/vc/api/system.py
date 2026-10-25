@@ -1,4 +1,4 @@
-"""Bootstrap snapshot, settings, secrets, system info and shutdown."""
+"""Bootstrap snapshot, settings, secrets, system info, the debug bundle and shutdown."""
 from __future__ import annotations
 
 import logging
@@ -11,11 +11,12 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .. import BUILD, VERSION, explorer
+from .. import BUILD, VERSION, default_updates, explorer, folderpick, release
 from ..captions import list_fonts
+from ..diagnostics import clear_logs, debug_bundle, log_bytes
 from ..exportdir import ensure_root, export_root
 from ..presets import all_presets
-from ..server import Request, Router
+from ..server import Request, Response, Router
 from ..util import AppError
 from .engine import provider_list, provider_secret_names
 
@@ -41,6 +42,7 @@ def system_info(app: App) -> dict[str, Any]:
         "instance": app.instance,
         "started": app.started,
         "pid": os.getpid(),
+        "logBytes": log_bytes(app.paths.logs),
     }
 
 
@@ -78,13 +80,23 @@ def register(router: Router, app: App) -> None:
             "comfy": app.comfy.status(),
             "workflows": app.workflows.list(),
             "providers": provider_list(app),
+            "costs": app.costs.summary(),
             "presets": all_presets(),
             "system": system_info(app),
+            "defaultUpdates": default_updates.pending(app.settings.get()),
         }
 
     @router.route("GET", "/api/system")
     def system(req: Request) -> dict:
         return system_info(app)
+
+    @router.route("GET", "/api/system/release")
+    def get_release(req: Request) -> dict:
+        return release.latest()
+
+    @router.route("POST", "/api/system/release/check")
+    def check_release(req: Request) -> dict:
+        return release.latest(force=True)
 
     @router.route("GET", "/api/system/fonts")
     def fonts(req: Request) -> dict:
@@ -107,6 +119,37 @@ def register(router: Router, app: App) -> None:
         if what not in folders:
             raise AppError("不支援的資料夾")
         open_folder(folders[what])
+
+    @router.route("GET", "/api/system/debug-bundle")
+    def bundle(req: Request) -> Response:
+        """Logs, app facts, settings and jobs zipped for a bug report, with one project's state if asked (QA-09)."""
+        pid = req.query.get("project") or ""
+        project = app.store.get(pid) if pid else None
+        body = debug_bundle(app.paths.logs, system_info(app), app.settings.get(), app.secrets.status(),
+                            app.jobs.list(), project)
+        name = f"Video Console 除錯資料 {time.strftime('%Y%m%d-%H%M%S')}.zip"
+        return Response(body, "application/zip", download_name=name)
+
+    @router.route("POST", "/api/system/clear-logs")
+    def clear_log_files(req: Request) -> dict:
+        return {"freed": clear_logs(app.paths.logs), "system": system_info(app)}
+
+    @router.route("POST", "/api/system/client-error")
+    def client_error(req: Request) -> None:
+        """An uncaught error in the page, logged so the debug bundle has it (QA-09)."""
+        body = req.json_object()
+        log.error("Page error on %s: %s\n%s", str(body.get("view") or "")[:40], str(body.get("message") or "")[:500],
+                  str(body.get("stack") or "")[:4000])
+
+    @router.route("POST", "/api/system/pick-folder")
+    def pick_folder(req: Request) -> dict:
+        """Open the system's select-folder dialog and wait for the user; path is None when canceled."""
+        if sys.platform != "win32":
+            raise AppError("只有 Windows 支援選擇資料夾", 501)
+        body = req.json_object()
+        start = str(body.get("start") or "").strip()
+        title = str(body.get("title") or "選擇資料夾")[:100]
+        return {"path": folderpick.pick(Path(start) if start else None, title)}
 
     @router.route("POST", "/api/shutdown")
     def shutdown(req: Request) -> dict:
@@ -140,6 +183,15 @@ def register(router: Router, app: App) -> None:
         if "ffmpeg" in patch:
             app.reset_media()
         return saved
+
+    @router.route("POST", "/api/settings/default-updates")
+    def apply_default_updates(req: Request) -> dict:
+        """Answer the new-defaults question: switch the listed items, keep the rest."""
+        keys = req.json_object().get("apply") or []
+        if not isinstance(keys, list):
+            raise AppError("要套用的項目格式不正確")
+        saved = default_updates.apply(app.settings, [str(k) for k in keys])
+        return {"settings": saved, "providers": provider_list(app)}
 
     @router.route("GET", "/api/secrets")
     def get_secrets(req: Request) -> dict:

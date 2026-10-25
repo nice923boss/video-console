@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import video2x
-from .ops import MAX_CAPTION_STYLES, clean_caption_style
+from .opfields import MAX_CAPTION_STYLES, clean_caption_style
 from .events import EventBus
 from .util import AppError, deep_merge, read_json, write_json_atomic
 
@@ -17,6 +17,13 @@ log = logging.getLogger("vc.settings")
 
 LOCAL_COMFY_URL = "http://127.0.0.1:8000"
 DEFAULT_NEGATIVE = "blurry, low quality, deformed, distorted, watermark, text, logo, signature, jpeg artifacts"
+MAX_LABEL_COLORS = 12
+MAX_GLOSSARY = 5000  # characters in the caption word list
+TEXT_SCALES = (1, 1.15, 1.3)  # interface text size: standard, large, larger
+NTFY_WHEN = ("all", "failed")
+# The export dialog's platform presets (web/js/lib/export-presets.js PRESETS); "" keeps the project size.
+EXPORT_PRESETS = ("", "youtube", "shorts", "reels", "line")
+EXPORT_RESOLUTIONS = ("", "1080", "2160")  # output short side when no preset is picked; "" keeps the project size
 
 DEFAULTS: dict[str, Any] = {
     "version": 1,
@@ -27,6 +34,17 @@ DEFAULTS: dict[str, Any] = {
         "lastProjectId": None,
         "autoExit": True,
         "confirmDelete": True,
+        "textScale": 1,
+        "defaultsSeen": "",  # the default-model revision the user already answered (see default_updates.py)
+        # label colours offered for shots and clips: {value: "#rrggbb", label}
+        "labelColors": [
+            {"value": "#ff6b6b", "label": "紅色"},
+            {"value": "#f5b14c", "label": "橘色"},
+            {"value": "#c6f24e", "label": "萊姆綠"},
+            {"value": "#4fd18b", "label": "綠色"},
+            {"value": "#6ea8ff", "label": "藍色"},
+            {"value": "#b28cff", "label": "紫色"},
+        ],
     },
     "defaults": {
         "width": 1920,
@@ -67,11 +85,12 @@ DEFAULTS: dict[str, Any] = {
     "ffmpeg": {"path": "", "encoder": "auto"},
     # folder: where every project's videos and ZIP files go; empty means <data>/exports
     "export": {"quality": "high", "burnCaptions": False, "captionSize": 52, "fadeIn": 0.0, "fadeOut": 0.0,
-               "folder": ""},
+               "folder": "", "preset": "", "resolution": ""},
     "notify": {
         "desktop": True,
         "sound": True,
-        "ntfy": {"enabled": False, "server": "https://ntfy.sh", "topic": ""},
+        # when: "all" pushes every batch summary, "failed" only batches with a failure
+        "ntfy": {"enabled": False, "server": "https://ntfy.sh", "topic": "", "when": "all"},
     },
     "llm": {
         "enabled": False,
@@ -80,18 +99,37 @@ DEFAULTS: dict[str, Any] = {
         "temperature": 0.7,
     },
     "history": {"keep": 50, "intervalSec": 120},
+    "queue": {"autoRetry": 0},  # automatic retries of a job that failed on a network error, 0 to 5
     "voice": {"url": "http://127.0.0.1:18301"},
     "stt": {"folder": "", "python": ""},  # Speech-to-subtitle; empty: the sibling folder and its own Python
     "video2x": {"enabled": False, "method": "anime4k"},  # upscale ComfyUI videos to 1080P before they become takes
     "captionStyles": [],  # caption style library shared by every project; projects keep their own copies
+    "captionStylesAuto": False,  # new projects start with a copy of every library style (the first is the default)
+    # Caption spelling word list (CP-12): a correct term per line, optionally "=wrong,wrong"; checked in the browser
+    "glossary": "",
 }
 
 _TOP_LEVEL = set(DEFAULTS) - {"version"}
 _ROUTE_ID = re.compile(r"^[A-Za-z0-9_-]{1,12}$")
 _SERVER_ID = re.compile(r"^[a-z0-9_-]{1,32}$")
+_HEX = re.compile(r"^#[0-9a-f]{6}$")
+
+
+def _label_colors(raw: Any) -> list[dict]:
+    """Keep the well-formed entries (a bad one is dropped, not fatal: it must not reset every setting)."""
+    picked: list[dict] = []
+    for c in raw if isinstance(raw, list) else []:
+        value = str(c.get("value") or "").lower() if isinstance(c, dict) else ""
+        if _HEX.match(value) and all(x["value"] != value for x in picked):
+            picked.append({"value": value, "label": str(c.get("label") or "").strip()[:12] or value})
+    return picked[:MAX_LABEL_COLORS]
 
 
 def _validate(cfg: dict) -> None:
+    cfg["ui"]["labelColors"] = _label_colors(cfg["ui"].get("labelColors"))
+    scale = cfg["ui"].get("textScale")
+    if isinstance(scale, bool) or scale not in TEXT_SCALES:
+        cfg["ui"]["textScale"] = 1
     servers = cfg["comfy"]["servers"]
     seen: set[str] = set()
     for s in servers:
@@ -135,7 +173,8 @@ def _validate(cfg: dict) -> None:
     server = str(ntfy.get("server") or "").strip().rstrip("/")
     if not re.match(r"^https?://[^\s/]+", server):
         raise AppError("ntfy 伺服器位址格式不正確，例如 https://ntfy.sh")
-    ntfy.update(topic=topic, server=server, enabled=bool(ntfy.get("enabled")))
+    ntfy.update(topic=topic, server=server, enabled=bool(ntfy.get("enabled")),
+                when=ntfy.get("when") if ntfy.get("when") in NTFY_WHEN else "all")
     llm = cfg["llm"]
     base = str(llm.get("baseUrl") or "").strip().rstrip("/")
     if not re.match(r"^https?://[^\s/]+", base):
@@ -160,6 +199,8 @@ def _validate(cfg: dict) -> None:
                        or not Path(out_folder).is_absolute()):
         raise AppError("匯出資料夾要填完整路徑，例如 D:\\影片輸出")
     export["folder"] = out_folder
+    export["preset"] = export.get("preset") if export.get("preset") in EXPORT_PRESETS else ""
+    export["resolution"] = export.get("resolution") if export.get("resolution") in EXPORT_RESOLUTIONS else ""
     upscale = cfg["video2x"]
     upscale.update(enabled=bool(upscale.get("enabled")),
                    method=upscale.get("method") if upscale.get("method") in video2x.METHODS else "anime4k")
@@ -169,6 +210,9 @@ def _validate(cfg: dict) -> None:
     cfg["captionStyles"] = [clean_caption_style(s) for s in styles]
     if len({s["id"] for s in cfg["captionStyles"]}) != len(styles):
         raise AppError("字幕樣式庫有重複的樣式代號")
+    cfg["captionStylesAuto"] = bool(cfg["captionStylesAuto"])
+    if not isinstance(cfg["glossary"], str) or len(cfg["glossary"]) > MAX_GLOSSARY:
+        raise AppError(f"字幕用語詞庫最多 {MAX_GLOSSARY} 字")
     hist = cfg["history"]
     defaults = cfg["defaults"]
     try:
@@ -177,6 +221,10 @@ def _validate(cfg: dict) -> None:
         defaults["shotDuration"] = min(max(float(defaults.get("shotDuration", 5.0)), 0.2), 600.0)
     except (TypeError, ValueError):
         raise AppError("版本紀錄或鏡頭長度必須是數字") from None
+    try:
+        cfg["queue"]["autoRetry"] = min(max(int(cfg["queue"].get("autoRetry", 0)), 0), 5)
+    except (TypeError, ValueError):
+        raise AppError("自動重試次數必須是 0 到 5 的整數") from None
 
 
 class SettingsStore:

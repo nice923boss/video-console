@@ -31,7 +31,7 @@
 }
 
 .modal-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 14px 12px 8px 20px; }
-.modal-head h2 { flex: 1; min-width: 0; font-size: 15.5px; font-weight: 650; }
+.modal-head h2 { flex: 1; min-width: 0; font-size: calc(15.5px * var(--text-scale)); font-weight: 650; }
 .modal-body { display: flex; flex-direction: column; gap: 14px; flex: 1; min-height: 0; overflow: auto; padding: 8px 20px 20px; }
 .modal > .modal-body:first-child { padding-top: 20px; }
 
@@ -51,6 +51,16 @@
 .modal-wide .modal-body { padding-left: 24px; padding-right: 24px; }
 .modal-wide .modal-foot { padding-left: 24px; padding-right: 24px; }
 .modal-text { color: var(--text-2); line-height: 1.65; white-space: pre-line; }
+.modal-check { margin-top: 14px; }
+
+/* Import volume (dialogs/import-gain.js): three quick choices, then a custom dB field. */
+.gain-choices { display: grid; gap: 8px; margin-top: 12px; }
+.gain-choices .btn { justify-content: flex-start; height: 42px; }
+.gain-choices .btn-text { display: flex; align-items: baseline; gap: 12px; }
+.gain-choices b { min-width: 52px; font-variant-numeric: tabular-nums; }
+.gain-hint { font-weight: 450; opacity: .78; }
+.gain-custom { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--text-2); }
+.gain-custom .num { width: 110px; }
 
 /* Context menu */
 
@@ -78,7 +88,7 @@
   padding: 0 10px 0 8px;
   border-radius: var(--r-sm);
   color: var(--text);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   white-space: nowrap;
 }
 
@@ -90,9 +100,9 @@
 .menu-item.danger .menu-icon { color: inherit; }
 .menu-swatch { width: 14px; height: 14px; }
 .menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.menu-hint { margin-left: 16px; font: 11.5px var(--mono); color: var(--muted); }
+.menu-hint { margin-left: 16px; font: calc(11.5px * var(--text-scale)) var(--mono); color: var(--muted); }
 .menu-sep { height: 1px; margin: 5px 6px; background: var(--border); }
-.menu-head { padding: 7px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--muted); }
+.menu-head { padding: 7px 10px 4px; font-size: calc(11px * var(--text-scale)); font-weight: 700; letter-spacing: .06em; color: var(--muted); }
 
 /* Toasts */
 
@@ -130,7 +140,7 @@
 .toast-icon { margin-top: 1px; color: var(--tone); }
 .toast-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .toast-title { font-weight: 650; }
-.toast-msg { color: var(--text-2); font-size: 12.5px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.toast-msg { color: var(--text-2); font-size: calc(12.5px * var(--text-scale)); line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
 .toast-progress { height: 3px; margin-top: 6px; overflow: hidden; border-radius: var(--r-pill); background: var(--surface-3); }
 .toast-progress > i { display: block; height: 100%; background: var(--tone); transition: width 240ms var(--ease); }
 
@@ -142,7 +152,7 @@
   border-radius: var(--r-sm);
   background: var(--accent-soft);
   color: var(--accent-text);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   font-weight: 650;
 }
 
@@ -168,12 +178,13 @@
 }
 
 .pal-search { display: flex; align-items: center; gap: 10px; flex: none; height: 54px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); }
-.pal-input { flex: 1; min-width: 0; height: 100%; background: transparent; border: 0; color: var(--text); font-size: 15px; }
+.pal-input { flex: 1; min-width: 0; height: 100%; background: transparent; border: 0; color: var(--text); font-size: calc(15px * var(--text-scale)); }
 .pal-input::placeholder { color: var(--muted); }
 .pal-input:focus-visible { outline: none; }
 .pal-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; }
-.pal-head { padding: 10px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
-.pal-more { padding: 2px 10px 8px 50px; font-size: 12px; color: var(--muted); }
+.pal-head { padding: 10px 10px 4px; font-size: calc(11px * var(--text-scale)); font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.pal-more { display: block; width: 100%; padding: 4px 10px 8px 50px; border-radius: 8px; font-size: calc(12px * var(--text-scale)); color: var(--muted); text-align: left; }
+.pal-more.active { background: var(--surface-press); color: var(--accent-text); }
 
 .pal-item {
   display: flex;
@@ -207,8 +218,8 @@
 .pal-label { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.35; }
 .pal-label > span,
 .pal-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pal-label > small { font-size: 11.5px; color: var(--muted); }
-.pal-tag { flex: none; padding: 1px 7px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--muted); font-size: 11px; }
+.pal-label > small { font-size: calc(11.5px * var(--text-scale)); color: var(--muted); }
+.pal-tag { flex: none; padding: 1px 7px; border-radius: var(--r-pill); background: var(--surface-3); color: var(--muted); font-size: calc(11px * var(--text-scale)); }
 .pal-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 16px; color: var(--muted); }
 
 .pal-foot {
@@ -220,7 +231,43 @@
   padding: 0 14px;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--text-scale));
 }
 
 .pal-foot > span { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Two takes of a shot side by side (insp-takes.js TakeCompare, SB-12) */
+.cmp-stage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; flex: 1; min-height: 0; background: var(--border); }
+.cmp-side { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--stage-bg); }
+.cmp-head,
+.cmp-foot { display: flex; align-items: center; gap: 8px; flex: none; padding: 8px 12px; background: var(--surface-1); }
+.cmp-head > .select { flex: 1; min-width: 0; max-width: 280px; }
+.cmp-foot { justify-content: space-between; font-size: calc(11.5px * var(--text-scale)); }
+.cmp-active { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: calc(12px * var(--text-scale)); }
+.cmp-media { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; padding: 16px; }
+.cmp-media > img,
+.cmp-media > video { max-width: 100%; max-height: 100%; border-radius: var(--r-sm); object-fit: contain; }
+
+/* Reference picture order arrows (insp-generate.js ExtraRefs, IM-01) */
+.ref-order { display: flex; align-items: center; justify-content: space-between; gap: 2px; min-width: 0; }
+.ref-order > .icon-btn { flex: none; width: 20px; height: 20px; padding: 0; }
+.ref-order > .ref-cell-label { flex: 1; min-width: 0; text-align: center; }
+
+/* The user's own style library in the project panel (style-library.js, IM-07) */
+.style-lib { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; margin-bottom: 8px; }
+.style-lib-card { position: relative; min-width: 0; }
+.style-lib-pick { display: flex; flex-direction: column; gap: 4px; width: 100%; min-width: 0; padding: 3px; border: 1px solid transparent; border-radius: var(--r-input); background: none; color: inherit; cursor: pointer; text-align: left; }
+.style-lib-pick:hover { background: var(--surface-hover); }
+.style-lib-pick > .thumb { border-radius: var(--r-sm); }
+
+/* Picking one of several pictures of a shot (dialogs/pick-take.js, IM-08) */
+.pick-take-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+
+/* First-run tour (dialogs/tour.js, UI-09): a lit cut-out over the part being explained */
+.tour { position: absolute; inset: 0; }
+.tour-shade { position: absolute; inset: 0; background: var(--scrim); }
+.tour-spot { position: absolute; border-radius: var(--r-card); outline: 2px solid var(--accent); box-shadow: 0 0 0 9999px var(--scrim); transition: left var(--dur) var(--ease), top var(--dur) var(--ease), width var(--dur) var(--ease), height var(--dur) var(--ease); pointer-events: none; }
+.tour-card { position: absolute; display: flex; flex-direction: column; gap: 8px; width: 340px; max-width: calc(100vw - 16px); padding: 16px 18px 14px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface-1); box-shadow: var(--shadow-pop); }
+.tour-card > h2 { margin: 0; font-size: calc(15px * var(--text-scale)); }
+.tour-card > p { margin: 0; line-height: 1.6; }
+.tour-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; }

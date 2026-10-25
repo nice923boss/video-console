@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..jobs import MAX_ACTIVE
+from ..jobs import MAX_ACTIVE, epoch_or_none
 from ..server import Request, Response, Router
 from ..util import AppError
 
@@ -61,6 +61,11 @@ def register(router: Router, app: App) -> None:
     def job_pause(req: Request) -> dict:
         return jobs.pause(req.json_object().get("paused") is True)
 
+    @router.route("POST", "/api/jobs/schedule")
+    def job_schedule(req: Request) -> dict:
+        body = req.json_object()
+        return jobs.schedule(epoch_or_none(body.get("start")), epoch_or_none(body.get("stop")))
+
     @router.route("GET", "/api/jobs/{jid}")
     def job_get(req: Request) -> dict:
         return jobs.get(req.params["jid"])
@@ -75,11 +80,16 @@ def register(router: Router, app: App) -> None:
 
     @router.route("POST", "/api/jobs/{jid}/retry")
     def job_retry(req: Request) -> dict:
-        return jobs.retry(req.params["jid"])
+        return jobs.retry(req.params["jid"], bool(req.json_object().get("newSeed")))
 
     @router.route("POST", "/api/jobs/{jid}/top")
     def job_top(req: Request) -> dict:
         return jobs.move_top(req.params["jid"])
+
+    @router.route("POST", "/api/jobs/{jid}/move")
+    def job_move(req: Request) -> dict:
+        before = req.json_object().get("before")
+        return jobs.move(req.params["jid"], before if isinstance(before, str) else None)
 
     @router.route("GET", "/api/jobs/{jid}/preview")
     def job_preview(req: Request) -> Response:

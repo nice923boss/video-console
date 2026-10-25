@@ -18,7 +18,7 @@
 }
 
 .cw-top { display: flex; align-items: center; align-self: stretch; gap: 4px; padding-left: 4px; }
-.cw-name { flex: 1; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.cw-name { flex: 1; font-size: calc(12px * var(--text-scale)); font-weight: 600; color: var(--text-2); }
 .cw-top .icon-btn { width: 24px; height: 24px; }
 .cw-body { display: flex; align-items: center; gap: 7px; }
 
@@ -111,7 +111,7 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   list-style: none;
   cursor: pointer;
   transition: background var(--dur) var(--ease);
@@ -133,3 +133,9 @@
 .grade-sec[open] > summary { border-bottom: 1px solid var(--border); }
 .grade-sec-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
 .grade-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-line); }
+
+/* Shot masks (mask-panel.js, GR-12) */
+.mask-list { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.mask-card { display: flex; flex-direction: column; gap: 6px; align-self: stretch; padding: 8px 10px; border-radius: var(--r-input); background: var(--surface-2); border: 1px solid var(--border); }
+.mask-head { display: flex; align-items: center; gap: 8px; }
+.mask-name { flex: 1; min-width: 0; font-size: calc(12.5px * var(--text-scale)); color: var(--text-2); }

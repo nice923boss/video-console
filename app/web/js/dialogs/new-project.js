@@ -3,6 +3,7 @@
 import { html, useState } from "../lib/h.js";
 import { getState } from "../lib/store.js";
 import { createProject } from "../lib/actions.js";
+import { isConfirmKey } from "../lib/keymap.js";
 import { openModal, Modal } from "../components/overlay.js";
 import { Button, Field, TextInput, Select, Segmented, Toggle } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
@@ -103,7 +104,7 @@ function NewProjectBody({ close, starterDefault }) {
     <${Field} label="專案名稱" error=${error}>
       <${TextInput} value=${name} maxlength=${NAME_MAX} data-autofocus
         onChange=${(v) => { setName(v); if (error) setError(""); }}
-        onKeyDown=${(e) => { if (e.key === "Enter" && !e.isComposing) submit(); }} />
+        onKeyDown=${(e) => { if ((e.key === "Enter" || isConfirmKey(e)) && !e.isComposing) submit(); }} />
     <//>
     <${Field} label="畫面比例">
       <${AspectOptions} value=${aspect && aspect.id} aspects=${aspects} onPick=${pickAspect} />

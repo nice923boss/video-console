@@ -180,6 +180,11 @@ def register(router: Router, app: App) -> None:
     def provider_index(req: Request) -> list[dict]:
         return provider_list(app)
 
+    @router.route("GET", "/api/costs")
+    def cost_summary(req: Request) -> dict:
+        """This month's estimated cloud spend (CL-01)."""
+        return app.costs.summary()
+
     @router.route("PUT", "/api/providers/{id}")
     def provider_save(req: Request) -> dict:
         p = providers.get(req.params["id"])
@@ -215,6 +220,10 @@ def register(router: Router, app: App) -> None:
         text = app.llm.enhance(str(data.get("text") or ""), str(data.get("kind") or "image"),
                                str(data.get("target") or "same"))
         return {"text": text}
+
+    @router.route("POST", "/api/llm/condense")
+    def llm_condense(req: Request) -> dict:
+        return {"items": app.llm.condense_captions(req.json_object().get("items"))}
 
     @router.route("POST", "/api/notify/test")
     def notify_test(req: Request) -> dict:

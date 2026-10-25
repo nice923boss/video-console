@@ -58,6 +58,7 @@ _OBJECTS = ("手指", "按鍵", "按鈕", "手機", "螢幕", "電話", "鍵盤"
             "照片", "記事本", "眼鏡", "鑰匙", "戒指", "門鈴", "時鐘", "杯", "碗", "書", "花", "提款機", "電腦", "雙手")
 _NARRATOR_RE = re.compile(r"^\s*(?:旁白|口白|字幕|OS|VO)\s*[:：]\s*", re.I)  # text models copy the script's label
 _EMPTY_BRACKETS_RE = re.compile(r"[(（]\s*[)）]")  # what is left of (特寫) once its size is read
+_SPEAKERS_RE = re.compile(r"^說話者：.*(?:\n|$)", re.M)  # the beat's speakers, from vc.script; each shot names its own
 _CLAUSE_RE = re.compile(r"[，,。；;]")
 _PHRASE_RE = re.compile(r"[^，,。！？!?；;、\n]+[，,。！？!?；;、\n]*")
 _CJK_RE = re.compile(r"[㐀-鿿豈-﫿]")
@@ -225,7 +226,8 @@ def _written_move(shot: dict) -> str:
 def _planned(shot: dict, planned: dict, beat: int, pace: str) -> list[dict]:
     """A beat the script already breaks down (vc.beats): each planned shot as long as its role and its line ask.
     An establishing shot holds twice the beat's average, a close-up or a line shot and every shot of a fantasy
-    flash the shortest, an action the average; a line is always given time to be read."""
+    flash the shortest, an action the average; a line is always given time to be read. Each shot's notes name
+    who says its line."""
     _, average, min_shot, _ = _PACE[pace]
     title = shot["name"] or planned["label"] or f"段落 {beat}"
     written_move = _written_move(shot)
@@ -248,7 +250,9 @@ def _planned(shot: dict, planned: dict, beat: int, pace: str) -> list[dict]:
             "motion": shot["motion"] if i == 0 else "",
             "camera": f"{size}，{move}",
             "caption": p["caption"],
-            "notes": (label + shot["notes"]).strip() if i == 0 else "",
+            "notes": "\n".join(n for n in (
+                (label + _SPEAKERS_RE.sub("", shot["notes"])).strip() if i == 0 else "",
+                f"說話者：{p['speaker']}" if p.get("speaker") else "") if n),
             "duration": seconds,
             "beat": beat,
             "pace": pace,
@@ -267,13 +271,15 @@ def _new_scene(before: dict, shot: dict) -> bool:
 
 def break_down(result: dict[str, Any]) -> dict[str, Any]:
     """parse_script's result with each untimed beat split into several shots: the shots the script already lays
-    out (numbered actions, spoken lines, camera notes) when it does, otherwise shots of different sizes."""
+    out (numbered actions, spoken lines, camera notes) when it does, otherwise shots of different sizes.
+    A storyboard with a 鏡號 column is already cut, so each of its rows stays one shot."""
     beats = result["shots"]
+    listed = result.get("shotList", False)
     shots: list[dict] = []
     kept = 0
     for i, shot in enumerate(beats):
         pace = beat_pace(" ".join((shot["prompt"], shot["motion"], shot["caption"])), i, len(beats))
-        if shot["duration"]:
+        if shot["duration"] or listed:
             kept += 1
             shots.append({**{k: v for k, v in shot.items() if k != "lines"}, "beat": i + 1, "pace": pace})
         elif planned := plan(shot, i == 0 or _new_scene(beats[i - 1], shot)):
@@ -281,7 +287,9 @@ def break_down(result: dict[str, Any]) -> dict[str, Any]:
         else:
             shots.extend(_expand(shot, i + 1, pace, i == 0))
     notes = list(result["notes"])
-    if kept:
+    if listed:
+        notes.append("分鏡表已有鏡號欄，每列維持一個鏡頭")
+    elif kept:
         notes.append(f"{kept} 段已寫明秒數，維持一個鏡頭")
     if len(shots) > MAX_SHOTS:
         notes.append(f"細拆後超過 {MAX_SHOTS} 個鏡頭，只保留前 {MAX_SHOTS} 個")

@@ -1,0 +1,28 @@
+{
+  "version": "2026-10-25",
+  "packages": {
+    "ffmpeg": {
+      "version": "7.1",
+      "name": "ffmpeg 7.1（imageio-ffmpeg 0.6.0）",
+      "urls": [
+        "https://files.pythonhosted.org/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+        "https://pypi.tuna.tsinghua.edu.cn/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+        "https://mirrors.aliyun.com/pypi/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl"
+      ],
+      "size": 31246824,
+      "sha256": "02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a",
+      "member": "imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe"
+    },
+    "video2x": {
+      "version": "6.4.0",
+      "name": "Video2X 6.4.0 可攜版",
+      "urls": [
+        "https://github.com/k4yt3x/video2x/releases/download/6.4.0/video2x-windows-amd64.zip",
+        "https://sourceforge.net/projects/video2x.mirror/files/6.4.0/video2x-windows-amd64.zip/download"
+      ],
+      "size": 196989277,
+      "sha256": "0337b6dcae2bad2fd13e43fbdb73ef728d2f6289f37cc3617e87ac3a1a5cf793",
+      "member": ""
+    }
+  }
+}

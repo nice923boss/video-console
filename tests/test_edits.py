@@ -119,9 +119,6 @@ def test_freeze_puts_a_still_between_the_halves_and_queues_the_frame() -> None:
                            "payload": {"source": VID, "target": "shot", "targetShot": sid, "at": 3.0}}
     plan, _ = run(p, {"cmd": "freeze", "t": 0.05})  # at the head: the still goes in front, nothing is cut
     assert [o["op"] for o in plan["ops"]] == ["shot.add"] and p["shots"][0]["id"] == plan["id"]
-    p["shots"][1]["audioDetached"] = True
-    with pytest.raises(AppError, match="還原原聲"):
-        edits.plan(p, {"cmd": "freeze", "t": 3})
 
 
 def test_detach_and_restore_sound() -> None:
@@ -134,9 +131,6 @@ def test_detach_and_restore_sound() -> None:
         edits.plan(p, {"cmd": "detach", "t": 1})
     run(p, {"cmd": "restore", "id": a["id"]})
     assert p["audio"] == [] and p["shots"][0]["audioDetached"] is False
-    p["shots"][1]["speed"] = 2.0
-    with pytest.raises(AppError, match="變速"):
-        edits.plan(p, {"cmd": "detach", "id": B})
     p["takes"][VID]["hasAudio"] = False
     with pytest.raises(AppError, match="沒有聲音"):
         edits.plan(p, {"cmd": "detach", "id": A})
@@ -156,9 +150,6 @@ def test_reverse_queues_once_then_switches_and_mirrors_trims() -> None:
     assert plan["label"] == "倒放" and (shot["activeVideo"], shot["trimIn"], shot["trimOut"]) == ("t_rev00000", 2.0, 5.0)
     plan, _ = run(p, {"cmd": "reverse", "id": A})
     assert plan["label"] == "取消倒放" and (shot["activeVideo"], shot["trimIn"], shot["trimOut"]) == (VID, 1.0, 4.0)
-    shot["audioDetached"] = True
-    with pytest.raises(AppError, match="還原原聲"):
-        edits.plan(p, {"cmd": "reverse", "id": A})
 
 
 def test_volume_steps_in_db_and_ranges_use_keyframes() -> None:

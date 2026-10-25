@@ -312,6 +312,9 @@ function StyleBody({ close, styleId, text, row }) {
               <${IconButton} icon="trash" size=${15} title="從樣式庫刪除" onClick=${() => removeFromLibrary(lib)} />
             </li>`)}</ul>`
           : html`<p class="cs-lib-empty dim">按下方「存到樣式庫」，其他專案也能加入這個樣式。</p>`}
+        <${Toggle} class="cs-lib-auto" checked=${settings && settings.captionStylesAuto}
+          onChange=${(v) => saveSettings({ captionStylesAuto: v })}
+          label="新專案自動加入" hint="建立專案時帶入樣式庫全部樣式，第一個設為預設" />
       </aside>
       <${Editor} s=${current} off=${pending} edit=${edit} fonts=${fonts} text=${text || SAMPLE_TEXT} row=${row} ratio=${ratio} />
     </div>

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
+import os
 import re
 import shutil
 import threading
@@ -10,12 +12,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from . import opfields
 from . import ops as opsmod
 from .events import EventBus
 from .paths import Paths
 from .sequence import summary as seq_summary
 from .settings import SettingsStore
-from .util import AppError, is_within, new_id, now, random_seed, read_json, write_json_atomic
+from .util import AppError, is_within, new_id, now, random_seed, read_json, replace_with_retry, write_json_atomic
 
 log = logging.getLogger("vc.store")
 
@@ -23,7 +26,17 @@ SCHEMA = 1
 _PID_RE = re.compile(r"^p_[a-z0-9]{6,24}$")
 _SUBDIRS = ("media/takes", "media/import", "media/thumbs", "media/cache", "exports", "history")
 UNDO_LIMIT = 200
+# Cache entries (uploads, job frames, export work files) older than a day belong to nothing still running.
+CACHE_MAX_AGE = 86400
+CACHE_PREFIXES = ("upload-", "job-", "export-")
 COALESCE_SEC = 2.5
+# Each edit appends its ops to project.journal (small, fsynced); project.json itself is rewritten once edits
+# pause for FLUSH_IDLE seconds, or every FLUSH_MAX seconds while they keep coming. Loading replays what the
+# journal holds beyond project.json, so a crash between the two loses nothing.
+JOURNAL = "project.journal"
+FLUSH_IDLE = 1.0
+FLUSH_MAX = 10.0
+FLUSH_RETRY = 30.0
 
 BLANK_SHOT_NAME = "鏡頭 1"
 STARTER_SHOTS = [
@@ -42,6 +55,13 @@ class _Entry:
         self.undo: list[dict] = []
         self.redo: list[dict] = []
         self.last_snapshot = 0.0
+        self.save_lock = threading.Lock()  # one project.json write at a time, outside the edit lock
+        self.journal: list[tuple[int, str]] = []  # journal lines not yet folded into project.json
+        self.pending_snapshots: list[dict] = []
+        self.dirty_since = 0.0
+        self.last_edit = 0.0
+        self.next_try = 0.0
+        self.gone = False  # moved to the trash: nothing may write into its old folder again
 
 
 class ProjectStore:
@@ -52,6 +72,8 @@ class ProjectStore:
         self._lock = threading.Lock()
         self._entries: dict[str, _Entry] = {}
         self._summaries: dict[str, dict] = {}
+        self._closing = threading.Event()
+        self._flusher: threading.Thread | None = None
         self._scan()
 
     # ------------------------------------------------------------ loading
@@ -68,7 +90,7 @@ class ProjectStore:
         try:
             project = read_json(d / "project.json")
             if isinstance(project, dict) and project.get("id") == d.name:
-                return self._upgrade(project)
+                return self._replay(d, self._upgrade(project))
             raise ValueError("missing or mismatched project.json")
         except (ValueError, OSError) as exc:
             snaps = sorted((d / "history").glob("*.json")) if (d / "history").is_dir() else []
@@ -77,9 +99,44 @@ class ProjectStore:
                 if isinstance(data, dict) and data.get("id") == d.name:
                     log.warning("Project %s unreadable (%s); recovered from %s", d.name, exc, snap.name)
                     write_json_atomic(d / "project.json", data)
-                    return self._upgrade(data)
+                    return self._replay(d, self._upgrade(data))
             log.error("Project %s unreadable and no snapshot to recover from: %s", d.name, exc)
             return None
+
+    def _replay(self, d: Path, project: dict) -> dict:
+        """Re-apply the edits project.journal holds beyond project.json (the app stopped before saving them)."""
+        path = d / JOURNAL
+        if not path.exists():
+            return project
+        replayed = 0
+        try:
+            lines = path.read_text(encoding="utf-8").split("\n")
+        except OSError as exc:
+            log.warning("Project %s: journal unreadable (%s)", d.name, exc)
+            lines = []
+        for line in filter(None, lines):
+            try:
+                item = json.loads(line)
+                if item["rev"] <= project["rev"]:
+                    continue
+                if item["rev"] != project["rev"] + 1:
+                    break
+                work = copy.deepcopy(project)
+                opsmod.apply_ops(work, item["ops"], item["defaults"])
+            except (ValueError, KeyError, TypeError, AppError) as exc:
+                log.warning("Project %s: journal stops at r%s (%s)", d.name, project["rev"] + 1, exc)
+                break
+            work["rev"], work["updated"] = item["rev"], item["updated"]
+            project = work
+            replayed += 1
+        if replayed:
+            log.info("Project %s: replayed %d unsaved edits from the journal", d.name, replayed)
+            write_json_atomic(d / "project.json", project)
+        try:
+            path.unlink()
+        except OSError as exc:
+            log.warning("Project %s: could not remove the replayed journal (%s)", d.name, exc)
+        return project
 
     def _upgrade(self, project: dict) -> dict:
         project.setdefault("schema", SCHEMA)
@@ -91,7 +148,7 @@ class ProjectStore:
         project["settings"].setdefault("fadeIn", 0.0)
         project["settings"].setdefault("fadeOut", 0.0)
         defaults = self._defaults()
-        project["shots"] = [{**opsmod.blank_shot(s["id"], defaults), **s} for s in project.get("shots", [])]
+        project["shots"] = [{**opfields.blank_shot(s["id"], defaults), **s} for s in project.get("shots", [])]
         return project
 
     def _defaults(self) -> dict:
@@ -144,6 +201,10 @@ class ProjectStore:
         with entry.lock:
             return copy.deepcopy(entry.project)
 
+    def locked(self, pid: str) -> threading.RLock:
+        """The project's lock, held around a read that decides an apply (no other write slips in between)."""
+        return self._entry(pid).lock
+
     def undo_state(self, pid: str) -> dict:
         entry = self._entry(pid)
         with entry.lock:
@@ -184,14 +245,14 @@ class ProjectStore:
             "fadeIn": 0.0,
             "fadeOut": 0.0,
         }
-        for key, conv in opsmod.SETTINGS_FIELDS.items():
+        for key, conv in opfields.SETTINGS_FIELDS.items():
             if settings_patch and key in settings_patch:
                 settings[key] = conv(settings_patch[key])
-        settings["width"], settings["height"] = opsmod.snap8(settings["width"]), opsmod.snap8(settings["height"])
+        settings["width"], settings["height"] = opfields.snap8(settings["width"]), opfields.snap8(settings["height"])
         shots = []
         seeds = (STARTER_SHOTS if starter else [(BLANK_SHOT_NAME, "", "")])
         for i, (shot_name, prompt, motion) in enumerate(seeds):
-            shot = opsmod.blank_shot(new_id("s"), defaults)
+            shot = opfields.blank_shot(new_id("s"), defaults)
             shot.update({"name": shot_name, "prompt": prompt, "motion": motion, "seed": random_seed()})
             if starter:
                 shot["transition"] = {"type": "crossfade" if i < len(seeds) - 1 else "cut", "duration": 0.5}
@@ -219,6 +280,10 @@ class ProjectStore:
             "adjustments": [],
             "markers": [],
         }
+        library = self.settings.section("captionStyles") if self.settings.section("captionStylesAuto") else []
+        if library:  # as if each library style were added by hand: the first becomes the default
+            project["captionStyles"] = [{**s, "id": new_id("cs")} for s in library]
+            settings["captionStyle"] = project["captionStyles"][0]["id"]
         write_json_atomic(d / "project.json", project)
         with self._lock:
             self._entries[pid] = _Entry(project)
@@ -240,10 +305,11 @@ class ProjectStore:
         entry = self._entry(pid)
         with entry.lock:
             work = copy.deepcopy(entry.project)
+            ops_json = json.dumps(ops, ensure_ascii=False)  # as sent: apply_ops may fill in the op dicts
             inverse = opsmod.apply_ops(work, ops, self._defaults())
             if not inverse:
                 return {"rev": entry.project["rev"], "changed": False}
-            self._commit(entry, work)
+            self._commit(entry, work, ops_json)
             if undoable:
                 self._push_undo(entry, inverse, coalesce, label)
             rev = work["rev"]
@@ -270,12 +336,13 @@ class ProjectStore:
                 raise AppError("沒有可以" + ("復原" if source == "undo" else "重做") + "的步驟", 409)
             item = stack.pop()
             work = copy.deepcopy(entry.project)
+            ops_json = json.dumps(item["ops"], ensure_ascii=False)
             try:
                 inverse = opsmod.apply_ops(work, item["ops"], self._defaults())
             except AppError:
                 stack.clear()
                 raise AppError("無法" + ("復原" if source == "undo" else "重做") + "：內容已被其他變更影響", 409)
-            self._commit(entry, work)
+            self._commit(entry, work, ops_json)
             other.append({"ops": inverse, "label": item["label"], "coalesce": None, "time": time.time()})
             rev = work["rev"]
         self._publish(entry, None, source)
@@ -287,18 +354,95 @@ class ProjectStore:
     def redo(self, pid: str) -> dict:
         return self._step(pid, "redo")
 
-    def _commit(self, entry: _Entry, work: dict, force_snapshot: bool = False) -> None:
+    def _commit(self, entry: _Entry, work: dict, ops_json: str, force_snapshot: bool = False) -> None:
         old = entry.project
         work["rev"] = old["rev"] + 1
         work["updated"] = now()
+        line = (f'{{"rev":{work["rev"]},"updated":{json.dumps(work["updated"])},'
+                f'"defaults":{json.dumps(self._defaults(), ensure_ascii=False)},"ops":{ops_json}}}')
+        with open(self.paths.projects / work["id"] / JOURNAL, "a", encoding="utf-8", newline="\n") as f:
+            f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        entry.journal.append((work["rev"], line))
         interval = float(self.settings.section("history").get("intervalSec", 120))
         if force_snapshot or time.time() - entry.last_snapshot >= interval:
-            self._snapshot(old)
+            entry.pending_snapshots.append(old)  # written with the next save; projects are never edited in place
             entry.last_snapshot = time.time()
-        write_json_atomic(self.paths.projects / work["id"] / "project.json", work)
+        entry.last_edit = time.time()
+        entry.dirty_since = entry.dirty_since or entry.last_edit
         entry.project = work
         with self._lock:
             self._summaries[work["id"]] = self._summary(work)
+        self._start_flusher()
+
+    # ------------------------------------------------------------ saving
+    def _start_flusher(self) -> None:
+        with self._lock:
+            if self._flusher is None and not self._closing.is_set():
+                self._flusher = threading.Thread(target=self._flush_loop, name="vc-store-flush", daemon=True)
+                self._flusher.start()
+
+    def _flush_loop(self) -> None:
+        while not self._closing.wait(0.25):
+            t = time.time()
+            with self._lock:
+                entries = list(self._entries.values())
+            for entry in entries:
+                if entry.dirty_since and t >= entry.next_try and (
+                        t - entry.last_edit >= FLUSH_IDLE or t - entry.dirty_since >= FLUSH_MAX):
+                    self._flush_entry(entry)
+
+    def _flush_entry(self, entry: _Entry) -> None:
+        """Fold the journal into project.json (with any history snapshot that came due)."""
+        with entry.save_lock:
+            with entry.lock:
+                if not entry.dirty_since or entry.gone:
+                    return
+                project, snaps = entry.project, entry.pending_snapshots
+                entry.pending_snapshots, entry.dirty_since = [], 0.0
+            try:
+                for snap in snaps:
+                    self._snapshot(snap)
+                write_json_atomic(self.paths.projects / project["id"] / "project.json", project)
+            except Exception:
+                log.exception("Saving project %s failed; its journal keeps the edits", project["id"])
+                with entry.lock:
+                    entry.pending_snapshots = snaps + entry.pending_snapshots
+                    entry.dirty_since = entry.dirty_since or time.time()
+                    entry.next_try = time.time() + FLUSH_RETRY
+                return
+            with entry.lock:
+                entry.journal = [(rev, line) for rev, line in entry.journal if rev > project["rev"]]
+                self._write_journal(project["id"], [line for _, line in entry.journal])
+
+    def _write_journal(self, pid: str, lines: list[str]) -> None:
+        path = self.paths.projects / pid / JOURNAL
+        try:
+            if not lines:
+                path.unlink(missing_ok=True)
+                return
+            tmp = path.with_name(".tmp-" + JOURNAL)
+            tmp.write_text("".join(line + "\n" for line in lines), encoding="utf-8", newline="\n")
+            replace_with_retry(tmp, path)
+        except OSError as exc:  # the stale lines left behind are skipped on load (their rev is already saved)
+            log.warning("Trimming the journal of %s failed: %s", pid, exc)
+
+    def flush(self, pid: str | None = None) -> None:
+        """Save unsaved edits to project.json now: before reading the folder from disk, and at shutdown."""
+        if pid is not None:
+            entries = [self._entry(pid)]
+        else:
+            with self._lock:
+                entries = list(self._entries.values())
+        for entry in entries:
+            self._flush_entry(entry)
+
+    def close(self) -> None:
+        self._closing.set()
+        if self._flusher is not None:
+            self._flusher.join(timeout=5)
+        self.flush()
 
     def _snapshot(self, project: dict) -> None:
         hist = self.paths.projects / project["id"] / "history"
@@ -332,6 +476,7 @@ class ProjectStore:
 
     # ------------------------------------------------------------ history
     def history(self, pid: str) -> list[dict]:
+        self.flush(pid)  # a snapshot that came due is written with the next save
         hist = self.project_dir(pid) / "history"
         out = []
         for snap in sorted(hist.glob("*.json"), reverse=True):
@@ -355,8 +500,10 @@ class ProjectStore:
         entry = self._entry(pid)
         with entry.lock:
             work = copy.deepcopy(entry.project)
-            inverse = opsmod.apply_ops(work, [{"op": "project.replace", "project": data}], self._defaults())
-            self._commit(entry, work, force_snapshot=True)
+            ops = [{"op": "project.replace", "project": data}]
+            ops_json = json.dumps(ops, ensure_ascii=False)
+            inverse = opsmod.apply_ops(work, ops, self._defaults())
+            self._commit(entry, work, ops_json, force_snapshot=True)
             self._push_undo(entry, inverse, None, f"還原到 r{rev}")
             new_rev = work["rev"]
         self._publish(entry, None, "restore")
@@ -368,7 +515,7 @@ class ProjectStore:
         new_pid = new_id("p")
         src_dir = self.project_dir(pid)
         dst_dir = self.paths.projects / new_pid
-        shutil.copytree(src_dir, dst_dir, ignore=shutil.ignore_patterns("history", "exports", "cache"))
+        shutil.copytree(src_dir, dst_dir, ignore=shutil.ignore_patterns("history", "exports", "cache", JOURNAL))
         for sub in _SUBDIRS:
             (dst_dir / sub).mkdir(parents=True, exist_ok=True)
         src.update({"id": new_pid, "name": f"{src['name']}（副本）", "rev": 0, "created": now(), "updated": now()})
@@ -384,13 +531,13 @@ class ProjectStore:
         defaults = self._defaults()
         settings = {"width": defaults["width"], "height": defaults["height"], "fps": defaults["fps"],
                     "aspect": defaults["aspect"], "fadeIn": 0.0, "fadeOut": 0.0}
-        for key, conv in opsmod.SETTINGS_FIELDS.items():
+        for key, conv in opfields.SETTINGS_FIELDS.items():
             if key in project["settings"]:
                 try:
                     settings[key] = conv(project["settings"][key])
                 except AppError:
                     pass  # keep the default for a value this version cannot read
-        settings["width"], settings["height"] = opsmod.snap8(settings["width"]), opsmod.snap8(settings["height"])
+        settings["width"], settings["height"] = opfields.snap8(settings["width"]), opfields.snap8(settings["height"])
         pid = new_id("p")
         project.update({"schema": SCHEMA, "id": pid, "rev": 0, "created": now(), "updated": now(),
                         "settings": settings, "name": str(project.get("name") or "").strip()[:120] or "匯入的專案"})
@@ -411,7 +558,8 @@ class ProjectStore:
 
     def trash(self, pid: str) -> None:
         entry = self._entry(pid)
-        with entry.lock:
+        self._flush_entry(entry)
+        with entry.save_lock, entry.lock:
             src = self.paths.projects / pid
             self.paths.trash.mkdir(parents=True, exist_ok=True)
             dst = self.paths.trash / f"{pid}__{int(time.time())}"
@@ -420,6 +568,7 @@ class ProjectStore:
             except OSError as exc:
                 log.warning("Moving project %s to trash failed: %s", pid, exc)
                 raise AppError("專案檔案正在使用中（可能正在播放或匯出），請稍後再試", 409) from None
+            entry.gone = True
             with self._lock:
                 self._entries.pop(pid, None)
                 self._summaries.pop(pid, None)
@@ -467,12 +616,13 @@ class ProjectStore:
         return count
 
     def usage(self, pid: str) -> dict[str, Any]:
-        """Disk usage of a project, split into referenced and unreferenced media files."""
+        """Disk usage of a project, split into referenced and unreferenced media files (stale cache and
+        interrupted-save leftovers count as unreferenced)."""
         project = self.get(pid)
         root = self.project_dir(pid)
         referenced: set[str] = set()
         for item in list(project["takes"].values()) + list(project["media"].values()):
-            for key in ("file", "thumb", "strip", "wave"):
+            for key in ("file", "thumb", "strip", "wave", "preview2", "preview4"):
                 if item.get(key):
                     referenced.add(item[key])
         used = unused = 0
@@ -490,6 +640,13 @@ class ProjectStore:
                 else:
                     unused += size
                     orphans.append(rel)
+        stale = time.time() - CACHE_MAX_AGE
+        leftovers = [f for f in (root / "media" / "cache").glob("*") if f.name.startswith(CACHE_PREFIXES)]
+        for f in leftovers + list(root.glob(".tmp-*")):
+            if f.stat().st_mtime < stale:
+                files = [x for x in f.rglob("*") if x.is_file()] if f.is_dir() else [f]
+                unused += sum(x.stat().st_size for x in files)
+                orphans.append(f.relative_to(root).as_posix())
         return {"used": used, "unused": unused, "orphans": orphans}
 
     def purge_orphans(self, pid: str) -> int:
@@ -500,7 +657,8 @@ class ProjectStore:
             root = self.project_dir(pid)
             for rel in info["orphans"]:
                 try:
-                    (root / rel).unlink()
+                    path = root / rel
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
                 except OSError:
                     log.warning("Could not delete orphan %s", rel)
             entry.undo.clear()

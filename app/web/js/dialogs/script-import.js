@@ -3,16 +3,17 @@
 import { html, useState, useRef } from "../lib/h.js";
 import { getState, setState } from "../lib/store.js";
 import { api, upload } from "../lib/api.js";
-import { loadProject } from "../lib/actions.js";
+import { loadProject, LINK_PREF } from "../lib/actions.js";
+import { readPref } from "../lib/prefs.js";
+import { isConfirmKey, confirmKeyText } from "../lib/keymap.js";
 import { fmtSeconds, shotLabel } from "../lib/format.js";
 import { openModal, Modal } from "../components/overlay.js";
 import { Button, Field, TextArea, TextInput, NumberInput, Segmented, Select, Toggle, Badge } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 import { toast, toastError } from "../components/toast.js";
+import { decodeText, TEXT_ENCODINGS, encodingLabel, linesLabel } from "../lib/textfile.js";
 
 const MAX_TEXT = 100000;
-const REPLACEMENT_CHAR = String.fromCharCode(0xfffd);
-const BOM = String.fromCharCode(0xfeff);
 const MAX_SHOTS = 200;
 const MODES = [
   { value: "auto", label: "自動判斷", title: "表格、編號清單或段落，自動選擇拆法" },
@@ -59,18 +60,6 @@ function TemplateGuide() {
   </div>`;
 }
 
-// Text files from Windows tools are often Big5; fall back when UTF-8 decoding hits invalid bytes.
-async function readTextFile(file) {
-  const buf = await file.arrayBuffer();
-  const utf8 = new TextDecoder("utf-8").decode(buf);
-  if (!utf8.includes(REPLACEMENT_CHAR)) return utf8.startsWith(BOM) ? utf8.slice(1) : utf8;
-  try {
-    return new TextDecoder("big5").decode(buf);
-  } catch {
-    return utf8;
-  }
-}
-
 function ShotRow({ shot, index, checked, onCheck, onEdit, beatStart }) {
   const pace = PACES[shot.pace];
   return html`<div class=${`si-row ${checked ? "" : "is-off"} ${beatStart ? "is-beat-start" : ""}`}>
@@ -115,6 +104,7 @@ function ScriptImportBody({ close }) {
   const [where, setWhere] = useState("end");
   const [captions, setCaptions] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [source, setSource] = useState(null); // the opened text file: { buf, encoding, badLines } for re-decoding
   const fileRef = useRef(null);
 
   const modes = MODES.map((m) => (m.value === "llm" && !llmOn
@@ -156,7 +146,9 @@ function ScriptImportBody({ close }) {
     setBusy(true);
     try {
       const pid = project.id;
-      const res = await api.post(`/api/projects/${encodeURIComponent(pid)}/script/apply`, { shots: picked, index, captions });
+      const res = await api.post(`/api/projects/${encodeURIComponent(pid)}/script/apply`, {
+        shots: picked, index, captions, link: readPref(LINK_PREF, true, (v) => typeof v === "boolean"),
+      });
       await loadProject(pid);
       if (res.shotIds.length) setState({ selected: [res.shotIds[0]], focus: res.shotIds[0], view: "board" });
       toast(`已加入 ${res.added} 個鏡頭${res.captions ? `、${res.captions} 則字幕` : ""}`, { level: "success" });
@@ -167,6 +159,14 @@ function ScriptImportBody({ close }) {
     }
   };
 
+  const readText = (buf, encoding) => {
+    const decoded = decodeText(buf, encoding);
+    setSource({ buf, encoding: encoding === "auto" ? decoded.encoding : encoding, badLines: decoded.badLines });
+    setText(decoded.text.slice(0, MAX_TEXT));
+    if (decoded.badLines.length) toast(`${linesLabel(decoded.badLines)}有無法辨識的字元，可在「檔案編碼」換一種試試`, { level: "warn" });
+    return decoded.text;
+  };
+
   const openFile = async (e) => {
     const file = e.currentTarget.files[0];
     e.currentTarget.value = "";
@@ -174,9 +174,12 @@ function ScriptImportBody({ close }) {
     try {
       // Word files are read by the server: their shot tables come back as one tab-separated table.
       const docx = /\.docx$/i.test(file.name) ? await upload("/api/script/docx", file) : null;
-      const content = docx ? docx.text : await readTextFile(file);
-      setText(content.slice(0, MAX_TEXT));
-      if (docx && docx.notes.length) toast(docx.notes.join("；"));
+      if (docx) {
+        setSource(null);
+        setText(docx.text.slice(0, MAX_TEXT));
+        if (docx.notes.length) toast(docx.notes.join("；"));
+      }
+      const content = docx ? docx.text : readText(await file.arrayBuffer(), "auto");
       if (content.length > MAX_TEXT) toast("檔案超過 10 萬字，只讀入前段", { level: "warn" });
     } catch (err) {
       toastError(err, "無法讀取檔案");
@@ -232,9 +235,14 @@ function ScriptImportBody({ close }) {
       hint="支援編號清單、空行分段、Excel 貼上的表格（第一列是標題，例如「畫面、運鏡、字幕、秒數」），也可開啟 Word 分鏡表（.docx，例如「內容、影部、聲部」）">
       <${TextArea} value=${text} rows=${14} maxlength=${MAX_TEXT} data-autofocus onChange=${setText}
         placeholder=${"每段寫一個畫面，可加「字幕：」「運鏡：」「秒數：」等標籤。\n也可以直接貼上 Excel 或試算表的分鏡表。"}
-        onKeyDown=${(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) parse(); }} />
+        onKeyDown=${(e) => { if (!e.isComposing && isConfirmKey(e)) parse(); }} />
     <//>
-    <${Field} label="拆分方式" hint=${mode === "llm" ? `文字模型會花${detail ? "一到幾分鐘" : "幾秒到一分鐘"}，結果仍可在下一步修改` : "Ctrl+Enter 也可以開始拆解"}>
+    ${source && html`<${Field} label="檔案編碼" error=${source.badLines.length ? `${linesLabel(source.badLines)}有無法辨識的字元（顯示成 �），請換一種編碼` : ""}
+      hint=${`目前用 ${encodingLabel(source.encoding)} 讀取；文字看起來是亂碼就換一種，會重新讀入檔案（剛才的修改會被取代）`}>
+      <${Select} value=${source.encoding} options=${TEXT_ENCODINGS.filter((o) => o.value !== "auto")}
+        onChange=${(enc) => readText(source.buf, enc)} />
+    <//>`}
+    <${Field} label="拆分方式" hint=${mode === "llm" ? `文字模型會花${detail ? "一到幾分鐘" : "幾秒到一分鐘"}，結果仍可在下一步修改` : confirmKeyText("也可以開始拆解")}>
       <${Segmented} value=${mode} onChange=${setMode} options=${modes} size="sm" />
     <//>
     <${Toggle} checked=${detail} onChange=${setDetail} label="依劇情細拆鏡頭"

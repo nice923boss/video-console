@@ -5,7 +5,7 @@ import { useStore } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { saveSettings } from "../lib/actions.js";
 import { chime, requestDesktopPermission } from "../lib/notify.js";
-import { Button, IconButton, Field, TextInput, Toggle } from "../components/ui.js";
+import { Button, IconButton, Field, Segmented, TextInput, Toggle } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 import { toast } from "../components/toast.js";
 import { SecretField } from "../components/secret-field.js";
@@ -19,6 +19,11 @@ const PERMISSION_TEXT = {
   default: { tone: "warn", text: "尚未允許。打開開關時會詢問一次" },
   unsupported: { tone: "warn", text: "這個瀏覽器不支援系統通知" },
 };
+
+const WHEN = [
+  { value: "all", label: "每批都通知" },
+  { value: "failed", label: "只在有失敗時" },
+];
 
 const currentPermission = () => ("Notification" in window ? Notification.permission : "unsupported");
 
@@ -102,6 +107,9 @@ function NtfyForm({ saved }) {
         <${TextInput} mono value=${draft.server} spellcheck=${false} onChange=${(server) => set({ server })} />
       <//>
     </div>
+    <${Field} label="通知時機" hint="佇列全部跑完時送一則摘要；選「只在有失敗時」，全部成功就不推播，摘要只列失敗的工作">
+      <${Segmented} size="sm" value=${draft.when || "all"} options=${WHEN} onChange=${(when) => set({ when })} />
+    <//>
     <${SecretField} name="ntfy.token" label="存取權杖（選填）"
       help="自架或有權限控管的主題才需要，會以 Authorization: Bearer 標頭送到上面的伺服器。" />
     ${result && html`<div class=${`note ${result.error ? "note-danger" : "note-ok"}`} role="status">

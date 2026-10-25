@@ -76,9 +76,10 @@ def test_voice_job_puts_the_line_on_the_track_and_regenerating_replaces_it(
 
     done = run_voice(client, pid, cid)
     assert done["status"] == "done", done["error"]
-    assert "比字幕長 0.5 秒" in done["message"]
+    assert "字幕延長 0.5 秒" in done["message"] and "比字幕長" not in done["message"]  # AU-12
     assert mock_http.calls[-1].json() == {"text": "爸爸回來了！", "voice": "dirb6edcb1a:凡萱", "speed": 1.2}
     saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    assert abs(saved["captions"][0]["end"] - 3.5) < 0.05
     [clip] = saved["audio"]
     assert (clip["captionId"], clip["start"], clip["volume"]) == (cid, 2.0, 0.8)
     first = saved["media"][clip["mediaId"]]
@@ -96,6 +97,16 @@ def test_voice_job_puts_the_line_on_the_track_and_regenerating_replaces_it(
     assert first["id"] not in saved["media"]
     assert saved["media"][clip["mediaId"]]["source"]["text"] == "我回來了"
     assert not list((app.store.project_dir(pid) / "media" / "cache").glob("job-*"))
+
+
+def test_voice_end_stops_at_the_next_caption() -> None:
+    caps = [{"id": "a", "start": 2.0, "end": 3.0}, {"id": "b", "start": 3.2, "end": 4.0},
+            {"id": "c", "start": 1.0, "end": 9.0}]
+    project = {"captions": caps}
+    assert voice_module.voice_end(project, caps[0], 1.1) == 3.1
+    assert voice_module.voice_end(project, caps[0], 2.0) == 3.2  # "b" starts there; an earlier "c" does not count
+    assert voice_module.voice_end(project, caps[0], 0.5) == 3.0  # a long enough caption keeps its end
+    assert voice_module.voice_end(project, caps[1], 5.0) == 8.2
 
 
 def test_voice_job_refuses_lines_that_are_not_ready(client: Client, project: dict) -> None:
@@ -199,7 +210,7 @@ def test_cast_and_speakers_travel_with_a_package(app: App, client: Client, proje
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         assert json.loads(zf.read("project.json"))["cast"] == [NARRATOR]
     imported = client.json("POST", "/api/projects/import?name=backup.zip", data)["project"]
-    assert imported["cast"] == [NARRATOR] and imported["captions"][0]["speaker"] == "c_narrator0"
+    assert imported["cast"] == [{**NARRATOR, "lookRef": None}] and imported["captions"][0]["speaker"] == "c_narrator0"
 
 
 # ---------------------------------------------------------------- VoAI (cloud, mocked)
@@ -246,6 +257,7 @@ def test_voai_job_speaks_the_line_in_the_cloud_and_regenerating_replaces_it(
     [clip] = saved["audio"]
     first = saved["media"][clip["mediaId"]]
     assert (clip["captionId"], clip["start"]) == (cid, 1.0)
+    assert clip["volume"] == 1.9953  # VoAI renders quiet: the line goes on the track 6 dB up
     assert first["source"] == {"backend": "voai", "captionId": cid, "castId": "c_cloud00000", "voice": "雨榛",
                                "voiceName": "雨榛", "text": "今天天氣真好", "speed": 1.8, "style": "聊天", "model": "Neo"}
 

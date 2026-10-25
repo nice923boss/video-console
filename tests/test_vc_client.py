@@ -16,9 +16,12 @@ import vc_client  # noqa: E402
 from vc import BUILD  # noqa: E402
 
 
-def test_the_source_build_is_the_one_the_server_reports() -> None:
-    assert vc_client._source_build(ROOT) == BUILD
-    assert vc_client._source_build(ROOT / "tests") is None  # a packaged install has no source
+def test_the_installed_build_is_the_one_the_server_reports(tmp_path: Path) -> None:
+    assert vc_client._installed_build(ROOT) == BUILD
+    assert vc_client._installed_build(tmp_path) is None  # an exe packaged before the stamp existed
+    (tmp_path / "_internal" / "vc").mkdir(parents=True)
+    (tmp_path / "_internal" / "vc" / "BUILD").write_text("1.7.0+123\n", encoding="utf-8")
+    assert vc_client._installed_build(tmp_path) == "1.7.0+123"
 
 
 @pytest.fixture()
@@ -28,7 +31,7 @@ def root(tmp_path: Path, mock_http: MockServer, monkeypatch: pytest.MonkeyPatch)
     (tmp_path / "data" / "run").mkdir(parents=True)
     info = {"port": mock_http.httpd.server_port}
     (tmp_path / "data" / "run" / "server.json").write_text(json.dumps(info), encoding="utf-8")
-    monkeypatch.setattr(vc_client, "_source_build", lambda _root: "new")
+    monkeypatch.setattr(vc_client, "_installed_build", lambda _root: "new")
     return tmp_path
 
 

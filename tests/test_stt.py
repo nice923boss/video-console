@@ -105,11 +105,12 @@ def test_parse_srt_joins_lines_and_skips_broken_blocks() -> None:
 
 
 def test_caption_ops_place_cues_at_the_clip_and_clamp_to_it() -> None:
-    clip = {"start": 10.0, "length": 2.0}
+    clip = {"start": 10.0, "length": 2.0, "shot": {"id": "s_one000001"}}
     ops = caption_ops([(0.2, 0.9, "一"), (1.0, 9.0, "二"), (2.0 - MIN_CUE / 2, 2.5, "三")], clip)
     assert [(o["item"]["start"], o["item"]["end"], o["item"]["text"]) for o in ops] == [(10.2, 10.9, "一"),
                                                                                          (11.0, 12.0, "二")]
     assert all(o["op"] == "caption.add" and o["item"]["shot"] is None for o in ops)
+    assert all(o["item"]["sttShot"] == "s_one000001" for o in ops)  # marks this run for the next re-run
 
 
 def test_venv_python_reads_the_launcher_home(tmp_path: Path) -> None:
@@ -139,6 +140,23 @@ def test_transcribe_adds_the_clip_subtitles_as_one_undoable_batch(
     (sts / "mode.txt").write_text("silent", encoding="utf-8")
     done = transcribe(client, pid, sid)
     assert done["status"] == "done" and "沒有辨識到語音" in done["result"]["message"]
+
+
+@needs_ffmpeg
+def test_transcribing_again_replaces_the_last_run_and_keeps_other_captions(
+        client: Client, project: dict, sts: Path, tmp_path: Path) -> None:
+    pid = project["id"]
+    sid = video_shot(client, project, tmp_path)
+    assert transcribe(client, pid, sid)["status"] == "done"
+    first = {c["id"] for c in captions(client, pid)}
+    mine = {"id": "c_mine00001", "start": 0.5, "end": 1.5, "text": "手打的", "position": "bottom"}
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [{"op": "caption.add", "item": mine}]})
+    done = transcribe(client, pid, sid)
+    assert done["result"]["message"] == "已加入 2 句字幕，取代上次的 2 句"
+    now = {c["id"] for c in captions(client, pid)}
+    assert len(now) == 3 and "c_mine00001" in now and not first & now
+    client.json("POST", f"/api/projects/{pid}/undo")
+    assert {c["id"] for c in captions(client, pid)} == first | {"c_mine00001"}
 
 
 @needs_ffmpeg
@@ -191,6 +209,7 @@ def test_video_takes_with_sound_get_a_waveform(app: App, client: Client, project
     mute = next(t for t in takes if not t["hasAudio"])
     wave = json.loads(app.store.resolve_file(pid, loud["wave"]).read_text(encoding="utf-8"))
     assert abs(wave["duration"] - 3.0) < 0.1 and max(wave["peaks"]) == 100
+    assert 0 < wave["level"] <= 1  # the loudest sample, which the timeline paints red when a clip pushes it over 0 dB
     assert "wave" not in mute
 
 

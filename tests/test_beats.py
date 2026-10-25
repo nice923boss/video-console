@@ -77,7 +77,18 @@ def test_shot_lengths_follow_the_role_and_the_line() -> None:
 
     # medium pace: an establishing shot holds twice the average 2.2, an action the average, a close-up 1.5
     assert [s["duration"] for s in first] == [4.4, 2.2, 1.5]
-    assert first[0]["notes"] == "【空拍運鏡】\n說話者：旁白／小宜" and first[1]["notes"] == ""
+    assert first[0]["notes"] == "【空拍運鏡】\n說話者：旁白" and first[1]["notes"] == "說話者：小宜"
+
+
+def test_each_shot_names_who_says_its_line() -> None:
+    shots = break_down(parse_script(table(*ROWS)))["shots"]
+    by_beat = {b: [s["notes"] for s in shots if s["beat"] == b] for b in (1, 2, 4, 5, 8)}
+
+    assert by_beat[1][2] == ""  # the close-up has no line
+    assert by_beat[2] == ["【驚險瞬間】\n音效：喇叭聲", "說話者：小宜(大喊)"]  # the line is heard over its speaker
+    assert by_beat[8] == ["說話者：旁白"] * 4
+    assert by_beat[4] == ["【資訊圖卡】\n說話者：旁白", "說話者：旁白"]
+    assert by_beat[5][0].endswith("說話者：陳凱") and "說話者" not in "".join(by_beat[5][1:])
 
 
 def test_the_breakdown_keeps_no_working_fields_or_empty_brackets() -> None:
@@ -85,6 +96,17 @@ def test_the_breakdown_keeps_no_working_fields_or_empty_brackets() -> None:
 
     assert all("lines" not in s for s in shots)
     assert shots[-1]["prompt"] == "全景：畫面淡出"
+
+
+def test_a_storyboard_with_a_shot_number_column_keeps_one_shot_per_row() -> None:
+    text = "\n".join("\t".join(f'"{c}"' if "\n" in c else c for c in row)
+                     for row in [["鏡號", *HEAD], ["1", *ROWS[0]], ["2", *ROWS[1]]]) + "\n"
+    result = break_down(parse_script(text))
+
+    assert [s["beat"] for s in result["shots"]] == [1, 2]
+    assert result["shots"][1]["caption"] == "小心！"
+    assert "分鏡表已有鏡號欄，每列維持一個鏡頭" in result["notes"]
+    assert all("lines" not in s for s in result["shots"])
 
 
 @pytest.mark.parametrize("shot", [

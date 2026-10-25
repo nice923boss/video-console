@@ -1,16 +1,21 @@
-// Edit view: the preview player on top, the timeline below (drag the divider to resize it), and the
-// property panel for whatever is selected on the timeline (not shown in watch mode, which changes nothing).
-import { html, useMemo, useRef } from "../lib/h.js";
+// Edit view: the preview player on top (with the media bin beside it when shown), the timeline below (drag
+// the divider to resize it), and the property panel for whatever is selected on the timeline (not shown in
+// watch mode, which changes nothing).
+import { html, useEffect, useMemo, useRef } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { navigate } from "../lib/actions.js";
 import { buildSequence } from "../lib/sequence.js";
 import { clamp } from "../lib/format.js";
 import { usePref } from "../lib/prefs.js";
 import { releaseFocus } from "../lib/keys.js";
+import { useKeymap } from "../lib/keymap.js";
 import { Button, Empty } from "../components/ui.js";
 import { Player } from "../components/player.js";
 import { Timeline } from "../components/timeline.js";
 import { EditProps } from "../components/edit-props.js";
+import { AudioMeters } from "../components/audio-meter.js";
+import { MediaBin } from "../components/media-bin.js";
+import { layoutMenu } from "../components/layouts.js";
 
 const TL_DEFAULT = 280;
 const TL_MIN = 170;
@@ -18,10 +23,16 @@ const TL_MAX_SHARE = 0.72;
 const TL_KEY_STEP = 24;
 
 const validHeight = (v) => Number.isFinite(v) && v >= TL_MIN && v <= 4000;
+const isBool = (v) => typeof v === "boolean";
 
 export function EditView() {
   const { project, editSel, watch } = useStore((s) => ({ project: s.project, editSel: s.editSel, watch: s.watch }));
   const [height, setHeight] = usePref("vc.edit.tlh", TL_DEFAULT, validHeight);
+  const [meters, setMeters] = usePref("vc.edit.meters", true, isBool);
+  const toggleMeters = () => setMeters(!meters);
+  const [bin, setBin] = usePref("vc.edit.bin", false, isBool);
+  const toggleBin = () => setBin(!bin);
+  useKeymap({ "edit.meters": toggleMeters, "edit.bin": toggleBin });
   const mainRef = useRef(null);
   const clips = useMemo(() => (project ? buildSequence(project) : []), [project]);
 
@@ -30,6 +41,11 @@ export function EditView() {
     const max = main ? Math.max(TL_MIN, main.clientHeight * TL_MAX_SHARE) : 4000;
     return Math.round(clamp(h, TL_MIN, max));
   };
+  // A layout (UI-08) saved on a taller window may not fit this one.
+  useEffect(() => {
+    const fit = limit(height);
+    if (fit !== height) setHeight(fit);
+  }, [height]);
 
   // While dragging, write the CSS variable directly so the player does not re-render on every move;
   // the final height is saved once on release.
@@ -78,7 +94,9 @@ export function EditView() {
   return html`<div class="view view-edit">
     <section class="edit-main" ref=${mainRef} style=${`--tl-h:${height}px`}>
       <div class="edit-stage">
-        <${Player} project=${project} clips=${clips} />
+        ${bin && !watch && html`<${MediaBin} project=${project} />`}
+        <${Player} project=${project} clips=${clips} meters=${meters} onToggleMeters=${toggleMeters}
+          bin=${bin} onToggleBin=${watch ? null : toggleBin} onLayout=${layoutMenu} />
       </div>
       <div class="edit-split" role="separator" aria-orientation="horizontal" aria-label="調整時間軸高度"
           aria-valuenow=${height} tabindex="0" title="拖曳調整時間軸高度，雙擊還原"
@@ -87,6 +105,7 @@ export function EditView() {
       </div>
       <div class="edit-timeline">
         <${Timeline} project=${project} clips=${clips} />
+        ${meters && html`<${AudioMeters} />`}
       </div>
     </section>
     ${!watch && html`<${EditProps} project=${project} sel=${editSel} />`}

@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 import re
 import sys
+import threading
 from pathlib import Path
 
 _TOKEN_RE = re.compile(r"(Bearer|Key)\s+[A-Za-z0-9._\-:]{8,}")
@@ -18,6 +19,15 @@ class _RedactFilter(logging.Filter):
         if "Bearer " in msg or "Key " in msg:
             record.msg, record.args = _TOKEN_RE.sub(r"\1 ***", msg), ()
         return True
+
+
+def _log_thread_crash(args: threading.ExceptHookArgs) -> None:
+    """A background thread that dies leaves its traceback in app.log, with a time, for the debug bundle (QA-09)."""
+    if args.exc_type is SystemExit:
+        return
+    name = args.thread.name if args.thread else "?"
+    logging.getLogger("vc").critical("Thread %s crashed", name,
+                                     exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
 
 
 def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
@@ -43,4 +53,5 @@ def setup_logging(log_dir: Path, verbose: bool = False) -> logging.Logger:
         sh.setFormatter(fmt)
         sh.addFilter(_RedactFilter())
         root.addHandler(sh)
+    threading.excepthook = _log_thread_crash
     return logging.getLogger("vc")

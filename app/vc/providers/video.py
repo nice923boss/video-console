@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .. import net
 from ..util import AppError
-from . import catalog
+from . import catalog, published
 from .base import (Context, Poll, Provider, Request, b64decode_loose, clean_model, combo, nearest_ratio, number,
                    pick_duration, poll, same_host, secret, select, text, toggle, url_field, with_avoid)
 
@@ -48,7 +48,7 @@ class Kling(Provider):
     modes = ("i2v", "t2v")
     docs = "https://app.klingai.com/global/dev"
     notes = ("可靈的金鑰是一組 Access Key 與 Secret Key，兩個都要填。標準模式較便宜，專業模式畫質較好。"
-             "可靈沒有提供模型清單，這裡的選單不會自動更新；要用較新的可靈版本，請改用「fal.ai 影片」。")
+             "可靈沒有提供模型清單 API，選單來自 Video Console 在 GitHub 上維護的清單，按「偵測模型」取得最新版；也可以改用「fal.ai 影片」。")
     resumable = True
     online_test = True
     expected_seconds = 240
@@ -56,17 +56,19 @@ class Kling(Provider):
     fields = (
         url_field("baseUrl", "API 網址", "https://api-singapore.klingai.com",
                   help="早期申請的帳號若連不上，改成 https://api.klingai.com"),
-        combo("model", "圖轉影片模型", ["kling-v2-1", "kling-v2-1-master", "kling-v2-master", "kling-v1-6"],
-              "kling-v2-1"),
-        combo("modelT2V", "文字轉影片模型", ["kling-v2-1-master", "kling-v2-master", "kling-v1-6"],
-              "kling-v2-1-master"),
+        combo("model", "圖轉影片模型", published.options("kling", "model"), "kling-v2-1"),
+        combo("modelT2V", "文字轉影片模型", published.options("kling", "modelT2V"), "kling-v2-1-master"),
         select("mode", "生成模式", [("std", "標準（較便宜）"), ("pro", "專業（畫質較好）")], "std"),
         _DURATION,
         number("cfgScale", "提示詞貼合度", 0.5, 0.0, 1.0, 0.05, help="越高越貼近提示詞，越低越自由"),
     )
+    model_keys = {"i2v": "model", "t2v": "modelT2V"}
 
     def durations(self, config: dict, mode: str, models: dict | None) -> list:
         return [str(v) for v in _five_or_ten(config["duration"])]
+
+    def detect_models(self, ctx: Context) -> dict[str, dict]:
+        return published.detect(self.id, ctx.config, self.vendor)
 
     def _call(self, ctx: Context, method: str, path: str, body: dict | None = None) -> dict:
         ak = ctx.require_secret("access_key", "可靈 Access Key")
@@ -136,15 +138,17 @@ class Runway(Provider):
     modes = ("i2v",)
     docs = "https://dev.runwayml.com/"
     notes = ("Runway 只能圖轉影片，鏡頭要先有圖片。輸出比例會挑最接近專案比例的官方選項。"
-             "Runway 沒有提供模型清單，fal.ai 也沒有 Runway 模型；有新模型時請到 Runway 開發者文件查代號後手動填入。")
+             "Runway 沒有提供模型清單 API，選單來自 Video Console 在 GitHub 上維護的清單，按「偵測模型」取得最新版；清單還沒收錄的新模型，可到 Runway 開發者文件查代號後手動填入"
+             "（輸出比例會先套用 gen4_turbo 的選項）。")
     resumable = True
     online_test = True
     expected_seconds = 90
     fields = (
         url_field("baseUrl", "API 網址", "https://api.dev.runwayml.com"),
-        combo("model", "模型", ["gen4_turbo", "gen3a_turbo"], "gen4_turbo"),
+        combo("model", "模型", published.options("runway", "model"), "gen4_turbo"),
         _DURATION,
     )
+    model_keys = {"i2v": "model"}
     RATIOS = {
         "gen4_turbo": ("1280:720", "720:1280", "1104:832", "832:1104", "960:960", "1584:672"),
         "gen3a_turbo": ("1280:768", "768:1280"),
@@ -152,6 +156,9 @@ class Runway(Provider):
 
     def durations(self, config: dict, mode: str, models: dict | None) -> list:
         return _five_or_ten(config["duration"])
+
+    def detect_models(self, ctx: Context) -> dict[str, dict]:
+        return published.detect(self.id, ctx.config, self.vendor)
 
     def _headers(self, ctx: Context) -> dict[str, str]:
         return {"Authorization": f"Bearer {ctx.require_secret('api_key', 'Runway API 金鑰')}",
@@ -226,22 +233,25 @@ class MiniMax(Provider):
     modes = ("i2v", "t2v")
     docs = "https://www.minimax.io/platform/user-center/basic-information/interface-key"
     notes = ("Hailuo 02 的 1080P 只能 6 秒；768P 與 512P 可選 6 或 10 秒（依鏡頭的影片秒數挑選），其他模型的長度由模型決定。"
-             "MiniMax 沒有提供模型清單，這裡的選單不會自動更新；要用較新的海螺版本，請改用「fal.ai 影片」。")
+             "MiniMax 沒有提供模型清單 API，選單來自 Video Console 在 GitHub 上維護的清單，按「偵測模型」取得最新版；也可以改用「fal.ai 影片」。")
     resumable = True
     expected_seconds = 240
     fields = (
         url_field("baseUrl", "API 網址", "https://api.minimax.io", help="中國大陸帳號請改成 https://api.minimaxi.com"),
-        combo("model", "模型", ["MiniMax-Hailuo-02", "I2V-01-Director", "I2V-01", "T2V-01-Director"],
-              "MiniMax-Hailuo-02"),
+        combo("model", "模型", published.options("minimax", "model"), "MiniMax-Hailuo-02"),
         select("resolution", "解析度（Hailuo 系列）", ["768P", "1080P", "512P"], "768P"),
         toggle("promptOptimizer", "讓 MiniMax 自動優化提示詞", True),
         text("groupId", "Group ID（選填）", "", help="舊版帳號下載影片時需要，一般留空"),
     )
+    model_keys = {"i2v": "model", "t2v": "model"}
 
     def durations(self, config: dict, mode: str, models: dict | None) -> list:
         if "hailuo" not in clean_model(config["model"]).lower():
             return []
         return [6] if config["resolution"] == "1080P" else [6, 10]
+
+    def detect_models(self, ctx: Context) -> dict[str, dict]:
+        return published.detect(self.id, ctx.config, self.vendor)
 
     def _call(self, ctx: Context, method: str, path: str, body: dict | None = None) -> dict:
         key = ctx.require_secret("api_key", "MiniMax API 金鑰")

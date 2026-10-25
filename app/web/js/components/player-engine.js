@@ -5,11 +5,14 @@
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
 // clock; nothing here re-renders through Preact.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioMedia, audioTrack, VOICE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { clipIndexAt, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
-import { resolveStyle, anchorOf, textCss, blockCss, zonePad } from "../lib/caption-style.js";
+import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged } from "../lib/caption-style.js";
 import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
+import { chromaMarkup } from "../lib/chroma.js";
+import { maskMarkup } from "../lib/masks.js";
+import { wakeMix, routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
 
 const DRIFT_PLAYING = 0.15;
 const DRIFT_PAUSED = 0.02;
@@ -19,6 +22,7 @@ const ZONES = ["top", "middle", "bottom"];
 const DRAG_START_PX = 3;
 const HOLD_MS = 2000;
 const MAX_RATE = 16; // the fastest playbackRate browsers accept
+const SLATE_FADE = 0.2; // export.py's ad(200,200) on slate text
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 let engineSeq = 0; // keeps SVG filter ids unique when more than one player exists
@@ -82,7 +86,9 @@ function makeSlot(host, rerender) {
   const slate = el("div", "pl-slate", root);
   const title = el("div", "pl-slate-title", slate);
   const sub = el("div", "pl-slate-sub", slate);
-  const slot = { root, video, img, title, sub, key: "", clip: null, mode: "", pendingSeek: null };
+  const masks = el("div", "pl-masks", root);
+  const slot = { root, video, img, title, sub, masks, key: "", clip: null, mode: "", pendingSeek: null, filterCss: "",
+    maskKey: "" };
 
   const setMode = (mode) => {
     slot.mode = mode;
@@ -102,11 +108,12 @@ function makeSlot(host, rerender) {
   });
   video.addEventListener("loadedmetadata", rerender);
 
-  slot.load = (clip, pid) => {
+  slot.load = (clip, pid, scale) => {
     slot.clip = clip;
     const take = clip ? clip.take : null;
     const off = clip && clip.shot.disabled;
-    const key = clip ? `${off ? "off" : clip.source}|${take ? take.file : ""}|${slateText(clip)}` : "";
+    const file = take ? playFile(take, scale) : "";
+    const key = clip ? `${off ? "off" : clip.source}|${file}|${slateText(clip)}` : "";
     if (key === slot.key) return;
     slot.key = key;
     slot.pendingSeek = null;
@@ -117,7 +124,7 @@ function makeSlot(host, rerender) {
       setMode(off ? "off" : "none");
     } else if (clip.source === "video") {
       img.removeAttribute("src");
-      video.src = fileUrl(pid, take.file);
+      video.src = fileUrl(pid, file);
       setMode("video");
     } else if (clip.source === "image") {
       release(video);
@@ -132,6 +139,11 @@ function makeSlot(host, rerender) {
     }
   };
   return slot;
+}
+
+// The smaller preview copy at this scale (PV-06, lowres.py) once it is made; the original until then.
+function playFile(item, scale) {
+  return (scale > 1 && item[`preview${scale}`]) || item.file;
 }
 
 function resetLook(slot, z) {
@@ -163,10 +175,13 @@ export function createEngine(host, hooks = {}) {
   defs.setAttribute("aria-hidden", "true");
   host.appendChild(defs);
   const filterPrefix = `vc-grade-${++engineSeq}`;
-  const filters = new Map(); // adjustment id -> {key, fid, node}
+  const filters = new Map(); // adjustment id, "shot:" + shot id or "chroma:" + overlay id -> {key, fid, node}
   let filterSeq = 0;
   let filterCss = "";
-  let gradeDraft = null; // {id, grade} while the grade panel is being dragged
+  let capsFilterCss = "";
+  let gradeDraft = null; // {id, grade} while a grade control (adjustment layer or shot) is being dragged
+  let maskDraft = null; // {id, masks} while a shot's mask control is being dragged
+  let compare = false; // grades filter only the right half of the picture (GR-06)
   const caps = el("div", "pl-caps", host);
   const zones = Object.fromEntries(ZONES.map((z) => [z, el("div", `pl-cap-zone pos-${z}`, caps)]));
   const fade = el("div", "pl-fade", host);
@@ -177,8 +192,11 @@ export function createEngine(host, hooks = {}) {
   let total = 0;
   let level = 1;
   let muted = false;
+  let solo = []; // row keys heard alone; empty: every row
+  let scale = 1; // preview resolution: 1, 2 (half) or 4 (quarter)
   let capKey = "";
   let legacy = 52;
+  let shiftCache = { project: null, height: 0, shifts: new Map() }; // dragShifts() for this project and size
   let drag = null;
   let held = false; // a dropped caption stays put until the moved project arrives
   let last = { t: 0, playing: false, rate: 1 };
@@ -206,12 +224,25 @@ export function createEngine(host, hooks = {}) {
     return clamp01(Math.min(local / fi, (len - local) / fo));
   }
 
+  // Sound goes through the Web Audio mix once it runs (it plays gains above 1 and feeds the meters);
+  // before that, and where Web Audio is missing, through the element's own volume, capped at 1.
+  // track: the timeline row the sound belongs to (its own meter, and silent when another row is soloed).
+  function setGain(media, gain, track) {
+    if (solo.length && !solo.includes(track)) gain = 0;
+    if (routeGain(media, gain, track)) {
+      media.volume = 1;
+      media.muted = false;
+    } else {
+      media.volume = clamp01(gain * level);
+      media.muted = muted || gain <= 0;
+    }
+  }
+
   function syncVideo(slot, t, playing, gain) {
     const { clip, video } = slot;
     if (slot.mode !== "video") return;
     const target = clip.in + Math.min(Math.max(0, t - clip.start), Math.max(0, clip.length - EDGE)) * clip.speed;
-    video.volume = clamp01(gain * level);
-    video.muted = muted || gain <= 0;
+    setGain(video, gain, SOURCE_TRACK);
     if (playing) {
       const speed = Math.min(MAX_RATE, last.rate * clip.speed);
       if (video.playbackRate !== speed) video.playbackRate = speed;
@@ -224,7 +255,7 @@ export function createEngine(host, hooks = {}) {
   }
 
   function park(slot, clip) {
-    slot.load(clip, project.id);
+    slot.load(clip, project.id, scale);
     hide(slot);
     if (clip) syncVideo(slot, clip.start, false, 0);
   }
@@ -258,10 +289,10 @@ export function createEngine(host, hooks = {}) {
     const prev = ci > 0 ? clips[ci - 1] : null;
     const curSlot = slots[ci % 2];
     const other = slots[(ci + 1) % 2];
-    curSlot.load(cur, project.id);
+    curSlot.load(cur, project.id, scale);
     const overlap = prev && prev.transition.duration > 0 && t < prev.start + prev.length - 1e-6;
     if (overlap) {
-      other.load(prev, project.id);
+      other.load(prev, project.id, scale);
       const p = clamp01((t - cur.start) / prev.transition.duration);
       drawTransition(prev.transition.type, other, curSlot, p);
       syncVideo(other, t, playing, clipGain(ci - 1, t) * g);
@@ -270,15 +301,101 @@ export function createEngine(host, hooks = {}) {
       park(other, clips[ci + 1] || null);
     }
     syncVideo(curSlot, t, playing, clipGain(ci, t) * g);
+    slateFade(curSlot, ci, t);
+    if (overlap) slateFade(other, ci - 1, t);
+    slots.forEach(shadeSlot);
+    slots.forEach(maskSlot);
   }
 
-  // Each caption in its style: in its top/middle/bottom row, or pinned where it was dragged (lib/caption-style.js).
+  // A shot's own grade (GR-01) on the picture of the slot showing it. It filters the video or picture element
+  // alone, so letterbox bars stay black, as export.py grades the clip's source before fitting it to the frame.
+  function shadeSlot(slot) {
+    const shot = slot.clip && slot.clip.shot;
+    let css = "";
+    if (shot && (slot.mode === "video" || slot.mode === "image")) {
+      const grade = gradeDraft && gradeDraft.id === shot.id ? gradeDraft.grade : shot.grade;
+      if (grade && !isNeutral(grade)) css = `url(#${filterFor(`shot:${shot.id}`, grade)})`;
+    }
+    if (css === slot.filterCss) return;
+    slot.filterCss = css;
+    slot.video.style.filter = css;
+    slot.img.style.filter = css;
+  }
+
+  // A shot's blur and mosaic boxes (GR-12) over the slot showing it, in the frame as export.py cuts them after
+  // fitting; backdrop-filter works on what the slot paints under them, the graded picture.
+  function maskSlot(slot) {
+    const shot = slot.clip && slot.clip.shot;
+    const shown = shot && (slot.mode === "video" || slot.mode === "image");
+    const list = !shown ? [] : maskDraft && maskDraft.id === shot.id ? maskDraft.masks : shot.masks || [];
+    const { width, height } = project.settings;
+    const px = list.length ? slot.root.clientHeight / Number(height) : 0; // CSS pixels per frame pixel
+    const key = list.length ? `${px.toFixed(4)}|${JSON.stringify(list)}` : "";
+    if (key === slot.maskKey) return;
+    slot.maskKey = key;
+    slot.masks.innerHTML = maskMarkup(list, Number(width), Number(height), px, () => `${filterPrefix}-${++filterSeq}`);
+  }
+
+  // Slate text as export.py burns it: off the frames a transition shares with a neighbour, fading at both ends.
+  function slateFade(slot, i, t) {
+    const clip = clips[i];
+    let start = clip.start + (i > 0 ? clips[i - 1].transition.duration : 0);
+    let end = clip.start + clip.length - clip.transition.duration;
+    if (end - start < 0.3) [start, end] = [clip.start, clip.start + clip.length];
+    // A playback error keeps its message up; export.py has no such slate.
+    const a = slot.mode === "slate" ? String(clamp01(Math.min((t - start) / SLATE_FADE, (end - t) / SLATE_FADE))) : "";
+    slot.title.style.opacity = a;
+    slot.sub.style.opacity = a;
+  }
+
+  // How far each dragged caption moves so captions shown together do not cover each other (CP-08), measured
+  // the way the export lays them out: each one's widest line by its lines one size apart around its anchor, grown
+  // by its box padding. Worked out for every caption the export burns in, since one that is not showing now can
+  // still push one that is; kept until the project or the preview's height changes.
+  function dragShifts() {
+    const height = caps.clientHeight;
+    if (!height) return new Map(); // captions hidden
+    if (shiftCache.project === project && shiftCache.height === height) return shiftCache.shifts;
+    const k = 1080 / height;
+    const frame = caps.getBoundingClientRect();
+    const probes = [];
+    (project.captions || []).forEach((c) => {
+      if (!(c.text || "").trim() || !(c.end > c.start) || c.disabled) return;
+      const s = resolveStyle(project, c, legacy);
+      const point = anchorOf(s, c);
+      if (!point) return;
+      const node = el("div", "pl-cap", caps);
+      node.style.cssText = `${blockCss(s, point)};visibility:hidden`;
+      const text = el("span", "pl-cap-text", node);
+      text.style.cssText = textCss(s);
+      text.textContent = c.text.trim();
+      probes.push({ c, s, point, node, text });
+    });
+    const boxes = probes.map(({ c, s, point, node, text }) => {
+      const r = node.getBoundingClientRect();
+      const lines = Math.max(1, text.getClientRects().length);
+      node.remove();
+      const pad = s.box ? s.boxPadding : 0;
+      const y = point.y * 1080;
+      const h = lines * s.size;
+      return { key: c.id, start: c.start, end: c.end, left: (r.left - frame.left) * k - pad,
+        right: (r.right - frame.left) * k + pad, top: y - h / 2 - pad, bottom: y + h / 2 + pad };
+    });
+    shiftCache = { project, height, shifts: stackDragged(boxes) };
+    return shiftCache.shifts;
+  }
+
+  // Each caption in its style: in its top/middle/bottom row, or pinned where it was dragged (lib/caption-style.js),
+  // moved off any dragged caption shown before it.
   function drawCaptions(t) {
     if (drag || held) return;
     const active = (project.captions || []).filter((c) => c.start <= t && t < c.end && (c.text || "").trim() && !c.disabled);
+    const shifts = dragShifts();
     const looks = active.map((c) => {
       const s = resolveStyle(project, c, legacy);
-      return { c, s, point: anchorOf(s, c), row: ZONES.includes(c.position) ? c.position : "bottom" };
+      const at = anchorOf(s, c);
+      const point = at && { x: at.x, y: at.y + (shifts.get(c.id) || 0) / 1080 };
+      return { c, s, point, row: ZONES.includes(c.position) ? c.position : "bottom" };
     });
     const key = JSON.stringify(looks.map((k) => [k.c.id, k.row, k.c.text, k.s, k.point]));
     if (key === capKey) return;
@@ -394,6 +511,7 @@ export function createEngine(host, hooks = {}) {
     for (const [id, tr] of tracks) {
       if (!seen.has(id)) {
         release(tr.audio);
+        unroute(tr.audio);
         tracks.delete(id);
       }
     }
@@ -407,10 +525,11 @@ export function createEngine(host, hooks = {}) {
         const media = (project.media || {})[item.mediaId];
         if (item.layer !== layer.id || !media || !["image", "video"].includes(media.kind) || item.disabled) continue;
         seen.add(item.id);
-        const src = fileUrl(project.id, media.file);
+        const src = fileUrl(project.id, playFile(media, scale));
         let ov = pips.get(item.id);
         if (ov && ov.src !== src) {
           if (ov.video) release(ov.node);
+          unroute(ov.node);
           ov.node.remove();
           ov = null;
         }
@@ -436,12 +555,16 @@ export function createEngine(host, hooks = {}) {
         ov.layer = layer;
         ov.media = media;
         ov.node.style.zIndex = String(z + 1);
+        const chroma = item.chroma && item.chroma.on ? item.chroma : null;
+        ov.node.style.filter = chroma
+          ? `url(#${cachedFilter(`chroma:${item.id}`, JSON.stringify(chroma), (fid) => chromaMarkup(fid, chroma))})` : "";
         place(ov, 0);
       }
     });
     for (const [id, ov] of pips) {
       if (seen.has(id)) continue;
       if (ov.video) release(ov.node);
+      unroute(ov.node);
       ov.node.remove();
       pips.delete(id);
     }
@@ -461,21 +584,27 @@ export function createEngine(host, hooks = {}) {
     st.opacity = String(clamp01(Number(valueAt(item, "opacity", local, 1))));
   }
 
-  // The SVG filter of one adjustment's grade, rebuilt under a new id whenever the grade changes.
-  function filterFor(id, grade) {
-    const key = JSON.stringify(grade);
+  // An SVG filter kept under id, rebuilt from markup(filter id) under a new filter id whenever key changes.
+  function cachedFilter(id, key, markup) {
     let f = filters.get(id);
     if (f && f.key === key) return f.fid;
     if (f) f.node.remove();
     const fid = `${filterPrefix}-${++filterSeq}`;
-    defs.insertAdjacentHTML("beforeend", filterMarkup(fid, grade));
+    defs.insertAdjacentHTML("beforeend", markup(fid));
     f = { key, fid, node: defs.lastElementChild };
     filters.set(id, f);
     return fid;
   }
 
+  // The SVG filter of one adjustment's or shot's grade.
+  function filterFor(id, grade) {
+    return cachedFilter(id, `${compare}${JSON.stringify(grade)}`, (fid) => filterMarkup(fid, grade, compare));
+  }
+
   function dropUnusedFilters() {
     const ids = new Set((project.adjustments || []).map((a) => a.id));
+    for (const s of project.shots || []) if (s.grade) ids.add(`shot:${s.id}`);
+    for (const o of project.overlays || []) if (o.chroma && o.chroma.on) ids.add(`chroma:${o.id}`);
     for (const [id, f] of filters) {
       if (ids.has(id)) continue;
       f.node.remove();
@@ -500,9 +629,14 @@ export function createEngine(host, hooks = {}) {
       }
     }
     const css = refs.join(" ");
+    const capsCss = project.settings.gradeCaptions ? css : "";
     if (css !== filterCss) {
       filterCss = css;
       graded.style.filter = css;
+    }
+    if (capsCss !== capsFilterCss) {
+      capsFilterCss = capsCss;
+      caps.style.filter = capsCss;
     }
   }
 
@@ -520,9 +654,7 @@ export function createEngine(host, hooks = {}) {
         if (!on) continue;
       }
       const target = Number(item.in || 0) + local;
-      const gain = layer.muted ? 0 : Number(valueAt(item, "volume", local, 1)) * g;
-      node.volume = clamp01(gain * level);
-      node.muted = muted || gain <= 0;
+      setGain(node, layer.muted ? 0 : Number(valueAt(item, "volume", local, 1)) * g, layer.id);
       if (playing) {
         const speed = Math.min(MAX_RATE, last.rate);
         if (node.playbackRate !== speed) node.playbackRate = speed;
@@ -541,7 +673,8 @@ export function createEngine(host, hooks = {}) {
       const start = Number(item.start || 0);
       const len = Math.min(audioLength(item, media), total - start);
       const local = t - start;
-      const off = item.muted || flags[audioTrack(item) === VOICE_TRACK ? "voiceMuted" : "musicMuted"];
+      const track = audioTrack(item);
+      const off = item.muted || flags[track === VOICE_TRACK ? "voiceMuted" : "musicMuted"] || (solo.length && !solo.includes(track));
       if (!playing || off || len <= 0.05 || local < 0 || local >= len) {
         if (!audio.paused) audio.pause();
         continue;
@@ -551,12 +684,12 @@ export function createEngine(host, hooks = {}) {
       let gain = Number(valueAt(item, "volume", local, 1)) * g;
       if (fi > 0 && local < fi) gain *= local / fi;
       if (fo > 0 && local > len - fo) gain *= (len - local) / fo;
-      audio.volume = clamp01(gain * level);
-      audio.muted = muted;
-      const speed = Math.min(MAX_RATE, last.rate);
+      setGain(audio, gain, track);
+      const sp = audioSpeed(item);
+      const speed = Math.min(MAX_RATE, last.rate * sp);
       if (audio.playbackRate !== speed) audio.playbackRate = speed;
-      const target = Number(item.in || 0) + local;
-      if (Math.abs(audio.currentTime - target) > DRIFT_PLAYING * speed) seekTo(audio, tr, target);
+      const target = Number(item.in || 0) + local * sp;
+      if (Math.abs(audio.currentTime - target) > DRIFT_PLAYING * Math.max(1, speed)) seekTo(audio, tr, target);
       if (audio.paused) playSafe(audio);
     }
   }
@@ -565,6 +698,7 @@ export function createEngine(host, hooks = {}) {
   function render(t, playing, rate = 1) {
     last = { t, playing, rate: Math.max(1, Math.abs(rate)) };
     if (!project) return;
+    if (playing) wakeMix();
     const g = projectFade(t);
     const flags = project.tracks || {};
     drawPicture(t, playing, flags.videoMuted ? 0 : g);
@@ -592,14 +726,35 @@ export function createEngine(host, hooks = {}) {
       dropUnusedFilters();
       rerender();
     },
-    // draft: {id, grade} shown in place of that adjustment's saved grade while it is being edited; null ends it.
+    // draft: {id, grade} shown in place of that adjustment's or shot's saved grade while it is being edited;
+    // null ends it.
     setGradeDraft(draft) {
       gradeDraft = draft;
+      rerender();
+    },
+    // draft: {id, masks} shown in place of that shot's saved masks while one is being edited; null ends it.
+    setMaskDraft(draft) {
+      maskDraft = draft;
+      rerender();
+    },
+    // on: every grade (shots and adjustment layers) shows on the right half only, the left half ungraded.
+    setCompare(on) {
+      compare = !!on;
+      rerender();
+    },
+    setSolo(keys) {
+      solo = keys || [];
+      rerender();
+    },
+    setPreviewScale(n) {
+      scale = n;
+      if (project) syncOverlays();
       rerender();
     },
     setVolume(nextLevel, nextMuted) {
       level = clamp01(Number(nextLevel));
       muted = !!nextMuted;
+      setMonitor(level, muted);
       rerender();
     },
     // True while a visible video is still seeking or buffering; the player holds the clock meanwhile.
@@ -614,10 +769,14 @@ export function createEngine(host, hooks = {}) {
     },
     destroy() {
       if (drag) onDragEnd({ pointerId: drag.id, type: "pointercancel" });
-      slots.forEach((s) => release(s.video));
-      tracks.forEach((tr) => release(tr.audio));
+      const drop = (media) => {
+        release(media);
+        unroute(media);
+      };
+      slots.forEach((s) => drop(s.video));
+      tracks.forEach((tr) => drop(tr.audio));
       tracks.clear();
-      pips.forEach((ov) => ov.video && release(ov.node));
+      pips.forEach((ov) => ov.video && drop(ov.node));
       pips.clear();
       host.replaceChildren();
     },

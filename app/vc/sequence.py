@@ -120,6 +120,16 @@ def summary(project: dict) -> dict:
     }
 
 
+def cast_looks(project: dict, text: str) -> str:
+    """The looks of the cast members a shot's text names, one "name：look" line each (SB-11)."""
+    lines = []
+    for member in project.get("cast") or []:
+        name, look = (member.get("name") or "").strip(), (member.get("look") or "").strip()
+        if name and look and name in text:
+            lines.append(f"{name}：{look}")
+    return "\n".join(lines)
+
+
 def compose_prompt(*parts: str) -> str:
     """Join non-empty prompt fragments; style text is appended after the shot's own text."""
     cleaned = [p.strip().strip(",，") for p in parts if p and p.strip()]

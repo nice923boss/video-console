@@ -33,7 +33,8 @@ Route = Callable[[Call], "tuple[int, Any]"]
 
 
 class MockServer:
-    """Records every request and answers from `routes[(method, path)]` (404 otherwise)."""
+    """Records every request and answers from `routes[(method, path)]` (404 otherwise). An answer is
+    (status, payload) or (status, payload, headers); the headers override the default ones."""
 
     def __init__(self) -> None:
         self.calls: list[Call] = []
@@ -74,11 +75,13 @@ class MockServer:
                 server.calls.append(call)
                 server.got_call.set()
                 route = server.routes.get((self.command, self.path))
-                status, payload = route(call) if route else (404, {"error": "not found"})
+                status, payload, *rest = route(call) if route else (404, {"error": "not found"})
                 data = payload if isinstance(payload, bytes) else json.dumps(payload, ensure_ascii=False).encode()
+                headers = {"Content-Type": "application/json; charset=utf-8", "Content-Length": str(len(data)),
+                           **(rest[0] if rest else {})}
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(data)))
+                for name, value in headers.items():
+                    self.send_header(name, value)
                 self.end_headers()
                 self.wfile.write(data)
 

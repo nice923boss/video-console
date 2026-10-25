@@ -153,7 +153,8 @@ class FalVideo(_Fal):
     expected_seconds = 180
     notes = ("共用「fal.ai 圖片」的金鑰。Lightricks LTX、Luma Ray、可靈（Kling）、海螺（MiniMax Hailuo）、Wan 等較新的版本都從這裡選，"
              "模型清單會自動向 fal.ai 查詢，每個模型能設定的秒數也一起偵測，鏡頭的「影片秒數」只會列出該模型支援的值。"
-             "LTX 2.5 文字轉影片只有 16:9 與 9:16，1:1 專案請改用 Luma Ray 或可靈。"
+             "文字轉影片會從模型支援的比例挑最接近專案的一種（LTX 2.5 只有 16:9 與 9:16），"
+             "回傳的比例和專案不同時，下載後自動置中裁成專案比例。"
              "Wan 沒有秒數參數，用影格數控制長度，請在額外參數填 num_frames。")
     model_keys = {"i2v": "model", "t2v": "modelT2V"}
     fields = (
@@ -189,7 +190,8 @@ class FalVideo(_Fal):
             payload["image_url"] = req.image_data_uri()
         else:
             model = cfg["modelT2V"]
-            payload["aspect_ratio"] = nearest_ratio(req.width, req.height, ("16:9", "9:16", "1:1"))
+            ratios = catalog.model_ratios(ctx.models, "modelT2V", model) or ("16:9", "9:16", "1:1")
+            payload["aspect_ratio"] = nearest_ratio(req.width, req.height, ratios)
         return self._wait(ctx, self._submit(ctx, model, merge_extra(payload, cfg["extra"])))
 
     def durations(self, config: dict, mode: str, models: dict | None) -> list:
@@ -304,7 +306,9 @@ class ReplicateImage(_Replicate):
     modes = ("t2i", "i2i")
     expected_seconds = 20
     notes = ("Replicate 會檢查參數名稱，換模型時請到模型頁的 API 說明確認參考圖欄位名稱。"
+             "模型清單會用 Token 向 Replicate 的精選分類查詢（只是 Replicate 的一小部分，其他模型可直接貼上代號）。"
              "這把 Token 也會給「Replicate 影片」使用。")
+    model_keys = {"t2i": "model", "i2i": "model"}
     fields = (
         combo("model", "模型", ["black-forest-labs/flux-dev", "black-forest-labs/flux-schnell",
                                 "black-forest-labs/flux-1.1-pro"], "black-forest-labs/flux-dev",
@@ -332,6 +336,14 @@ class ReplicateImage(_Replicate):
         data, remote = self._create(ctx, cfg["model"], merge_extra(inputs, cfg["extra"]), wait=True)
         return self._finish(ctx, data, remote)
 
+    def detect_models(self, ctx: Context) -> dict[str, dict]:
+        cfg = ctx.config
+        sends = {"prompt", "aspect_ratio", "seed", "output_format"}  # the picture only goes out with a reference
+        sends |= {"negative_prompt"} if cfg["sendNegative"] else set()
+        return catalog.detect_replicate(ctx, REPLICATE, {"model": catalog.ReplicateWant(
+            ("text-to-image",), frozenset(sends), (cfg["model"] or "").strip().strip("/"), cfg["imageField"])},
+            _extra_keys(cfg["extra"]))
+
 
 class ReplicateVideo(_Replicate):
     id = "replicate-video"
@@ -341,20 +353,31 @@ class ReplicateVideo(_Replicate):
     key_owner = "replicate-image"
     expected_seconds = 240
     notes = ("共用「Replicate 圖片」的 Token。首格圖片欄位：LTX 2.5 與 Wan 是 image，Kling 是 start_image，"
-             "Hailuo 02 是 first_frame_image；秒數選項：LTX 2.5 6、8、10（最長 20），Kling 5、10，Hailuo 02 6、10，"
-             "Wan 沒有秒數參數請清空。")
+             "Hailuo 02 是 first_frame_image。模型清單與每個模型的秒數會用 Token 向 Replicate 查詢，"
+             "偵測到的欄位名稱不同時會提醒。")
+    model_keys = {"i2v": "model", "t2v": "model"}
     fields = (
         combo("model", "模型", ["lightricks/ltx-2.5-fast", "kwaivgi/kling-v2.1", "minimax/hailuo-02",
                                "wan-video/wan-2.2-i2v-fast"],
               "lightricks/ltx-2.5-fast"),
         text("imageField", "首格圖片欄位名稱", "image"),
-        text("durations", "可用秒數", "6,8,10", help="以逗號分隔，鏡頭的「影片秒數」從這些值挑選；清空表示不送秒數"),
+        text("durations", "可用秒數", "6,8,10",
+             help="偵測不到模型的秒數時才使用：以逗號分隔，送出時取最接近的值；清空表示不送秒數"),
         toggle("sendNegative", "送出負向提示詞", False, help="模型有 negative_prompt 參數時再開啟"),
         json_field("extra", "額外參數（JSON）", "{}"),
     )
 
     def durations(self, config: dict, mode: str, models: dict | None) -> list:
-        return [int(v) for v in parse_numbers(config["durations"])]
+        detected = catalog.model_durations(models, "model", config["model"])
+        return detected if detected is not None else [int(v) for v in parse_numbers(config["durations"])]
+
+    def detect_models(self, ctx: Context) -> dict[str, dict]:
+        cfg = ctx.config
+        sends = {"prompt", "duration"} | ({cfg["imageField"]} if cfg["imageField"] else set())
+        sends |= {"negative_prompt"} if cfg["sendNegative"] else set()
+        return catalog.detect_replicate(ctx, REPLICATE, {"model": catalog.ReplicateWant(
+            ("image-to-video", "text-to-video"), frozenset(sends), (cfg["model"] or "").strip().strip("/"),
+            cfg["imageField"])}, _extra_keys(cfg["extra"]))
 
     def run(self, ctx: Context, req: Request) -> list[Path]:
         cfg = ctx.config

@@ -51,12 +51,13 @@ def _default_root() -> Path:
 DEFAULT_ROOT = _default_root()
 
 
-def _source_build(root: Path) -> str | None:
-    """The build VC's source in root runs (BUILD in app/vc/__init__.py); None for the packaged exe,
-    which has no source to compare with."""
+def _installed_build(root: Path) -> str | None:
+    """The build VC in root runs: BUILD in app/vc/__init__.py, or the stamp packaging/build_exe.py puts in the
+    exe's folder. None for an exe packaged before the stamp existed."""
     init = root / "app" / "vc" / "__init__.py"
     if not init.is_file():
-        return None
+        stamp = root / "_internal" / "vc" / "BUILD"
+        return stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
     spec = importlib.util.spec_from_file_location("_vc_source", init)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -99,7 +100,7 @@ class VC:
     def _check_build(self, pong: dict, restart: bool) -> None:
         """A copy left running from before a code update answers with the old code. Launching VC again makes
         the launcher restart it, unless that would interrupt running jobs; a copy kept running is reported."""
-        build = _source_build(self.root)
+        build = _installed_build(self.root)
         if build is None or pong.get("build") == build:
             return
         if restart:

@@ -43,6 +43,7 @@ VOAI_TIMEOUT = 120
 VOAI_SPEED = (0.5, 1.5)
 VOAI_RETRIES = 3  # 529 means too many requests at once: back off and retry
 VOAI_BACKOFF = 2.0  # seconds before the first retry, doubling after
+VOAI_GAIN = 10 ** (6 / 20)  # VoAI lines come back quiet, so they go on the track 6 dB up
 SPEAKER_TTL = 600  # the speaker list changes with the contract, not between two lines
 
 
@@ -198,6 +199,14 @@ def voice_line(project: dict, caption_id: str) -> tuple[dict, dict, str]:
     return cap, member, text
 
 
+def voice_end(project: dict, cap: dict, duration: float) -> float:
+    """Where a caption should end to cover its voice-over (AU-12): the voice's end, but never past the start of
+    the next caption, so lines do not pile up; a caption already long enough keeps its end."""
+    start, end = float(cap["start"]), float(cap["end"])
+    later = [float(c["start"]) for c in project["captions"] if c["id"] != cap["id"] and float(c["start"]) >= start]
+    return round(max(end, min([start + duration, *later])), 3)
+
+
 def replace_ops(project: dict, caption_id: str) -> list[dict]:
     """Ops removing a caption's earlier voice-over: its clips, and generated media nothing else plays."""
     ops: list[dict] = []
@@ -266,15 +275,24 @@ class VoiceJobs:
         project = self._store.get(ctl.pid)
         if not any(c.get("id") == caption_id for c in project["captions"]):
             raise AppError("字幕在配音期間被刪除了，配音沒有加入音軌", 410)
+        volume = float(member.get("volume", 1.0))
+        if is_voai(member):
+            volume = min(4.0, volume * VOAI_GAIN)
+        cap = next(c for c in project["captions"] if c["id"] == caption_id)  # its times as they are now
+        duration = float(staged.get("duration") or 0.0)
+        end = voice_end(project, cap, duration)
         ops = [*replace_ops(project, caption_id), {"op": "media.add", "media": item},
                {"op": "audio.add", "item": {"id": new_id("a"), "mediaId": mid, "name": name, "start": cap["start"],
-                                            "volume": float(member.get("volume", 1.0)), "captionId": caption_id}}]
+                                            "volume": round(volume, 4), "captionId": caption_id}}]
+        if end > float(cap["end"]) + 1e-3:
+            ops.append({"op": "caption.update", "id": caption_id, "patch": {"end": end}})
         self._store.apply(ctl.pid, ops, origin="job", undoable=False)
-        duration = float(staged.get("duration") or 0.0)
-        over = duration - (float(cap.get("end", 0)) - float(cap.get("start", 0)))
+        over = float(cap["start"]) + duration - end
         message = f"配音完成：{duration:.1f} 秒"
+        if end > float(cap["end"]) + 0.05:
+            message += f"，字幕延長 {end - float(cap['end']):.1f} 秒"
         if over > 0.3:
-            message += f"，比字幕長 {over:.1f} 秒"
+            message += f"，比字幕長 {over:.1f} 秒（下一句字幕擋住）"
         if quota:
             message += f"，VoAI 扣 {quota} 點"
         return {"mediaIds": [mid], "message": message}

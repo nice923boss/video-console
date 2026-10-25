@@ -4,7 +4,7 @@ import { useStore } from "../lib/store.js";
 import { navigate, openProject, undo, redo, updateProject, saveSettings, revealInFolder } from "../lib/actions.js";
 import { fmtTime, fmtBytes } from "../lib/format.js";
 import { buildSequence, sequenceDuration } from "../lib/sequence.js";
-import { currentTheme } from "../lib/theme.js";
+import { useTheme } from "../lib/theme.js";
 import { keyHint, keysOf, selectKeymap } from "../lib/keymap.js";
 import { setWatch } from "../lib/watch.js";
 import { Icon } from "./icons.js";
@@ -54,7 +54,7 @@ export function Rail({ commands }) {
   useStore(selectKeymap); // re-render the key hints after a rebind
   const { running, queued } = useMemo(() => jobCounts(jobs), [jobs]);
   const tone = comfyTone(comfy);
-  const dark = currentTheme() === "dark";
+  const dark = useTheme() === "dark";
   const flipTheme = () => saveSettings({ ui: { theme: dark ? "light" : "dark" } });
 
   return html`<nav class="rail" aria-label="主要導覽">

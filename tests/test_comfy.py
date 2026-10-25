@@ -21,9 +21,10 @@ from test_server import Client, png_bytes
 from vc.app import App
 from vc.comfy.client import OOM_MESSAGE, describe_prompt_error, is_oom
 from vc.comfy.manager import execution_error, history_error, summarize_stats
-from vc.comfy.workflows import validate_template
+from vc.comfy.workflows import MODES_BY_KIND, validate_template
 from vc.notext import GUARD, with_guard
 from vc.settings import DEFAULTS
+from vc.util import AppError
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 UNET = "zImageTurboQuantized_fp8E4m3fn.safetensors"
@@ -341,10 +342,15 @@ def test_rejected_prompt_fails_with_the_node_errors_explained(client: Client, pr
 def test_missing_model_stops_the_job_before_anything_is_queued(client: Client, project: dict,
                                                                fake: FakeComfy) -> None:
     fake.object_info["UNETLoader"] = _node(unet_name=["other.safetensors"], weight_dtype=["default"])
-    done = client.wait_job(submit_image(client, project)["id"], timeout=30)
-    assert done["status"] == "failed"
-    assert f"缺少 {UNET}" in done["error"]
+    body = {"kind": "image", "pid": project["id"], "shotId": project["shots"][0]["id"],
+            "payload": {"prompt": "清晨漁港"}}
+    # Refused when sent, not after its wait in line (LG-11).
+    assert f"缺少 {UNET}" in client.json("POST", "/api/jobs", body, status=409)["error"]
     assert not [c for c in fake.calls if c[1] == "/prompt"]
+    assert not [j for j in client.json("GET", "/api/jobs")["jobs"] if j["kind"] == "image"]
+    # A model added after the node list was cached counts at once.
+    fake.object_info["UNETLoader"] = copy.deepcopy(OBJECT_INFO["UNETLoader"])
+    assert client.wait_job(client.json("POST", "/api/jobs", body)["job"]["id"], timeout=30)["status"] == "done"
 
 
 @pytest.mark.parametrize("feed", [True, False], ids=["websocket", "polling"])
@@ -370,6 +376,27 @@ def test_cancel_removes_the_prompt_and_interrupts_it(client: Client, project: di
     assert ("POST", "/queue", {"delete": [pid]}) in fake.calls
     assert ("POST", "/interrupt", {"prompt_id": pid}) in fake.calls
     assert fake.running == []
+
+
+@pytest.mark.parametrize("arrived", [True, False])
+def test_restart_mid_send_asks_comfyui_before_sending_again(app: App, client: Client, project: dict,
+                                                             fake: FakeComfy, arrived: bool) -> None:
+    app.jobs.pause(True)
+    job = submit_image(client, project)
+    pid = str(uuid.uuid4())
+    if arrived:
+        image = {"filename": "vc_00001_.png", "subfolder": "vc", "type": "output"}
+        fake.history[pid] = {"outputs": {"9": {"images": [image]}},
+                             "status": {"status_str": "success", "completed": True, "messages": []}}
+    with app.jobs._lock:  # the app stopped after recording the prompt id but before ComfyUI answered
+        app.jobs._jobs[job["id"]].update(status="running", remote={
+            "type": "comfy", "server": "fake", "promptId": pid, "outputs": ["9"], "sent": False})
+    app.jobs._recover()
+    app.jobs.pause(False)
+    done = client.wait_job(job["id"], timeout=30)
+    assert done["status"] == "done", done["error"]
+    assert len(fake.prompts) == (0 if arrived else 1)
+    assert ("程式重新啟動時這個任務還沒送到 ComfyUI，已重新送出" in done["notes"]) is not arrived
 
 
 def test_manager_run_reports_feed_progress_and_previews(app: App, fake: FakeComfy, tmp_path: Path) -> None:
@@ -499,6 +526,42 @@ def test_only_ltx_is_flagged_english_only_and_the_flag_is_normalized(app: App) -
     tpl = app.workflows.get("zimage-turbo-t2i")
     assert validate_template({**tpl, "promptLanguage": "zh"})["promptLanguage"] == ""
     assert validate_template({**tpl, "promptLanguage": "en"})["promptLanguage"] == "en"
+
+
+def test_picture_then_upscale_then_video_is_one_chain(app: App, client: Client, project: dict, fake: FakeComfy,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    fake.object_info.update(UpscaleModelLoader=_node(model_name=["4x-UltraSharp.pth"]),
+                            ImageUpscaleWithModel=_node(), ImageScaleBy=_node(upscale_method=["lanczos"]))
+    admitted: list[dict] = []
+    admit = app.runners.admit
+    monkeypatch.setattr(app.runners, "admit", lambda prepared: admitted.append(prepared) or admit(prepared))
+    pid = project["id"]
+    first = client.wait_job(submit_image(client, project, chainVideo=True, chainUpscale=True)["id"], timeout=30)
+    assert first["status"] == "done", first.get("message")
+    upscale = client.wait_job(first["result"]["followUp"], timeout=30)
+    assert upscale["kind"] == "upscale" and upscale["status"] == "done", upscale.get("message")
+    assert upscale["payload"]["image"] == first["result"]["takeIds"][0]
+    [big] = upscale["result"]["takeIds"]
+    assert app.store.get(pid)["shots"][0]["activeImage"] == big
+    # the fake server has no LTX nodes, so the video is refused at the door, after it was asked for
+    video = admitted[-1]["payload"]
+    assert (video["image"], video["route"], video["workflow"]) == (big, first["payload"]["route"], "ltxv-2b-i2v")
+    assert upscale["notes"][-1].startswith("接續生成影片失敗：ComfyUI 還不能執行「LTX-Video")
+
+    # without the upscale step the picture goes straight to the video
+    plain = client.wait_job(submit_image(client, project, chainVideo=True)["id"], timeout=30)
+    assert plain["payload"]["chainUpscale"] is False and "followUp" not in plain["result"]
+    assert admitted[-1]["payload"]["image"] == plain["result"]["takeIds"][0]
+    assert plain["notes"][-1].startswith("接續生成影片失敗")
+
+
+def test_a_template_kind_only_takes_its_own_modes(app: App) -> None:
+    tpl = app.workflows.get("upscale-ultrasharp")
+    with pytest.raises(AppError, match="生圖範本的用途只能是文字生圖、參考圖生圖，目前是放大"):
+        validate_template({**tpl, "kind": "image"})
+    with pytest.raises(AppError, match="影片範本"):
+        validate_template({**app.workflows.get("zimage-turbo-t2i"), "kind": "video"})
+    assert all(t["mode"] in MODES_BY_KIND[t["kind"]] for t in app.workflows.list())
 
 
 def test_image_prompt_goes_out_as_written(app: App, project: dict) -> None:

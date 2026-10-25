@@ -6,7 +6,7 @@ import { useStore } from "../lib/store.js";
 import { saveSettings } from "../lib/actions.js";
 import { comboOf } from "../lib/keys.js";
 import { GROUPS, PRESETS, RESERVED, allCommands, commandOf, conflictsOf, keysOf, presetKeys, readKeymap,
-  selectKeymap } from "../lib/keymap.js";
+  selectKeymap, winnerOf } from "../lib/keymap.js";
 import { Button, IconButton, Keys, Segmented, comboLabel } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 import { confirmDialog } from "../components/overlay.js";
@@ -75,6 +75,19 @@ function Recording({ rec, onCancel }) {
       title="按 Esc 取消">${rec.note || "按下新的按鍵…"}</button>`;
 }
 
+// Which command takes a shared key, page by page when the clash spans an app-wide command.
+function clashWinner(c, others) {
+  const all = [c, ...others];
+  const name = (list) => `「${commandOf(winnerOf(list.map((o) => o.id))).label}」`;
+  const pages = [...new Set(all.filter((o) => o.scope !== "global").map((o) => o.scope))];
+  const globals = all.filter((o) => o.scope === "global");
+  if (!pages.length || (pages.length === 1 && !globals.length)) return `按下時由${name(all)}作用`;
+  const parts = pages.map((s) => `在${all.find((o) => o.scope === s).group}頁由${
+    name(all.filter((o) => o.scope === s || o.scope === "global"))}作用`);
+  if (globals.length > 1) parts.push(`其他頁面由${name(globals)}作用`);
+  return parts.join("，");
+}
+
 function CommandRow({ c, km, rec, setRec }) {
   const keys = keysOf(c.id, km);
   const custom = km.overrides.has(c.id);
@@ -108,7 +121,7 @@ function CommandRow({ c, km, rec, setRec }) {
     </div>
     ${clashes.map(([k, others]) => html`<div class="km-warn" key=${k}>
       <${Icon} name="alert" size=${13} />
-      <span>${comboLabel(k)} 同時用在${others.map((o) => `「${o.label}」`).join("、")}，只有其中一個會作用</span>
+      <span>${comboLabel(k)} 同時用在${others.map((o) => `「${o.label}」`).join("、")}，${clashWinner(c, others)}</span>
     </div>`)}
   </div>`;
 }

@@ -12,6 +12,7 @@ from .media import Media, image_size
 from .util import AppError, kind_of, new_id, now
 
 if TYPE_CHECKING:
+    from .jobs import JobControl
     from .store import ProjectStore
 
 log = logging.getLogger("vc.takes")
@@ -112,24 +113,38 @@ def _stage_video(media: Media, path: Path, thumbs: Path, item_id: str, info: dic
     if probe.get("alpha"):
         info["alphaCodec"] = probe["vcodec"]  # the export decodes it with libvpx so the clip stays see-through
     thumb = thumbs / f"{item_id}.jpg"
+    strip = thumbs / f"{item_id}_strip.jpg"
     try:
         media.thumbnail(path, thumb, at=round(duration * 0.4, 2) if duration > 1 else None)
         info["thumb"] = f"{THUMB_DIR}/{thumb.name}"
-        if duration > 0:
-            strip = thumbs / f"{item_id}_strip.jpg"
-            media.strip(path, strip, duration)
-            info["strip"] = f"{THUMB_DIR}/{strip.name}"
     except AppError as exc:
-        log.warning("Video thumbnails failed for %s: %s", path.name, exc.message)
-    if info["hasAudio"]:
-        # drawn under the picture clip on the timeline; a failure only loses the drawing, not the import
-        wave = thumbs / f"{item_id}_wave.json"
+        log.warning("Video thumbnail failed for %s: %s", path.name, exc.message)
+    # The filmstrip and the waveform (drawn under the picture clip) come from one read of the file; if that
+    # run fails each is tried alone, and a failure only loses the drawing, not the import.
+    envelope = None
+    if duration > 0 and info["hasAudio"]:
         try:
-            peaks, wave_duration = media.waveform(path)
-            wave.write_text(json.dumps({"peaks": peaks, "duration": wave_duration}), encoding="utf-8")
-            info["wave"] = f"{THUMB_DIR}/{wave.name}"
+            envelope = media.strip_and_waveform(path, strip, duration)
+        except AppError as exc:
+            strip.unlink(missing_ok=True)
+            log.warning("Combined strip and waveform failed for %s, trying each alone: %s", path.name, exc.message)
+    if duration > 0 and not strip.is_file():
+        try:
+            media.strip(path, strip, duration)
+        except AppError as exc:
+            log.warning("Video filmstrip failed for %s: %s", path.name, exc.message)
+    if strip.is_file():
+        info["strip"] = f"{THUMB_DIR}/{strip.name}"
+    if info["hasAudio"] and envelope is None:
+        try:
+            envelope = media.waveform(path)
         except AppError as exc:
             log.warning("Video waveform failed for %s: %s", path.name, exc.message)
+    if envelope:
+        peaks, wave_duration, level = envelope
+        wave = thumbs / f"{item_id}_wave.json"
+        wave.write_text(json.dumps({"peaks": peaks, "duration": wave_duration, "level": level}), encoding="utf-8")
+        info["wave"] = f"{THUMB_DIR}/{wave.name}"
     return path
 
 
@@ -138,8 +153,8 @@ def _stage_audio(media: Media, path: Path, wave: Path, info: dict) -> None:
     probe = media.probe(path)
     if not probe["hasAudio"]:
         raise AppError("這個檔案裡沒有聲音軌", 415)
-    peaks, duration = media.waveform(path)
-    wave.write_text(json.dumps({"peaks": peaks, "duration": duration}), encoding="utf-8")
+    peaks, duration, level = media.waveform(path)
+    wave.write_text(json.dumps({"peaks": peaks, "duration": duration, "level": level}), encoding="utf-8")
     info.update(kind="audio", duration=round(float(probe["duration"] or duration), 3), hasAudio=True,
                 wave=f"{THUMB_DIR}/{wave.name}")
 
@@ -181,6 +196,20 @@ def new_media(staged: dict, name: str, media_id: str) -> dict:
     if staged.get("alphaCodec"):
         item["alphaCodec"] = staged["alphaCodec"]
     return item
+
+
+RELINK_KEYS = ("file", "thumb", "strip", "wave", "width", "height", "duration", "fps", "hasAudio", "alphaCodec")
+
+
+def relink_ops(project: dict, item: dict, staged: dict) -> list[dict]:
+    """Point a media item, and the takes the library made from the same file, at a newly staged file (LB-09).
+
+    Facts the new file lacks (a wave, low-res preview copies of the old one) are dropped."""
+    patch = {k: staged[k] for k in RELINK_KEYS if staged.get(k) is not None}
+    stale = [k for k in (*RELINK_KEYS, "preview2", "preview4") if k not in patch]
+    targets = [item] + [t for t in project["takes"].values()
+                        if t.get("file") == item.get("file") and (t.get("source") or {}).get("backend") == "import"]
+    return [{"op": "item.relink", "id": x["id"], "patch": patch, "unset": [k for k in stale if k in x]} for x in targets]
 
 
 # ---------------------------------------------------------------- references
@@ -248,7 +277,16 @@ def take_ops(project: dict, takes: list[dict], slot: str | None = None, extra: d
     return ops
 
 
+def linked(ctl: JobControl) -> bool:
+    """Whether a job's take moves the other tracks along: off when the timeline's link toggle was off at submit."""
+    return ctl.payload.get("link") is not False
+
+
 def commit_takes(store: ProjectStore, pid: str, takes: list[dict], slot: str | None = None,
-                 extra: dict | None = None) -> None:
-    """Record a job's takes in the project (not undoable: undo is for the user's own edits)."""
-    store.apply(pid, take_ops(store.get(pid), takes, slot, extra), origin="job", undoable=False)
+                 extra: dict | None = None, link: bool = False) -> None:
+    """Record a job's takes in the project (not undoable: undo is for the user's own edits).
+
+    With link, a shot whose length the new take changes carries the items on the other tracks (linked.py).
+    """
+    ops = take_ops(store.get(pid), takes, slot, extra)
+    store.apply(pid, [{"op": "linked", "ops": ops}] if link else ops, origin="job", undoable=False)

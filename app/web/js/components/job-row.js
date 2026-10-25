@@ -1,7 +1,7 @@
 // One job in the queue list: status, where it runs, progress, errors and the actions that fit its
 // state. The details dialog shows what was actually sent (seed, size, template or provider), which
 // is the first thing to check when a result looks wrong.
-import { html } from "../lib/h.js";
+import { html, useState, useEffect } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { revealJob } from "../lib/actions.js";
 import { cancelJob, retryJob, moveJobTop, removeJob } from "../lib/jobs-actions.js";
@@ -48,7 +48,14 @@ export function laneLabel(job, { providers = NONE, workflows = NONE, comfy = NON
 
 function timing(job) {
   if (job.status === "queued") return `排隊 ${fmtDuration(Math.max(0, nowSec() - (job.created || nowSec())))}`;
-  if (job.status === "running") return `已執行 ${fmtDuration(Math.max(0, nowSec() - (job.started || nowSec())))}`;
+  if (job.status === "running") {
+    const elapsed = Math.max(0, nowSec() - (job.started || nowSec()));
+    const p = job.progress || 0;
+    // Export progress follows the rendered time, so it runs close to linear; other kinds jump by steps.
+    const eta = job.kind === "export" && p >= 0.02 && p < 1 && elapsed >= 5
+      ? `，剩餘約 ${fmtDuration((elapsed * (1 - p)) / p)}` : "";
+    return `已執行 ${fmtDuration(elapsed)}${eta}`;
+  }
   const parts = [];
   if (job.seconds != null) parts.push(`用時 ${fmtDuration(job.seconds)}`);
   if (job.finished) parts.push(fmtRelTime(job.finished));
@@ -124,8 +131,20 @@ function JobLead({ job, project }) {
   </span>`;
 }
 
+// Re-render once a second while the job waits or runs so its elapsed time keeps moving, wherever the
+// row is shown (queue page, export list).
+function useTicker(on) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!on) return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [on]);
+}
+
 export function JobRow({ job, project = null, projectName = "" }) {
   const ctx = useStore((s) => ({ providers: s.providers, workflows: s.workflows, comfy: s.comfy }));
+  useTicker(job.status === "running" || job.status === "queued");
   const lane = laneLabel(job, ctx);
   const finished = FINISHED.has(job.status);
   const running = job.status === "running";
@@ -136,6 +155,8 @@ export function JobRow({ job, project = null, projectName = "" }) {
     job.status === "queued" && { label: "移到最前面", icon: "to-top", onClick: () => moveJobTop(job.id) },
     job.error && { label: "複製錯誤訊息", icon: "copy", onClick: () => copyText(job.error, "錯誤訊息") },
     finished && job.status !== "done" && { label: "重試", icon: "retry", onClick: () => retryJob(job.id) },
+    finished && job.status !== "done" && job.payload?.seed != null
+      && { label: "換新種子重試", icon: "retry", onClick: () => retryJob(job.id, true) },
     { divider: true },
     !finished && { label: "取消工作", icon: "x", danger: true, onClick: () => cancelJob(job.id) },
     finished && { label: "從清單移除", icon: "trash", onClick: () => removeJob(job.id) },

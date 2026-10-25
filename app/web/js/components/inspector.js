@@ -18,6 +18,7 @@ import { ContentTab, ColorSwatches } from "./insp-content.js";
 import { GenerateTab, RouteChips, kenburnsFor } from "./insp-generate.js";
 import { TakesTab } from "./insp-takes.js";
 import { EditTab } from "./insp-edit.js";
+import { StyleLibrary } from "./style-library.js";
 
 const TABS = [
   { id: "content", label: "描述", icon: "pencil" },
@@ -114,6 +115,7 @@ function ProjectPanel({ project }) {
         <${DraftText} multiline rows=${2} value=${style.negative || ""} placeholder="例如：模糊、浮水印、文字"
           onCommit=${(v) => updateProject({ style: { negative: v } }, { label: "修改負向提示詞", coalesce: "style.negative" })} />
       <//>
+      <${StyleLibrary} project=${project} />
     <//>
     <${Section} title="畫面" icon="frame">
       <${Field} label="比例"><${AspectPicker} value=${st.aspect} aspects=${aspects} onPick=${pickAspect} /><//>

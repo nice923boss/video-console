@@ -5,6 +5,7 @@ import { getState, setState, subscribe, useStore } from "./lib/store.js";
 import { connectEvents } from "./lib/events.js";
 import { navigate, undo, redo, importProjectZip } from "./lib/actions.js";
 import { readWatch } from "./lib/watch.js";
+import { watchErrors } from "./lib/crash-report.js";
 import { useKeymap, allCommands, PALETTE_GROUP } from "./lib/keymap.js";
 import { buildCommands } from "./commands.js";
 import { Rail, TopBar, StatusBar, VIEWS, VIEW_LABEL } from "./components/shell.js";
@@ -189,5 +190,6 @@ subscribe(syncLocation);
 
 const root = document.getElementById("app");
 root.textContent = "";
+watchErrors();
 render(html`<${Root} />`, root);
 connectEvents();

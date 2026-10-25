@@ -1,12 +1,14 @@
 // Modal dialogs and context menus. One host at the app root renders whatever is open; callers get
 // a promise (dialogs) or fire-and-forget (menus).
 import { html, useState, useEffect, useRef, useLayoutEffect } from "../lib/h.js";
-import { useHotkeys } from "../lib/keys.js";
+import { useDialogKeys, isConfirmKey } from "../lib/keymap.js";
 import { Icon } from "./icons.js";
+import { Toggle } from "./ui.js";
 
 let modals = []; // [{id, render, close}]
-let menu = null; // {id, x, y, flipY, minWidth, items}
+let menu = null; // {id, x, y, flipY, minWidth, items, anchor}
 let seq = 0;
+let reopenGuard = null; // {el, t}: pressing a menu's own button closes it; the click that follows must not reopen it
 const subs = new Set();
 
 function emit() {
@@ -36,7 +38,7 @@ export function openModal(render) {
 export function Modal({ title, onClose, width = null, footer = null, children, class: cls = "", wide = false, backdropClose = true }) {
   const ref = useRef(null);
   const downOnBack = useRef(false);
-  useHotkeys({ escape: { fn: () => onClose(), allowInInput: true } }, { modal: true });
+  useDialogKeys({ "dialog.close": { fn: () => onClose(), allowInInput: true } }, { modal: true });
 
   useEffect(() => {
     const prev = document.activeElement;
@@ -89,7 +91,15 @@ export function Modal({ title, onClose, width = null, footer = null, children, c
   </div>`;
 }
 
-export function confirmDialog({ title, message = "", confirmLabel = "確定", cancelLabel = "取消", danger = false }) {
+function ConfirmCheck({ label, onChange }) {
+  const [on, setOn] = useState(false);
+  return html`<${Toggle} class="modal-check" checked=${on} label=${label} onChange=${(v) => { setOn(v); onChange(v); }} />`;
+}
+
+// Resolves to true or false; with check (a label), an extra switch is shown and a confirmed dialog resolves
+// to { checked } instead of true.
+export function confirmDialog({ title, message = "", confirmLabel = "確定", cancelLabel = "取消", danger = false, check = "" }) {
+  let checked = false;
   return openModal((close) => html`<${Modal} title=${title} width=${440} onClose=${() => close(false)}
       footer=${html`
         <button type="button" class="btn" onClick=${() => close(false)}>${cancelLabel}</button>
@@ -97,7 +107,8 @@ export function confirmDialog({ title, message = "", confirmLabel = "確定", ca
           ${confirmLabel}
         </button>`}>
       ${message && html`<p class="modal-text">${message}</p>`}
-    </${Modal}>`).then((v) => v === true);
+      ${check && html`<${ConfirmCheck} label=${check} onChange=${(v) => { checked = v; }} />`}
+    </${Modal}>`).then((v) => (v === true && check ? { checked } : v === true));
 }
 
 function PromptBody({ opts, close }) {
@@ -114,8 +125,8 @@ function PromptBody({ opts, close }) {
     close(v);
   };
   const onKeyDown = (e) => {
-    if (e.isComposing || e.keyCode === 229 || e.key !== "Enter") return;
-    if (multiline && !(e.ctrlKey || e.metaKey)) return;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (!isConfirmKey(e) && (multiline || e.key !== "Enter")) return;
     e.preventDefault();
     submit();
   };
@@ -152,6 +163,7 @@ export function openMenu(target, items) {
   let y = 8;
   let flipY = null;
   let minWidth = 0;
+  let anchor = null;
   if (target && typeof target.preventDefault === "function") {
     if (target.type === "contextmenu") {
       target.preventDefault();
@@ -163,6 +175,10 @@ export function openMenu(target, items) {
     }
   }
   if (target && typeof target.getBoundingClientRect === "function") {
+    const guard = reopenGuard;
+    reopenGuard = null;
+    if (guard && guard.el === target && performance.now() - guard.t < 800) return;
+    anchor = target;
     const r = target.getBoundingClientRect();
     x = r.left;
     y = r.bottom + 4;
@@ -172,7 +188,7 @@ export function openMenu(target, items) {
     x = target.x;
     y = target.y;
   }
-  menu = { id: (seq += 1), x, y, flipY, minWidth, items: items.filter(Boolean), prev: document.activeElement };
+  menu = { id: (seq += 1), x, y, flipY, minWidth, items: items.filter(Boolean), prev: document.activeElement, anchor };
   emit();
 }
 
@@ -208,7 +224,9 @@ function MenuView({ m }) {
 
   useEffect(() => {
     const outside = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) closeMenu();
+      if (!ref.current || ref.current.contains(e.target)) return;
+      if (m.anchor && m.anchor.contains(e.target)) reopenGuard = { el: m.anchor, t: performance.now() };
+      closeMenu();
     };
     const onScroll = (e) => {
       if (ref.current && !ref.current.contains(e.target)) closeMenu();
@@ -239,8 +257,8 @@ function MenuView({ m }) {
     }
     setActive(i);
   };
-  useHotkeys({
-    escape: { fn: () => closeMenu(), allowInInput: true },
+  useDialogKeys({
+    "dialog.close": { fn: () => closeMenu(), allowInInput: true },
     arrowdown: { fn: () => moveBy(1), allowInInput: true },
     arrowup: { fn: () => moveBy(-1), allowInInput: true },
     enter: { fn: () => (active >= 0 ? run(m.items[active]) : false), allowInInput: true },

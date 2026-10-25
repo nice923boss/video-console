@@ -26,11 +26,12 @@ from typing import Callable
 from .jobs import JobControl
 from .media import NO_WINDOW, Media
 from .paths import ROOT_DIR
-from .sequence import build_sequence
+from .sequence import VOICE_TRACK, build_sequence
 from .settings import SettingsStore
 from .store import ProjectStore
 from .takes import find_shot, item_path, shot_label
 from .util import AppError, new_id
+from .voice import replace_ops
 
 log = logging.getLogger("vc.stt")
 
@@ -164,9 +165,13 @@ class SttJobs:
         ops = caption_ops(cues, clip)
         if not ops:
             return {"message": "片段裡沒有辨識到語音，沒有新增字幕"}
-        # undoable: one Ctrl+Z takes back the whole batch if the result is not wanted
-        self._store.apply(ctl.pid, ops, origin="job", undoable=True, label="語音轉字幕")
-        return {"message": f"已加入 {len(ops)} 句字幕"}
+        # a second run replaces what the last run of this shot added, instead of stacking a copy
+        old = [{"op": "caption.delete", "id": c["id"]} for c in self._store.get(ctl.pid)["captions"]
+               if c.get("sttShot") == ctl.shot_id]
+        # undoable: one Ctrl+Z takes back the whole batch (and brings the replaced captions back)
+        self._store.apply(ctl.pid, old + ops, origin="job", undoable=True, label="語音轉字幕")
+        replaced = f"，取代上次的 {len(old)} 句" if old else ""
+        return {"message": f"已加入 {len(ops)} 句字幕{replaced}"}
 
 
 def clip_of(project: dict, shot_id: str | None) -> dict:
@@ -182,8 +187,8 @@ def clip_of(project: dict, shot_id: str | None) -> dict:
     return clip
 
 
-def parse_srt(text: str) -> list[tuple[float, float, str]]:
-    """(start, end, text) per subtitle; multi-line text is joined with spaces."""
+def parse_srt(text: str, sep: str = " ") -> list[tuple[float, float, str]]:
+    """(start, end, text) per subtitle; multi-line text is joined with sep."""
     cues = []
     for block in re.split(r"\r?\n\s*\r?\n", text.strip()):
         lines = block.splitlines()
@@ -194,7 +199,7 @@ def parse_srt(text: str) -> list[tuple[float, float, str]]:
             g = m.groups()
             start = int(g[0]) * 3600 + int(g[1]) * 60 + int(g[2]) + float("0." + g[3])
             end = int(g[4]) * 3600 + int(g[5]) * 60 + int(g[6]) + float("0." + g[7])
-            body = " ".join(s.strip() for s in lines[i + 1:] if s.strip())
+            body = sep.join(s.strip() for s in lines[i + 1:] if s.strip())
             if body and end > start:
                 cues.append((start, end, body))
             break
@@ -213,7 +218,7 @@ def caption_ops(cues: list[tuple[float, float, str]], clip: dict) -> list[dict]:
         if b - a < MIN_CUE:
             continue
         ops.append({"op": "caption.add", "item": {"id": new_id("c"), "start": a, "end": b, "text": text[:500],
-                                                   "position": "bottom", "shot": None}})
+                                                   "position": "bottom", "shot": None, "sttShot": clip["shot"]["id"]}})
     return ops
 
 
@@ -230,15 +235,33 @@ def srt_text(raw: bytes) -> str:
         return raw.decode("cp950", errors="replace")
 
 
-def srt_ops(project: dict, text: str, replace: bool) -> list[dict]:
-    """caption.add ops putting an .srt's subtitles at their own times on the sequence; replace drops the old ones first."""
-    ops = [{"op": "caption.delete", "id": c["id"]} for c in project["captions"]] if replace else []
-    for start, end, body in parse_srt(text):
-        body = _SRT_TAG.sub("", body).strip()
-        if body:
-            ops.append({"op": "caption.add", "item": {"id": new_id("c"), "start": round(start, 3),
-                                                       "end": round(end, 3), "text": body[:500],
-                                                       "position": "bottom", "shot": None}})
+def srt_ops(project: dict, text: str, replace: bool, offset: float = 0.0, voices: str = "delete") -> list[dict]:
+    """caption.add ops putting an .srt's subtitles on the sequence, offset seconds after their own times.
+
+    replace drops the old captions first; voices says what happens to voice-overs bound to them:
+    "delete" removes them, "keep" leaves them on the voice rows as ordinary clips, "regen" removes them and
+    gives each new caption the speaker of the old caption it overlaps most, so its voice-over can be redone.
+    """
+    old = project["captions"] if replace else []
+    ops: list[dict] = []
+    for cap in old:
+        if voices == "keep":
+            ops += [{"op": "audio.update", "id": a["id"], "patch": {"captionId": None, "track": VOICE_TRACK}}
+                    for a in project["audio"] if a.get("captionId") == cap["id"]]
+        else:
+            ops += [op for op in replace_ops(project, cap["id"]) if op not in ops]
+    ops += [{"op": "caption.delete", "id": c["id"]} for c in old]
+    speakers = [c for c in old if c.get("speaker")] if voices == "regen" else []
+    for start, end, body in parse_srt(text, "\n"):
+        body = "\n".join(line.strip() for line in _SRT_TAG.sub("", body).splitlines() if line.strip())
+        if not body:
+            continue
+        a, b = round(start + offset, 3), round(end + offset, 3)
+        item = {"id": new_id("c"), "start": a, "end": b, "text": body[:500], "position": "bottom", "shot": None}
+        overlap = max(speakers, key=lambda c: min(b, c["end"]) - max(a, c["start"]), default=None)
+        if overlap is not None and min(b, overlap["end"]) > max(a, overlap["start"]):
+            item["speaker"] = overlap["speaker"]
+        ops.append({"op": "caption.add", "item": item})
     return ops
 
 

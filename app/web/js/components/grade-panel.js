@@ -2,7 +2,8 @@
 // Final Cut Pro's colour wheels (global, shadows, midtones, highlights, each with a hue puck and
 // saturation / brightness bars), temperature, tint, hue and mix sliders, and the same values as numbers.
 // While a control is dragged the grade lives in the store's gradeDraft, so the preview follows the pointer;
-// letting go saves it as one undo step.
+// letting go saves it as one undo step. GradeEditor, the colour controls alone, also grades a single shot
+// from its inspector (GR-01).
 import { html, useEffect } from "../lib/h.js";
 import { getState, setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
@@ -13,6 +14,7 @@ import { hasKeys, valueAt } from "../lib/keyframes.js";
 import { adjustName } from "./tl-adjust.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe } from "./tl-commands.js";
+import { clipKeysHint, keyHint } from "../lib/keymap.js";
 import { Button, IconButton, Field, DraftText, NumberInput, Slider, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
 
@@ -160,26 +162,21 @@ function RangeNumbers({ name, wheel, onCommit }) {
   </details>`;
 }
 
-export function GradePanel({ project, item }) {
+// Wheels, sliders and numbers for the grade saved on `id` (an adjustment layer or a shot). Dragging puts the
+// grade in the store's gradeDraft under that id; onSave(next, label) stores it and returns a promise.
+export function GradeEditor({ id, saved, onSave }) {
   const draft = useStore((s) => s.gradeDraft);
-  const start = Number(item.start || 0);
-  const len = Number(item.length || MIN_LEN);
-  const keyed = hasKeys(item, "grade");
-  const local = useClipTime(start, len, (item.keyframes || []).length > 0);
-  // With grade keyframes the panel shows, and edits, the key at the playhead.
-  const saved = fullGrade(keyed ? valueAt(item, "grade", local) : item.grade);
-  const grade = draft && draft.id === item.id ? draft.grade : saved;
+  const compare = useStore((s) => s.gradeCompare);
+  const grade = draft && draft.id === id ? draft.grade : saved;
   const untouched = JSON.stringify(grade) === JSON.stringify(defaultGrade());
-  const trackOff = !!(project.tracks || {}).adjustHidden;
-  const update = (patch, label) => ops([{ op: "adjust.update", id: item.id, patch }], { label });
 
   // A panel closed mid-drag must not leave its draft on the preview.
   useEffect(() => () => {
     const d = getState().gradeDraft;
-    if (d && d.id === item.id) setState({ gradeDraft: null });
-  }, [item.id]);
+    if (d && d.id === id) setState({ gradeDraft: null });
+  }, [id]);
 
-  const preview = (next) => setState({ gradeDraft: { id: item.id, grade: next } });
+  const preview = (next) => setState({ gradeDraft: { id, grade: next } });
   const cancel = () => setState({ gradeDraft: null });
   // The draft stays on until the save comes back, so the preview does not blink back to the old grade.
   const commit = (next, label = "調色") => {
@@ -187,9 +184,9 @@ export function GradePanel({ project, item }) {
       cancel();
       return;
     }
-    const mine = { id: item.id, grade: next };
+    const mine = { id, grade: next };
     setState({ gradeDraft: mine });
-    update(keyedPatch(item, clamp(clock.time - start, 0, len), { grade: next }), label).then(() => {
+    onSave(next, label).then(() => {
       if (getState().gradeDraft === mine) setState({ gradeDraft: null });
     });
   };
@@ -198,6 +195,42 @@ export function GradePanel({ project, item }) {
     onCommit: (wheel) => commit({ ...grade, [w]: wheel }),
     onCancel: cancel,
   });
+
+  return html`<${Field} label="色輪" hint="拖曳圓盤上的圓點調整顏色，左側直條是飽和度，右側直條是亮度；雙擊歸零"
+      after=${html`<${IconButton} icon="palette" size=${14} active=${compare}
+          title=${compare ? "關閉調色前後對照" : "調色前後對照：預覽左半顯示調色前、右半調色後"}
+          onClick=${() => setState({ gradeCompare: !compare })} />
+        <${Button} size="sm" kind="ghost" icon="undo" disabled=${untouched}
+          onClick=${() => commit(defaultGrade(), "重設調色")}>全部重設<//>`}>
+      <div class="grade-wheels">
+        ${WHEELS.map((w) => html`<${ColorWheel} key=${w} name=${WHEEL_NAMES[w]} wheel=${grade[w]} ...${wheelOps(w)} />`)}
+      </div>
+    <//>
+    ${REST.map((r) => html`<${Field} key=${r.k} label=${r.label} hint=${r.hint}
+      after=${grade[r.k] !== defaultGrade()[r.k] && html`<${IconButton} icon="undo" size=${13} title=${`重設${r.label}`}
+        onClick=${() => commit({ ...grade, [r.k]: defaultGrade()[r.k] })} />`}>
+      <${Slider} value=${grade[r.k]} min=${r.min} max=${r.max} step=${r.step} format=${r.format}
+        onChange=${(v) => preview({ ...grade, [r.k]: round(v, r.digits) })}
+        onCommit=${(v) => commit({ ...grade, [r.k]: round(v, r.digits) })} />
+    <//>`)}
+    <${Field} label="數值" hint="直接輸入色輪的數值；R/G/B 與亮度範圍 -1 到 1，飽和度 0 到 2（1 為原色）">
+      <div class="grade-secs">
+        ${WHEELS.map((w) => html`<${RangeNumbers} key=${w} name=${WHEEL_NAMES[w]} wheel=${grade[w]}
+          onCommit=${(wheel) => commit({ ...grade, [w]: wheel })} />`)}
+      </div>
+    <//>`;
+}
+
+export function GradePanel({ project, item }) {
+  const start = Number(item.start || 0);
+  const len = Number(item.length || MIN_LEN);
+  const keyed = hasKeys(item, "grade");
+  const local = useClipTime(start, len, (item.keyframes || []).length > 0);
+  // With grade keyframes the panel shows, and edits, the key at the playhead.
+  const saved = fullGrade(keyed ? valueAt(item, "grade", local) : item.grade);
+  const trackOff = !!(project.tracks || {}).adjustHidden;
+  const update = (patch, label) => ops([{ op: "adjust.update", id: item.id, patch }], { label });
+  const save = (next, label) => update(keyedPatch(item, clamp(clock.time - start, 0, len), { grade: next }), label);
   const remove = () => {
     closePanel();
     ops([{ op: "adjust.delete", id: item.id }], { label: "刪除調整圖層" });
@@ -212,12 +245,16 @@ export function GradePanel({ project, item }) {
           ? html`<i></i><span class="warn-text">已停用</span>` : ""}</span>
       </div>
       <div class="insp-nav">
-        <${IconButton} icon="x" size=${16} title="回到鏡頭屬性（Esc）" onClick=${closePanel} />
+        <${IconButton} icon="x" size=${16} title=${`回到鏡頭屬性${keyHint("edit.deselect")}`} onClick=${closePanel} />
       </div>
     </header>
     <div class="insp-scroll">
       <div class="note note-info"><${Icon} name="palette" size=${15} />
-        <span class="note-text">調整圖層本身沒有畫面。這段時間內的主畫面與上方畫面軌都會套用這組調色，字幕不受影響。</span></div>
+        <span class="note-text">調整圖層本身沒有畫面。這段時間內的主畫面與上方畫面軌都會套用這組調色。</span></div>
+      <${Toggle} checked=${!!project.settings.gradeCaptions} label="字幕也套用調色"
+        hint="整個專案的設定，所有調整圖層都適用。關閉時字幕維持原色，例如整片褪色時字幕仍清楚"
+        onChange=${(gradeCaptions) => ops([{ op: "project.update", patch: { settings: { gradeCaptions } } }],
+          { label: gradeCaptions ? "字幕套用調色" : "字幕不套用調色" })} />
       ${trackOff && html`<div class="note note-warn"><${Icon} name="eye-off" size=${15} />
         <span class="note-text">調整圖層軌已隱藏，預覽與匯出都不會套用。按時間軸「調整圖層」軌名稱旁的眼睛可以重新顯示。</span></div>`}
       <${Field} label="名稱">
@@ -234,26 +271,7 @@ export function GradePanel({ project, item }) {
       </div>
       ${keyed && html`<div class="note note-info"><${Icon} name="diamond" size=${15} />
         <span class="note-text">調色有關鍵幀：這裡顯示並改寫播放頭位置的調色。預覽與輸出在關鍵幀之間分段漸變。</span></div>`}
-      <${Field} label="色輪" hint="拖曳圓盤上的圓點調整顏色，左側直條是飽和度，右側直條是亮度；雙擊歸零"
-        after=${html`<${Button} size="sm" kind="ghost" icon="undo" disabled=${untouched}
-          onClick=${() => commit(defaultGrade(), "重設調色")}>全部重設<//>`}>
-        <div class="grade-wheels">
-          ${WHEELS.map((w) => html`<${ColorWheel} key=${w} name=${WHEEL_NAMES[w]} wheel=${grade[w]} ...${wheelOps(w)} />`)}
-        </div>
-      <//>
-      ${REST.map((r) => html`<${Field} key=${r.k} label=${r.label} hint=${r.hint}
-        after=${grade[r.k] !== defaultGrade()[r.k] && html`<${IconButton} icon="undo" size=${13} title=${`重設${r.label}`}
-          onClick=${() => commit({ ...grade, [r.k]: defaultGrade()[r.k] })} />`}>
-        <${Slider} value=${grade[r.k]} min=${r.min} max=${r.max} step=${r.step} format=${r.format}
-          onChange=${(v) => preview({ ...grade, [r.k]: round(v, r.digits) })}
-          onCommit=${(v) => commit({ ...grade, [r.k]: round(v, r.digits) })} />
-      <//>`)}
-      <${Field} label="數值" hint="直接輸入色輪的數值；R/G/B 與亮度範圍 -1 到 1，飽和度 0 到 2（1 為原色）">
-        <div class="grade-secs">
-          ${WHEELS.map((w) => html`<${RangeNumbers} key=${w} name=${WHEEL_NAMES[w]} wheel=${grade[w]}
-            onCommit=${(wheel) => commit({ ...grade, [w]: wheel })} />`)}
-        </div>
-      <//>
+      <${GradeEditor} id=${item.id} saved=${saved} onSave=${save} />
       <${Toggle} checked=${!!item.hidden} label="停用調整圖層" hint="保留在時間軸上，但預覽與匯出都不套用調色"
         onChange=${(hidden) => update({ hidden }, hidden ? "停用調整圖層" : "啟用調整圖層")} />
       <${KeyList} item=${item} start=${start} length=${len} local=${local} update=${update}
@@ -265,7 +283,7 @@ export function GradePanel({ project, item }) {
       </div>
     </div>
     <div class="insp-foot">
-      <span class="insp-hint dim">Delete 刪除，Esc 回到鏡頭屬性</span>
+      <span class="insp-hint dim">${clipKeysHint("刪除")}</span>
       <span class="grow"></span>
       <${Button} kind="danger" icon="trash" onClick=${remove}>刪除調整圖層<//>
     </div>

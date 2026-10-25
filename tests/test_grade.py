@@ -1,13 +1,17 @@
 """Adjustment layers and their colour grade: validation, the pixel model, edits and the export graph."""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from vc.export import active_adjustments, export_options, plan_export, prepare_clips
+from test_timeline_keys import FFMPEG, VID, with_video
+from vc.export import active_adjustments, export_options, plan_export, prepare_clips, render, shot_grades
 from vc.grade import build_cube, clean_grade, default_grade, grader, is_neutral
-from vc.ops import apply_ops, blank_shot
+from vc.media import Media
+from vc.opfields import blank_shot
+from vc.ops import apply_ops
 from vc.util import AppError
 
 
@@ -120,3 +124,80 @@ def test_export_graph_grades_each_adjustment_span(tmp_path: Path) -> None:
     assert graph.index("[adj1]") < graph.index("ass=filename=")
     p["tracks"]["adjustHidden"] = True
     assert active_adjustments(p, 8.0) == []
+
+
+def test_graded_captions_are_burnt_in_before_the_grade(tmp_path: Path) -> None:
+    p = make_project()
+    p["settings"]["gradeCaptions"] = True
+    p["adjustments"] = [{"id": "adj_a0000000", "start": 1.0, "length": 2.0, "hidden": False, "grade": graded(hue=40)}]
+    clips = prepare_clips(p, tmp_path)
+    opts = export_options(p, {}, {"burnCaptions": True})
+    graph = plan_export(p, tmp_path, clips, opts, "media/cache/x.ass", [(1.0, 3.0, "media/cache/x-adj0.cube")])["graph"]
+    assert graph.count("ass=filename=") == 1
+    assert graph.index("ass=filename=media/cache/x.ass[caps]") < graph.index("[caps]lut3d=")
+    # Without captions there is nothing to grade, so the flag changes nothing.
+    plain = plan_export(p, tmp_path, clips, opts, None, [(1.0, 3.0, "media/cache/x-adj0.cube")])["graph"]
+    assert "ass=" not in plain and "[caps]" not in plain
+
+
+def test_shot_grade_is_checked_and_undone() -> None:
+    p = make_project()
+    back = apply_ops(p, [{"op": "shot.update", "id": "s_aaaaaaaa", "patch": {"grade": {"temp": 7000}}}], {})
+    shot = p["shots"][0]
+    assert shot["grade"]["temp"] == 7000 and shot["grade"]["global"]["sat"] == 1.0
+    with pytest.raises(AppError):
+        apply_ops(p, [{"op": "shot.update", "id": "s_aaaaaaaa", "patch": {"grade": {"temp": "warm"}}}], {})
+    apply_ops(p, back, {})
+    assert "grade" not in shot
+
+
+def graded_shots(tmp_path: Path) -> dict:
+    """Four shots: a graded video, a graded but disabled video, a video with a neutral grade, a graded slate."""
+    p = make_project()
+    p["shots"].append(blank_shot("s_cccccccc", {}))
+    with_video(p)
+    p["shots"].append(blank_shot("s_dddddddd", {}))
+    warm = graded(temp=9000)
+    p["shots"][0]["grade"] = warm
+    p["shots"][1].update(grade=warm, disabled=True)
+    p["shots"][2]["grade"] = default_grade()
+    p["shots"][3]["grade"] = warm
+    (tmp_path / "media" / "takes").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "media" / "takes" / f"{VID}.mp4").write_bytes(b"x")
+    return p
+
+
+def test_shot_grade_goes_on_its_clip_before_the_fit(tmp_path: Path) -> None:
+    p = graded_shots(tmp_path)
+    clips = prepare_clips(p, tmp_path)
+    assert [(i, g["temp"]) for i, g in shot_grades(clips)] == [(0, 9000)]  # disabled, neutral and slate drop out
+    opts = export_options(p, {}, {})
+    graph = plan_export(p, tmp_path, clips, opts, None, [], {0: "media/cache/x-shot0.cube"})["graph"]
+    # Graded before scale and pad, so the letterbox bars stay black.
+    assert "[0:v]setpts=PTS-STARTPTS,setparams=colorspace=bt709,lut3d=file=media/cache/x-shot0.cube:interp=tetrahedral,scale=" in graph
+    assert graph.count("lut3d=") == 1
+    assert "lut3d" not in plan_export(p, tmp_path, clips, opts, None, [])["graph"]
+
+
+@pytest.mark.skipif(not FFMPEG, reason="ffmpeg not installed")
+def test_render_grades_only_the_graded_shot(tmp_path: Path) -> None:
+    media = Media(FFMPEG)
+    takes = tmp_path / "media" / "takes"
+    takes.mkdir(parents=True)
+    media.run(["-f", "lavfi", "-i", "color=c=gray:size=240x180:rate=24:duration=6", "-c:v", "libx264",
+               "-pix_fmt", "yuv420p", str(takes / f"{VID}.mp4")])
+    p = with_video(make_project())
+    p["takes"][VID]["hasAudio"] = False
+    p["shots"][0]["grade"] = graded(temp=10000, shadows_bright=0.4)
+    result = render(media, p, tmp_path, export_options(p, {}, {"quality": "draft"}), "libx264")
+    out = tmp_path / result["file"]
+    assert not list((tmp_path / "media" / "cache").glob("*.cube"))  # the LUT files are cleaned up
+
+    def pixel(t: float, x: int) -> tuple[int, int, int]:
+        raw = subprocess.run([FFMPEG, "-v", "error", "-ss", str(t), "-i", str(out), "-frames:v", "1", "-f", "rawvideo",
+                              "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+        return tuple(raw[(90 * 320 + x) * 3:(90 * 320 + x) * 3 + 3])
+
+    warm, plain = pixel(1, 160), pixel(7, 160)
+    assert warm[0] - warm[2] > 40 and abs(plain[0] - plain[2]) < 10, (warm, plain)
+    assert max(pixel(1, 5)) < 25  # the pillarbox bar beside the 4:3 clip is not lifted by the grade

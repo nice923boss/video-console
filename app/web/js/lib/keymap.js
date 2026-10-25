@@ -2,8 +2,9 @@
 // settings.ui.keymap = {preset, overrides: [[id, [combo, …]], …]} (a list, so a removed key stays removed
 // through the server's dict merge). Views bind handlers by command id with useKeymap, so a rebind
 // reaches them without code changes.
+import { useEffect } from "./h.js";
 import { getState, useStore } from "./store.js";
-import { useHotkeys } from "./keys.js";
+import { comboOf, useHotkeys } from "./keys.js";
 import { comboLabel } from "../components/ui.js";
 
 export const PRESETS = [
@@ -12,8 +13,8 @@ export const PRESETS = [
 ];
 
 export const PALETTE_GROUP = "指令面板";
-export const GROUPS = ["全部頁面", PALETTE_GROUP, "剪輯", "分鏡", "素材庫"];
-const SCOPE_GROUP = { global: "全部頁面", edit: "剪輯", board: "分鏡", library: "素材庫" };
+export const GROUPS = ["全部頁面", PALETTE_GROUP, "剪輯", "分鏡", "素材庫", "對話框"];
+const SCOPE_GROUP = { global: "全部頁面", edit: "剪輯", board: "分鏡", library: "素材庫", dialog: "對話框" };
 
 // Chromium handles these before the page sees them, or ignores preventDefault on them.
 export const RESERVED = new Set(["mod+t", "mod+w", "mod+n", "mod+shift+t", "mod+shift+n", "mod+shift+w",
@@ -55,6 +56,8 @@ const BUILT_IN = [
   cmd("edit", "edit.markerPrev", "跳到上一個標記", ["f7"], []),
   cmd("edit", "edit.volumeUp", "選取片段音量加 1dB", ["mod+."], []),
   cmd("edit", "edit.volumeDown", "選取片段音量減 1dB", ["mod+,"], []),
+  cmd("edit", "edit.meters", "顯示或隱藏音量表", ["mod+shift+8"]),
+  cmd("edit", "edit.bin", "顯示或隱藏素材清單", ["mod+shift+1"]),
   cmd("edit", "edit.markIn", "設定區域入點", ["i"]),
   cmd("edit", "edit.markOut", "設定區域出點", ["o"]),
   cmd("edit", "edit.rangeFromClip", "以選取片段設定區域", ["shift+x"], ["x"]),
@@ -78,9 +81,10 @@ const BUILT_IN = [
   cmd("edit", "edit.trackShorter", "降低軌道", ["_"], []),
   cmd("edit", "edit.snap", "開關磁吸對齊", ["n"]),
   cmd("edit", "edit.link", "開關連動上下軌", ["shift+n"]),
-  cmd("edit", "edit.copy", "複製選取的音訊片段", ["mod+c"]),
-  cmd("edit", "edit.paste", "在播放頭貼上（音訊片段放到新的音軌）", ["mod+v"]),
+  cmd("edit", "edit.copy", "複製選取的片段", ["mod+c"]),
+  cmd("edit", "edit.paste", "在播放頭貼上（鏡頭插在播放頭所在鏡頭之後）", ["mod+v"]),
   cmd("edit", "edit.delete", "刪除選取的片段", ["delete", "backspace", "f2"], ["delete", "backspace"]),
+  cmd("edit", "edit.rippleDelete", "漣漪刪除（後面的片段往前補位）", ["shift+delete", "shift+backspace"]),
   cmd("edit", "edit.deselect", "取消選取片段", ["escape"]),
 
   cmd("board", "board.add", "新增鏡頭", ["n"]),
@@ -109,6 +113,14 @@ const BUILT_IN = [
   cmd("library", "library.first", "選第一個", ["home"]),
   cmd("library", "library.last", "選最後一個", ["end"]),
   cmd("library", "library.deselect", "取消選取", ["escape"]),
+  cmd("library", "library.selectAll", "全選", ["mod+a"]),
+
+  // Inside dialogs (UI-05); bound with useDialogKeys.
+  cmd("dialog", "dialog.close", "關閉對話框或選單", ["escape"]),
+  cmd("dialog", "dialog.confirm", "送出或套用（文字輸入框、AI 潤飾結果、劇本匯入；單行輸入框也可按 Enter）", ["mod+enter"]),
+  cmd("dialog", "dialog.prev", "預覽視窗：上一張", ["arrowleft"]),
+  cmd("dialog", "dialog.next", "預覽視窗：下一張", ["arrowright"]),
+  cmd("dialog", "dialog.info", "預覽視窗：顯示或隱藏資訊", ["i"]),
 ];
 
 const registry = new Map(BUILT_IN.map((c) => [c.id, c]));
@@ -149,13 +161,30 @@ export const keyLabel = (id) => {
   return k ? comboLabel(k) : "";
 };
 
+// "按 Ctrl+Z " for sentences about undoing, following the undo key in use, or the toolbar button without one.
+export const undoKeyText = () => {
+  const k = keyLabel("app.undo");
+  return k ? `按 ${k} ` : "按上方的復原鈕";
+};
+
+// Foot of a clip's properties, like "Delete 刪除，Esc 回到鏡頭屬性", read from the keys in use.
+export const clipKeysHint = (verb) => [[keyLabel("edit.delete"), verb], [keyLabel("edit.deselect"), "回到鏡頭屬性"]]
+  .filter(([k]) => k).map(([k, v]) => `${k} ${v}`).join("，");
+
+// "Ctrl+Enter 儲存" for a dialog hint, following the confirm key in use, or nothing without one.
+export const confirmKeyText = (verb) => {
+  const k = keyLabel("dialog.confirm");
+  return k ? `${k} ${verb}` : "";
+};
+
 // Tooltip suffix like "（Ctrl+B）", or nothing when the command has no key.
 export const keyHint = (id) => {
   const label = keyLabel(id);
   return label ? `（${label}）` : "";
 };
 
-const overlaps = (a, b) => a === b || a === "global" || b === "global";
+// An open dialog hides the page keys, so dialog keys only meet each other.
+const overlaps = (a, b) => a === b || (a !== "dialog" && b !== "dialog" && (a === "global" || b === "global"));
 
 // Other commands on the same key that can be active at the same time.
 export function conflictsOf(id, combo, km) {
@@ -163,13 +192,69 @@ export function conflictsOf(id, combo, km) {
   return allCommands().filter((o) => o.id !== id && overlaps(scope, o.scope) && keysOf(o.id, km).includes(combo));
 }
 
+// When several commands on screen share a key, a page's own command beats an app-wide one, and
+// otherwise the one listed first in the shortcut settings wins.
+let order = null; // id -> position in the registry, rebuilt when palette commands are added
+function rank(id) {
+  if (!order || order.size !== registry.size) order = new Map([...registry.keys()].map((k, i) => [k, i]));
+  const c = registry.get(id); // a handler for an id nobody registered never has a key anyway
+  return c ? (c.scope === "global" ? registry.size : 0) + order.get(id) : 2 * registry.size;
+}
+export const winnerOf = (ids) => ids.reduce((a, b) => (rank(b) < rank(a) ? b : a));
+
+const mounted = new Map(); // command id -> how many mounted useKeymap callers bind it
+function takerOf(combo, km) {
+  const ids = [...mounted].filter(([id, n]) => n > 0 && keysOf(id, km).includes(combo)).map(([id]) => id);
+  return ids.length ? winnerOf(ids) : null;
+}
+
 // handlers: {commandId: fn | {fn, allowInInput}}. Reading the keymap from the store re-renders the
-// caller after a rebind, which hands useHotkeys the new map.
+// caller after a rebind, which hands useHotkeys the new map. Each caller is its own hotkey layer, so a
+// key shared with a command in another layer passes through unless this command is the one that wins.
 export function useKeymap(handlers, opts) {
   const km = readKeymap(useStore(selectKeymap));
+  const ids = Object.keys(handlers).sort((a, b) => rank(a) - rank(b));
+  const active = !opts || opts.active !== false;
+  useEffect(() => {
+    if (!active) return undefined;
+    for (const id of ids) mounted.set(id, (mounted.get(id) || 0) + 1);
+    return () => { for (const id of ids) mounted.set(id, mounted.get(id) - 1); };
+  }, [active, ids.join()]);
   const map = {};
-  for (const [id, handler] of Object.entries(handlers)) {
-    for (const combo of keysOf(id, km)) if (!map[combo]) map[combo] = handler;
+  for (const id of ids) {
+    const handler = handlers[id];
+    const fn = typeof handler === "function" ? handler : handler.fn;
+    for (const combo of keysOf(id, km)) {
+      if (map[combo]) continue;
+      const guarded = (e) => (takerOf(combo, km) === id ? fn(e) : false);
+      map[combo] = typeof handler === "function" ? guarded : { ...handler, fn: guarded };
+    }
   }
   useHotkeys(map, opts);
 }
+
+// A bare printable key types into a text box, so as a dialog key it never fires while typing.
+const printable = (combo) => combo === "space" || /^(shift\+)?.$/.test(combo);
+
+// Keys inside a dialog (UI-05). handlers: {commandId | combo: fn | {fn, allowInInput}}; a command id
+// follows the keymap, a plain combo (list navigation) is fixed and wins a shared key. Among commands a
+// shared key goes to the one listed first in the shortcut settings.
+export function useDialogKeys(handlers, opts) {
+  const km = readKeymap(useStore(selectKeymap));
+  const map = {};
+  for (const c of allCommands()) {
+    const handler = handlers[c.id];
+    if (!handler) continue;
+    for (const combo of keysOf(c.id, km)) {
+      if (!map[combo]) map[combo] = typeof handler === "function" || !printable(combo) ? handler : handler.fn;
+    }
+  }
+  for (const [combo, handler] of Object.entries(handlers)) if (!registry.has(combo)) map[combo] = handler;
+  useHotkeys(map, opts);
+}
+
+// Whether a key pressed in a dialog's text box is the confirm key.
+export const isConfirmKey = (e) => {
+  const combo = comboOf(e);
+  return !printable(combo) && keysOf("dialog.confirm").includes(combo);
+};

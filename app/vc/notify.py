@@ -1,4 +1,5 @@
-"""Finished-job notifications: a toast event for the open window, and one ntfy push when the queue empties."""
+"""Finished-job notifications: a toast event for the open window, and one ntfy push when the queue empties
+(only when something failed, if the user chose so)."""
 from __future__ import annotations
 
 import logging
@@ -13,7 +14,7 @@ from .util import AppError
 
 log = logging.getLogger("vc.notify")
 
-NOTIFY_KINDS = {"image", "video", "upscale", "upscalevideo", "kenburns", "export", "package"}
+NOTIFY_KINDS = {"image", "video", "upscale", "upscalevideo", "kenburns", "export", "package", "transcribe"}
 NTFY_TOKEN = "ntfy.token"
 PUSH_TITLE = "Video Console"
 MAX_LISTED = 5
@@ -49,6 +50,8 @@ class Notifier:
         with self._lock:
             batch, self._batch = self._batch, []
         cfg = self._settings.section("notify")["ntfy"]
+        if cfg.get("when") == "failed":
+            batch = [b for b in batch if b["status"] == "failed"]
         if batch and cfg.get("enabled") and cfg.get("topic"):
             message, tags = summarize(batch)
             threading.Thread(target=self._push_quietly, args=(cfg, message, tags), name="ntfy-push",
@@ -90,7 +93,8 @@ def summarize(batch: list[dict[str, str]]) -> tuple[str, list[str]]:
         if failed:
             return f"失敗：{item['title']}\n{item['error'][:200]}".rstrip(), tags
         return f"完成：{item['title']}", tags
-    head = f"{len(batch) - len(failed)} 個工作完成" + (f"，{len(failed)} 個失敗" if failed else "")
+    done = len(batch) - len(failed)
+    head = (f"{done} 個工作完成" + (f"，{len(failed)} 個失敗" if failed else "")) if done else f"{len(failed)} 個工作失敗"
     listed = (failed + [b for b in batch if b["status"] != "failed"])[:MAX_LISTED]
     lines = [("✗ " if b["status"] == "failed" else "✓ ") + b["title"] for b in listed]
     if len(batch) > MAX_LISTED:

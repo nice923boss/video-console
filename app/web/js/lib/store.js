@@ -31,8 +31,13 @@ const INITIAL = {
   wfCheck: null,            // {sid, at}: ask the workflows tab to run a compatibility check
   voice: null,              // Audio8Voice for the cast editor: {loading, status, voices, presets, error}
   captionDragScope: null,   // "one" | "style" once picked; null: the viewer's saved choice
-  gradeDraft: null,         // {id, grade}: an adjustment layer's grade while its panel control is dragged
+  gradeDraft: null,         // {id, grade}: an adjustment layer's or a shot's grade while its panel control is dragged
+  gradeCompare: false,      // the preview shows the picture before grading on its left half (GR-06)
+  maskDraft: null,          // {id, masks}: a shot's blur and mosaic boxes while a panel slider is dragged (GR-12)
   editRange: null,          // {in, out}: the timeline range marked with I and O (seconds)
+  clipMarks: null,          // {pid, times}: where the preview mix went over 0 dB while playing (audio-meter.js)
+  solo: null,               // {pid, keys}: timeline rows heard alone in the preview; never saved or exported (MX-03)
+  audioSel: null,           // audio clip ids Ctrl+clicked together; counts only while it holds editSel (tl-tracks.js)
   editTool: "select",       // timeline click tool: "select" | "blade"
   keyPanel: false,          // the keyframe list in the edit properties panel is open
   watch: false,             // watch mode (lib/watch.js): this window only shows the open project

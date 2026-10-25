@@ -39,7 +39,8 @@ function ParamInput({ p, value, set, reset }) {
 }
 
 // params: what the template declares; values: the overrides saved so far. onChange receives the whole new dict.
-export function ParamFields({ params, values, onChange }) {
+// bindings (the template's binding counts), when given, flags a parameter no node reads: changing it does nothing.
+export function ParamFields({ params, values, onChange, bindings = null }) {
   if (!params || !params.length) return null;
   const own = values || {};
   const set = (key) => (v) => onChange({ ...own, [key]: v });
@@ -51,8 +52,10 @@ export function ParamFields({ params, values, onChange }) {
       const overridden = isSet(own[p.key]);
       const undo = overridden && html`<${IconButton} icon="undo" size=${14} onClick=${reset(p.key)}
         title=${`還原預設值（${defaultText(p)}）`} />`;
-      return html`<${Field} key=${p.key} inline=${!p.multiline} label=${p.type === "bool" ? "" : p.label} hint=${p.help || ""}
-          after=${undo} class=${overridden ? "param-set" : ""}>
+      const loose = bindings && !bindings[p.key];
+      const hint = loose ? `${p.label}沒有綁定到範本的節點，調整不會生效；請到「引擎 › 範本」編輯綁定` : p.help || "";
+      return html`<${Field} key=${p.key} inline=${!p.multiline} label=${p.type === "bool" ? "" : loose ? `${p.label}（未綁定）` : p.label}
+          hint=${hint} after=${undo} class=${[overridden && "param-set", loose && "param-loose"].filter(Boolean).join(" ")}>
         <${ParamInput} p=${p} value=${overridden ? own[p.key] : p.default} set=${set(p.key)} reset=${reset(p.key)} />
       <//>`;
     })}

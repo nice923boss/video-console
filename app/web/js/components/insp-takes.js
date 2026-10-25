@@ -1,14 +1,16 @@
 // Shot inspector, "版本" tab: every image and video generated or imported for the shot. Pick the one
 // the shot uses, rate and label them, and branch new work (video, upscale, last frame) from any take.
-import { html, useState, useMemo } from "../lib/h.js";
-import { setState } from "../lib/store.js";
+// Two takes can be set side by side (SB-12).
+import { html, useState, useMemo, useRef } from "../lib/h.js";
+import { setState, useStore, selectProject } from "../lib/store.js";
+import { useDialogKeys, confirmKeyText } from "../lib/keymap.js";
 import { updateShot, ops, undo, revealInFolder } from "../lib/actions.js";
 import { generate, cancelJob } from "../lib/jobs-actions.js";
-import { fmtDuration, fmtRelTime, KIND_LABEL } from "../lib/format.js";
+import { fmtDuration, fmtRelTime, fileUrl, KIND_LABEL } from "../lib/format.js";
 import { Icon } from "./icons.js";
-import { Segmented, Button, IconButton, Empty, Spinner, Progress } from "./ui.js";
+import { Segmented, Button, IconButton, Empty, Spinner, Progress, Select } from "./ui.js";
 import { Thumb, mediaEntry, openLightbox } from "./media.js";
-import { openMenu, promptDialog } from "./overlay.js";
+import { openMenu, promptDialog, openModal } from "./overlay.js";
 import { toast } from "./toast.js";
 
 const STARS = [1, 2, 3, 4, 5];
@@ -52,7 +54,7 @@ async function rename(take, name) {
 async function editNote(take) {
   const next = await promptDialog({
     title: "版本備註", label: "備註", value: take.note || "", multiline: true, confirmLabel: "儲存", validate: () => "",
-    hint: "Ctrl+Enter 儲存",
+    hint: confirmKeyText("儲存"),
   });
   if (next != null && next !== (take.note || "")) updateTake(take.id, { note: next.slice(0, 1000) }, "修改版本備註");
 }
@@ -62,11 +64,93 @@ async function removeTake(take, name) {
   if (res) toast(`已刪除「${name}」，檔案仍保留在專案資料夾`, { action: { label: "復原", fn: undo } });
 }
 
-function takeMenu(e, { shot, take, name, active, isLast }) {
+// The take to set beside `take`: the one the shot uses for that kind, else the newest other take of the kind,
+// else any other take.
+function comparePartner(shot, takes, take) {
+  const others = takes.filter((t) => t.id !== take.id);
+  return others.find((t) => t.id === shot[ACTIVE_KEY[take.kind]]) || others.find((t) => t.kind === take.kind) || others[0];
+}
+
+function CompareSide({ pid, shot, take, takes, names, mediaRef, onPick }) {
+  const video = take.kind === "video";
+  const url = fileUrl(pid, take.file);
+  const meta = [
+    take.width && `${take.width} × ${take.height}`,
+    video && take.duration > 0 && fmtDuration(take.duration),
+    take.seed != null && `種子 ${take.seed}`,
+  ].filter(Boolean).join("　");
+  return html`<div class="cmp-side">
+    <div class="cmp-head">
+      <${Select} value=${take.id} onChange=${onPick} title="換一個版本"
+        options=${takes.map((t) => ({ value: t.id, label: names.get(t.id) }))} />
+      ${shot[ACTIVE_KEY[take.kind]] === take.id
+        ? html`<span class="cmp-active"><${Icon} name="check" size=${12} />使用中</span>`
+        : html`<${Button} size="sm" kind="ghost" onClick=${useTake(shot, take)}>使用<//>`}
+    </div>
+    <div class="cmp-media">
+      ${video
+        ? html`<video ref=${mediaRef} src=${url} controls loop playsinline key=${take.id}></video>`
+        : html`<img src=${url} alt=${names.get(take.id)} draggable="false" key=${take.id} />`}
+    </div>
+    <div class="cmp-foot">
+      <span class="dim mono">${meta}</span>
+      <${Stars} value=${take.rating || 0} onChange=${(rating) => updateTake(take.id, { rating }, "評分版本")} />
+    </div>
+  </div>`;
+}
+
+// Reads the live project, so a take used or rated here shows at once and a deleted one drops out.
+function TakeCompare({ shotId, first, second, close }) {
+  const project = useStore(selectProject);
+  const [ids, setIds] = useState([first, second]);
+  const left = useRef(null);
+  const right = useRef(null);
+  useDialogKeys({ "dialog.close": { fn: () => close(), allowInInput: true } }, { modal: true });
+  const takes = useMemo(() => Object.values((project && project.takes) || {})
+    .filter((t) => t.shot === shotId).sort((a, b) => (b.created || 0) - (a.created || 0)), [project && project.takes, shotId]);
+  const names = useMemo(() => takeNames(takes), [takes]);
+  const shot = project && project.shots.find((s) => s.id === shotId);
+  const pair = ids.map((id) => takes.find((t) => t.id === id));
+  if (!shot || takes.length < 2 || pair.some((t) => !t)) {
+    queueMicrotask(() => close());
+    return null;
+  }
+  const videos = () => [left.current, right.current].filter(Boolean);
+  // Both from the first frame, so a timing difference between the two shows.
+  const playBoth = () => videos().forEach((v) => {
+    v.currentTime = 0;
+    v.play().catch(() => {});
+  });
+  const pick = (side) => (id) => setIds(side ? [ids[0], id] : [id, ids[1]]);
+  return html`<div class="lightbox take-compare" role="dialog" aria-modal="true" aria-label="並排比較版本">
+    <header class="lb-top">
+      <span class="lb-kind"><${Icon} name="columns" size=${16} /></span>
+      <span class="lb-title">並排比較版本</span>
+      <span class="lb-spacer"></span>
+      ${pair.every((t) => t.kind === "video") && html`
+        <${Button} size="sm" kind="ghost" icon="play" title="兩段影片都從頭開始播" onClick=${playBoth}>從頭一起播<//>
+        <${Button} size="sm" kind="ghost" icon="pause" onClick=${() => videos().forEach((v) => v.pause())}>暫停<//>`}
+      <${Button} size="sm" kind="ghost" icon="swap" onClick=${() => setIds([ids[1], ids[0]])}>左右對調<//>
+      <button type="button" class="icon-btn" title="關閉（Esc）" aria-label="關閉" onClick=${() => close()}>
+        <${Icon} name="x" />
+      </button>
+    </header>
+    <div class="cmp-stage">
+      ${pair.map((t, side) => html`<${CompareSide} key=${side} pid=${project.id} shot=${shot} take=${t} takes=${takes}
+        names=${names} mediaRef=${side ? right : left} onPick=${pick(side)} />`)}
+    </div>
+  </div>`;
+}
+
+const openCompare = (shot, first, second) => openModal((close) => html`<${TakeCompare} shotId=${shot.id}
+  first=${first.id} second=${second.id} close=${close} />`);
+
+function takeMenu(e, { shot, take, name, active, isLast, takes }) {
   const video = take.kind === "video";
   openMenu(e, [
     { header: name },
     !active && { label: video ? "設為使用中的影片" : "設為使用中的圖片", icon: "check", onClick: useTake(shot, take) },
+    takes.length > 1 && { label: "並排比較…", icon: "columns", onClick: () => openCompare(shot, take, comparePartner(shot, takes, take)) },
     { label: take.favorite ? "取消收藏" : "收藏", icon: "heart", onClick: () => updateTake(take.id, { favorite: !take.favorite }, "收藏版本") },
     { label: "重新命名…", icon: "pencil", onClick: () => rename(take, name) },
     { label: take.note ? "編輯備註…" : "加上備註…", icon: "clipboard", onClick: () => editNote(take) },
@@ -103,7 +187,7 @@ function takeMenu(e, { shot, take, name, active, isLast }) {
   ]);
 }
 
-function TakeCard({ project, shot, take, name, active, ratio, isLast, onOpen }) {
+function TakeCard({ project, shot, take, takes, name, active, ratio, isLast, onOpen }) {
   const video = take.kind === "video";
   return html`<div class=${`take ${active ? "is-active" : ""}`}>
     <${Thumb} pid=${project.id} path=${take.thumb || take.file} strip=${video ? take.strip || "" : ""}
@@ -118,7 +202,7 @@ function TakeCard({ project, shot, take, name, active, ratio, isLast, onOpen }) 
       <span class="take-name" title=${take.note || name}>${name}</span>
       <span class="take-time dim">${fmtRelTime(take.created)}</span>
       <${IconButton} icon="more" size=${15} title="更多動作"
-        onClick=${(e) => takeMenu(e, { shot, take, name, active, isLast })} />
+        onClick=${(e) => takeMenu(e, { shot, take, name, active, isLast, takes })} />
     </div>
     <div class="take-foot">
       <${Stars} value=${take.rating || 0} onChange=${(rating) => updateTake(take.id, { rating }, "評分版本")} />
@@ -169,11 +253,18 @@ export function TakesTab({ project, shot, index, takes, busy }) {
     name: names.get(t.id),
     actions: [{ label: "使用這個版本", icon: "check", fn: (item) => useTake(shot, takes.find((x) => x.id === item.id))() }],
   }));
+  // The compare button starts from the take in use within the filter, beside its partner.
+  const pool = shown.length > 1 ? shown : takes;
+  const base = pool.find((t) => t.id === shot.activeVideo) || pool.find((t) => t.id === shot.activeImage) || pool[0];
   return html`<div class="takes">
-    <${Segmented} size="sm" value=${filter} onChange=${setFilter} options=${filters} class="takes-filter" />
+    <div class="takes-bar">
+      <${Segmented} size="sm" value=${filter} onChange=${setFilter} options=${filters} class="takes-filter" />
+      ${takes.length > 1 && html`<${IconButton} icon="columns" size=${16} title="並排比較兩個版本"
+        onClick=${() => openCompare(shot, base, comparePartner(shot, pool, base))} />`}
+    </div>
     <div class="take-grid">
       ${jobs.map((j) => html`<${JobCard} key=${j.id} job=${j} ratio=${ratio} />`)}
-      ${shown.map((t, i) => html`<${TakeCard} key=${t.id} project=${project} shot=${shot} take=${t} name=${names.get(t.id)}
+      ${shown.map((t, i) => html`<${TakeCard} key=${t.id} project=${project} shot=${shot} take=${t} takes=${takes} name=${names.get(t.id)}
         active=${shot[ACTIVE_KEY[t.kind]] === t.id} ratio=${ratio} isLast=${isLast}
         onOpen=${() => openLightbox(project.id, entries, i)} />`)}
     </div>

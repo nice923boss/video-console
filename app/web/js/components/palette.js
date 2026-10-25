@@ -1,7 +1,6 @@
 // Command palette (Ctrl+Shift+P by default): ranked search over actions, views, shots and projects.
 import { html, useState, useMemo, useRef, useEffect, useLayoutEffect } from "../lib/h.js";
-import { useHotkeys } from "../lib/keys.js";
-import { keysOf } from "../lib/keymap.js";
+import { keysOf, useDialogKeys } from "../lib/keymap.js";
 import { Icon } from "./icons.js";
 import { Keys } from "./ui.js";
 import { openModal } from "./overlay.js";
@@ -9,7 +8,7 @@ import { toastError } from "./toast.js";
 
 const RECENT_KEY = "vc.palette.recent";
 const RECENT_MAX = 5;
-const GROUP_CAP = 12; // rows per group while the query is empty
+const GROUP_CAP = 12; // rows per group while the query is empty, until the group is opened in full
 const RESULT_CAP = 80;
 const BOUNDARY = /[\s\-_/.:：，,（(「]/;
 
@@ -56,7 +55,7 @@ function scoreOf(cmd, terms) {
   return total - label.length / 100; // shorter labels win ties
 }
 
-function buildRows(commands, query, recent) {
+function buildRows(commands, query, recent, expanded) {
   const usable = commands.filter((c) => c && c.label);
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length) {
@@ -82,8 +81,9 @@ function buildRows(commands, query, recent) {
   }
   for (const [group, list] of groups) {
     rows.push({ header: group });
-    for (const c of list.slice(0, GROUP_CAP)) rows.push({ cmd: c });
-    if (list.length > GROUP_CAP) rows.push({ more: list.length - GROUP_CAP, group });
+    const cap = expanded.has(group) ? list.length : GROUP_CAP;
+    for (const c of list.slice(0, cap)) rows.push({ cmd: c });
+    if (list.length > cap) rows.push({ more: list.length - cap, group });
   }
   return rows;
 }
@@ -91,9 +91,10 @@ function buildRows(commands, query, recent) {
 function Palette({ commands, close, placeholder }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0); // index into picks
+  const [expanded, setExpanded] = useState(() => new Set());
   const recent = useMemo(loadRecent, []);
-  const rows = useMemo(() => buildRows(commands, query.trim(), recent), [commands, query, recent]);
-  const picks = useMemo(() => rows.map((r, i) => (r.cmd && !r.cmd.disabled ? i : -1)).filter((i) => i >= 0), [rows]);
+  const rows = useMemo(() => buildRows(commands, query.trim(), recent, expanded), [commands, query, recent, expanded]);
+  const picks = useMemo(() => rows.map((r, i) => ((r.cmd && !r.cmd.disabled) || r.more ? i : -1)).filter((i) => i >= 0), [rows]);
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const downOnBack = useRef(false);
@@ -108,12 +109,16 @@ function Palette({ commands, close, placeholder }) {
   }, []);
 
   useLayoutEffect(() => {
-    const el = listRef.current && listRef.current.querySelector(".pal-item.active");
+    const el = listRef.current && listRef.current.querySelector(".active");
     if (el) el.scrollIntoView({ block: "nearest" });
   }, [current, rows]);
 
   const run = (i) => {
     const row = rows[i];
+    if (row && row.more) {
+      setExpanded((s) => new Set([...s, row.group]));
+      return;
+    }
     if (!row || !row.cmd || row.cmd.disabled) return;
     saveRecent(row.cmd.id);
     close(row.cmd);
@@ -122,9 +127,9 @@ function Palette({ commands, close, placeholder }) {
     if (picks.length) setActive((a) => (Math.min(a, picks.length - 1) + d + picks.length) % picks.length);
   };
   const closeKeys = Object.fromEntries(keysOf("app.palette").map((k) => [k, { fn: () => close(null), allowInInput: true }]));
-  useHotkeys({
+  useDialogKeys({
     ...closeKeys,
-    escape: { fn: () => close(null), allowInInput: true },
+    "dialog.close": { fn: () => close(null), allowInInput: true },
     arrowdown: { fn: () => move(1), allowInInput: true },
     arrowup: { fn: () => move(-1), allowInInput: true },
     tab: { fn: () => move(1), allowInInput: true },
@@ -159,7 +164,9 @@ function Palette({ commands, close, placeholder }) {
       <div class="pal-list" id="pal-list" role="listbox" ref=${listRef}>
         ${rows.map((r, i) => {
           if (r.header) return html`<div class="pal-head" key=${`h:${r.header}`}>${r.header}</div>`;
-          if (r.more) return html`<div class="pal-more" key=${`m:${r.group}`}>還有 ${r.more} 項，輸入關鍵字縮小範圍</div>`;
+          if (r.more) return html`<button type="button" tabindex="-1" id=${`pal-${i}`} key=${`m:${r.group}`} role="option"
+              aria-selected=${i === current} class=${`pal-more ${i === current ? "active" : ""}`}
+              onMouseMove=${() => hover(i)} onClick=${() => run(i)}>顯示其餘 ${r.more} 項（或輸入關鍵字縮小範圍）</button>`;
           const c = r.cmd;
           const on = i === current;
           return html`<button type="button" tabindex="-1" id=${`pal-${i}`} key=${r.key || c.id} role="option"

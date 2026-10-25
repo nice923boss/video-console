@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Console 改進清單</title>
+<style>
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --surface-2: #eef0f3; --border: #dde1e6; --border-strong: #c6ccd4;
+  --text: #1b1f24; --text-2: #48515d; --muted: #7a8491;
+  --accent: #2f6fde; --accent-text: #ffffff; --accent-soft: #e5edfc;
+  --on: #eef6ec; --on-line: #4f9a45;
+  --e-s: #2e7d4f; --e-m: #a8690f; --e-l: #c0392b; --spike: #7547c9; --gaps: #4a5868;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .06), 0 4px 14px rgba(0, 0, 0, .05);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #131619; --surface: #1b1f24; --surface-2: #242a31; --border: #313841; --border-strong: #434c57;
+    --text: #e8ebef; --text-2: #b6bec8; --muted: #8a94a0;
+    --accent: #6c9cff; --accent-text: #0d1424; --accent-soft: #1e2a42;
+    --on: #18261b; --on-line: #6cc160;
+    --e-s: #62c98f; --e-m: #e3ac4b; --e-l: #f07563; --spike: #ab8cf2; --gaps: #9fb0c2;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #131619; --surface: #1b1f24; --surface-2: #242a31; --border: #313841; --border-strong: #434c57;
+  --text: #e8ebef; --text-2: #b6bec8; --muted: #8a94a0;
+  --accent: #6c9cff; --accent-text: #0d1424; --accent-soft: #1e2a42;
+  --on: #18261b; --on-line: #6cc160;
+  --e-s: #62c98f; --e-m: #e3ac4b; --e-l: #f07563; --spike: #ab8cf2; --gaps: #9fb0c2;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 system-ui, "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+.wrap { width: min(1080px, 100%); margin: 0 auto; padding: 0 16px; }
+
+.top { padding: 28px 0 18px; }
+.top h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: .01em; }
+.lede { margin: 0 0 12px; color: var(--text-2); max-width: 760px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; list-style: none; color: var(--text-2); font-size: 13px; }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+
+.bar { position: sticky; top: 0; z-index: 10; padding: 10px 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+.bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bar-row + .bar-row { margin-top: 8px; }
+.bar input[type="search"], .bar select {
+  height: 36px; padding: 0 10px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
+}
+.bar input[type="search"] { flex: 1 1 220px; min-width: 0; }
+.bar select { flex: 0 1 auto; max-width: 100%; }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { height: 34px; padding: 0 12px; background: none; border: 0; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.only { display: inline-flex; align-items: center; gap: 6px; height: 36px; cursor: pointer; user-select: none; }
+.count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
+.count b { color: var(--text); font-size: 17px; }
+.grow { flex: 1; }
+.btn {
+  height: 34px; padding: 0 12px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
+  cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--surface-2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn:focus-visible, .seg button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.cat { margin: 22px 0 0; }
+.cat-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; }
+.cat-head h2 { margin: 0; font-size: 17px; }
+.cat-count { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cat-all { margin-left: auto; height: 28px; padding: 0 10px; font-size: 13px; }
+.items { display: grid; gap: 6px; }
+
+.item { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.item.on { background: var(--on); border-color: var(--on-line); }
+.pick { display: grid; grid-template-columns: 22px 52px 1fr; gap: 10px; align-items: start; padding: 10px 12px; cursor: pointer; }
+.pick input { width: 18px; height: 18px; margin: 3px 0 0; accent-color: var(--on-line); cursor: pointer; }
+.code { padding-top: 1px; color: var(--muted); font: 12.5px/1.6 ui-monospace, Consolas, monospace; }
+.t { display: block; font-weight: 600; }
+.why { display: block; color: var(--text-2); font-size: 13.5px; }
+.tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tag {
+  display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 11.5px; line-height: 19px; font-weight: 600;
+  color: var(--c); background: color-mix(in srgb, var(--c) 13%, transparent); border: 1px solid color-mix(in srgb, var(--c) 30%, transparent);
+}
+.tag.e-s { --c: var(--e-s); } .tag.e-m { --c: var(--e-m); } .tag.e-l { --c: var(--e-l); }
+.tag.spike { --c: var(--spike); } .tag.gaps { --c: var(--gaps); font-weight: 500; }
+.extra { display: none; gap: 8px; padding: 0 12px 10px 96px; }
+.item.on .extra { display: flex; }
+.extra select, .extra input { height: 32px; padding: 0 8px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 7px; }
+.extra input { flex: 1; min-width: 0; }
+
+.notes { margin-top: 30px; }
+.notes h2 { margin: 0 0 8px; font-size: 17px; }
+.notes textarea { width: 100%; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; resize: vertical; }
+.empty { padding: 40px 0; color: var(--muted); text-align: center; }
+.foot { padding: 20px 16px 40px; color: var(--muted); font-size: 12.5px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 20px; z-index: 20; max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 10px;
+  background: var(--text); color: var(--bg); box-shadow: var(--shadow); transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  transition: opacity .18s, transform .18s;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 640px) {
+  .top h1 { font-size: 20px; }
+  .bar { position: static; }
+  .count { margin-left: 0; width: 100%; }
+  .pick { grid-template-columns: 22px 1fr; }
+  .code { display: none; }
+  .extra { flex-wrap: wrap; padding-left: 44px; }
+  .extra input { flex-basis: 100%; }
+  .grow { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <h1>Video Console 改進清單</h1>
+    <p class="lede">共 <b id="total">0</b> 項，依 GAPS.md 尚未補完的落差與實際剪片情境整理。勾選想做的項目，可加優先順序與備註，最後按「複製勾選結果」貼回給 Claude。</p>
+    <ul class="legend">
+      <li><span class="tag e-s">小</span>半天內</li>
+      <li><span class="tag e-m">中</span>1～2 天</li>
+      <li><span class="tag e-l">大</span>3 天以上</li>
+      <li><span class="tag spike">需先驗證</span>可行性未知，先做小型實驗（PoC）</li>
+      <li><span class="tag gaps">GAPS #83</span>對應 GAPS.md 編號</li>
+    </ul>
+  </div>
+</header>
+
+<div class="bar">
+  <div class="wrap">
+    <div class="bar-row">
+      <input id="q" type="search" placeholder="搜尋標題、說明或 GAPS 編號" aria-label="搜尋">
+      <select id="cat" aria-label="分類"><option value="">全部分類</option></select>
+      <div class="seg" id="effort" role="group" aria-label="工作量">
+        <button type="button" data-v="" aria-pressed="true">全部</button>
+        <button type="button" data-v="小" aria-pressed="false">小</button>
+        <button type="button" data-v="中" aria-pressed="false">中</button>
+        <button type="button" data-v="大" aria-pressed="false">大</button>
+      </div>
+      <label class="only"><input type="checkbox" id="only"> 只看已勾選</label>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="bar-row">
+      <button type="button" class="btn" id="selVisible">勾選目前顯示的項目</button>
+      <button type="button" class="btn" id="clearAll">清除全部勾選</button>
+      <span class="grow"></span>
+      <button type="button" class="btn primary" id="copy">複製勾選結果</button>
+      <button type="button" class="btn" id="dlTxt">下載 TXT</button>
+      <button type="button" class="btn" id="dlJson">下載 JSON</button>
+      <button type="button" class="btn" id="theme" aria-label="切換深淺色">深淺色</button>
+    </div>
+  </div>
+</div>
+
+<main class="wrap" id="list"></main>
+
+<section class="wrap notes">
+  <h2>整體備註</h2>
+  <textarea id="note" rows="4" placeholder="例如：先做音訊類，下週要交片；大項目可以拆兩階段"></textarea>
+</section>
+
+<footer class="wrap foot">整理日期：2026-10-24。勾選狀態只存在這台電腦的瀏覽器，換電腦請用「下載 JSON」帶走結果。</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+// Each item: [title, why, effort (小/中/大), GAPS numbers ("83" or "134,26"), needs a spike first (1/0)]
+const DATA = [
+  { code: "AU", name: "音訊與配音", items: [
+    ["配音片段自動響度對齊", "VoAI、Audio8Voice 每句大小聲不一，生成後統一到同一響度，取代固定 +6dB。", "中", "", 0],
+    ["背景音樂自動避讓（Ducking）", "有配音或人聲的時段自動把音樂壓低 8～12dB，說完再拉回。", "大", "", 0],
+    ["音訊片段淡入淡出把手", "在片段兩端拖曳設定淡入、淡出長度；目前只在轉場處自動淡化。", "中", "", 0],
+    ["音量關鍵幀", "片段內加音量點做漸強漸弱，不只整段一個值。", "大", "", 0],
+    ["波形跟著增益縮放", "調 +6dB 後波形一起變高，一眼看出哪段太大聲。", "小", "", 0],
+    ["波形標示爆音區段", "增益後超過 0dBFS 的地方在波形上標紅。", "小", "", 0],
+    ["時間軸片段批次改音量", "多選片段一次套 +6、0、-10dB，與匯入時的快選一致。", "小", "", 0],
+    ["素材庫修改預設音量", "素材右鍵改匯入音量，之後放上時間軸都用新值。", "小", "", 0],
+    ["依資料夾記住匯入音量", "例如 VoAI 網頁版的下載資料夾自動 +6dB，不用每次選。", "小", "", 0],
+    ["VoAI 結果快取", "同文字、同聲音、同參數不重扣點數，直接沿用舊檔。", "中", "83", 0],
+    ["人物表試聽聲音", "挑聲音時先播一句範例再決定。", "中", "49", 0],
+    ["配音比字幕長時自動延長字幕", "避免字幕先消失、聲音還在講。", "中", "46", 0],
+    ["生成配音可用 Ctrl+Z 復原", "目前生成後無法一鍵撤回。", "中", "47", 0],
+    ["重新生成後清理舊配音檔", "舊檔移到專案垃圾桶，可還原也不佔空間。", "小", "48", 0],
+    ["取代字幕時處理綁定的配音", "匯入 SRT 取代時詢問：刪除、保留或重新生成對應配音。", "小", "208", 0],
+    ["單句語速與句尾停頓", "每句可設語速、停頓再重生；要先確認各家配音 API 支援度。", "中", "", 1],
+    ["錄音素材降噪", "對現場錄音套 ffmpeg afftdn 或 RNNoise，先試效果再決定。", "中", "", 1],
+    ["APP 內直接錄旁白", "用麥克風錄到播放頭位置，自動放上新音軌。", "大", "", 0],
+    ["對嘴（Lip Sync）", "讓角色口型跟配音同步，要先評估本機模型與畫質。", "大", "50", 1],
+    ["配音音質人工抽檢", "挑 10 句不同聲音實聽並記錄，補上沒人聽過的缺口。", "小", "41", 0],
+  ]},
+  { code: "MX", name: "音量表與混音", items: [
+    ["響度表：LUFS 與 True Peak", "音量表下方顯示短期、整合響度與真峰值，對齊各平台規範。", "中", "", 0],
+    ["每條音軌各自的音量表", "音軌標頭旁顯示該軌電平，找出是誰在爆音。", "中", "", 0],
+    ["音軌靜音、獨奏（M／S）", "每條音軌一個靜音與獨奏按鈕，方便單聽配音或音樂。", "中", "", 0],
+    ["混音器面板", "集中顯示各軌推桿、音量表與總輸出。", "大", "", 0],
+    ["點峰值數字歸零", "像 FCPX 一樣點一下重設峰值保持。", "小", "", 0],
+    ["音量表量測點切換", "可選「混音後」或「含預覽音量」；目前固定量混音後。", "小", "", 0],
+    ["爆音位置留標記", "播放時超過 0dB 的時間點在尺規留紅點，播完一次就知道要修哪裡。", "小", "", 0],
+    ["輸出前響度檢查報告", "掃整條序列，列出最大峰值、整合響度與超標時段。", "中", "", 0],
+    ["立體聲相關度表", "偵測左右聲道相位抵消，避免手機單喇叭播放時變小聲。", "中", "", 0],
+    ["音量表寬度可調", "拖曳面板邊緣調寬窄並記住。", "小", "", 0],
+  ]},
+  { code: "ED", name: "剪輯與時間軸", items: [
+    ["非音訊片段也能複製貼上", "鏡頭、上層畫面、字幕都能 Ctrl+C、Ctrl+V。", "中", "203", 0],
+    ["複製到系統剪貼簿", "可跨專案、跨視窗貼上片段。", "中", "204", 0],
+    ["貼上保留字幕與鏡頭綁定", "複本保留 captionId、shotId，或詢問是否綁定。", "小", "205", 0],
+    ["音軌手動排序", "拖曳音軌標頭調上下順序，不再依第一個片段的時間。", "中", "199", 0],
+    ["修剪不侵入相鄰片段", "修剪邊緣碰到同軌鄰居時停住，按住修飾鍵才推移。", "小", "200", 0],
+    ["同時上傳到同一音軌自動錯開", "兩個上傳同時落在同一點時不重疊。", "小", "201", 0],
+    ["漣漪刪除（Shift+Delete）", "刪除後後面自動補位；一般刪除則留空隙。", "中", "", 0],
+    ["滾動、滑動剪輯（Roll、Slip、Slide）", "調剪接點或片段內容位置而不改總長。", "大", "", 0],
+    ["鏡頭移出序列時其他軌跟著走", "字幕、配音、上層畫面一起移除或一起後移。", "中", "146", 0],
+    ["生成新影片改變鏡長時其他軌連動", "字幕與配音跟著鏡頭位置調整。", "中", "132", 0],
+    ["匯入劇本插入鏡頭時其他軌連動", "避免插入鏡頭後字幕錯位。", "中", "133", 0],
+    ["背景音樂可鎖定絕對時間", "整首音樂不再跟著開頭所在的鏡頭移動。", "中", "131", 0],
+    ["分鏡右鍵一次移動多個鏡頭", "多選後「移到第幾個」一起搬。", "小", "134", 0],
+    ["上層片段穿插時即時補位", "拖曳中就顯示後退結果，不用等放開滑鼠。", "中", "105", 0],
+    ["上層片段可裁切填滿", "除了等比滿版，加入填滿（cover）與自訂裁切框。", "中", "107", 0],
+    ["上層片段轉成鏡頭時保留屬性", "位置、大小、透明度、音量不重設。", "小", "106", 0],
+    ["畫面軌鏡頭可拖到上層軌", "雙向搬移，不只單向。", "中", "108", 0],
+    ["分割後兩段各自獨立版本", "分割後可分別換版本、重新生成。", "中", "24", 0],
+    ["完成曲線變速、複合片段、預合成", "目前是 [Shell]，要先決定資料模型。", "大", "162", 1],
+    ["變速鏡頭可分離原聲", "目前變速中的鏡頭不能分離原聲。", "中", "164", 0],
+    ["已分離原聲的鏡頭可倒放、定格", "移除目前的互斥限制。", "中", "165", 0],
+    ["標籤顏色自訂", "從固定 6 色改為可自訂顏色與名稱。", "小", "148", 0],
+  ]},
+  { code: "PV", name: "預覽播放", items: [
+    ["K＋J、K＋L 慢速播放", "按住 K 再按 J 或 L 以慢速播放，方便抓剪接點。", "中", "97", 0],
+    ["倒播有聲音", "倒著播放時播反轉音訊；目前是無聲逐格。", "中", "98", 0],
+    ["預覽填滿模式", "可切換等比（contain）與填滿（cover），看裁切後效果。", "小", "20", 0],
+    ["預覽顯示安全框與三分線", "設定檔已有 ui.safeArea、ui.thirds，接到預覽上。", "小", "40", 0],
+    ["預覽字幕淡入淡出並避開轉場", "讓預覽更接近輸出結果。", "中", "21", 0],
+    ["預覽解析度切換（1/2、1/4）", "長片或 4K 素材播放卡頓時降低解析度。", "中", "", 0],
+    ["全螢幕預覽與第二螢幕", "一鍵全螢幕，或把預覽放到外接螢幕。", "中", "", 0],
+    ["循環播放", "在區域或整條序列循環播放，方便反覆聽配音。", "小", "", 0],
+  ]},
+  { code: "CP", name: "字幕", items: [
+    ["保留多行字幕", "匯入 SRT 時不把多行併成一行。", "小", "207", 0],
+    ["一次匯入多個 SRT", "依序接續或放到不同字幕軌。", "中", "209", 0],
+    ["SRT 依播放頭偏移匯入", "時間從播放頭起算，方便插入局部字幕。", "小", "210", 0],
+    ["超出序列的字幕提示", "匯入後標示超出部分，詢問刪除或延長。", "小", "211", 0],
+    ["Big5 解碼失敗時提示", "列出亂碼行號讓使用者確認，不靜默換成替代字元。", "小", "212", 0],
+    ["一個鏡頭綁定多句字幕", "長鏡頭可以有多句台詞。", "中", "135", 0],
+    ["劇本產生的字幕自動綁定鏡頭", "匯入劇本時依段落綁定。", "中", "137", 0],
+    ["拖曳過的字幕自動避讓堆疊", "多句同時出現時不重疊。", "中", "86", 0],
+    ["長句自動換行與邊界保護", "拖曳後或字太多時不超出畫面。", "小", "94", 0],
+    ["新專案自動帶入樣式庫", "可設預設字幕樣式。", "小", "90", 0],
+    ["同名樣式自動加序號", "從樣式庫加入時避免撞名。", "小", "96", 0],
+    ["字幕錯字與用語檢查", "比對自訂詞庫（產品名、人名），標出可能的錯字。", "中", "", 0],
+    ["字幕逐字高亮（卡拉 OK 效果）", "依配音時間逐字變色，短影音常用。", "大", "", 1],
+    ["語音轉字幕重跑不重複", "同一片段再轉一次時取代舊字幕，不疊加。", "小", "139", 0],
+  ]},
+  { code: "SB", name: "分鏡與劇本", items: [
+    ["劇本檔編碼偵測擴充", "支援 GBK、UTF-16、Shift-JIS，失敗時讓使用者選。", "小", "18", 0],
+    ["一列一鏡的分鏡表不再拆", "偵測格式後直接匯入。", "小", "178", 0],
+    ["分鏡總長對齊成片長", "總長超過目標時提示，可等比縮放。", "中", "179,187", 0],
+    ["說話者標在每一鏡", "不只記在段落第一鏡的備註。", "小", "175", 0],
+    ["旁白列舉的鏡頭補畫面描述", "目前留空，要先試文字模型補寫品質。", "中", "176", 1],
+    ["鏡頭「允許文字」開關", "招牌、字卡等需要文字的鏡頭可關閉禁字條件。", "小", "113", 0],
+    ["禁字關鍵字白名單", "避免誤刪正常描述。", "小", "114", 0],
+    ["分鏡板多選後一起拖曳", "拖曳時整組移動。", "中", "26", 0],
+    ["分鏡表 HTML 另存含圖片", "圖片內嵌或一併打包。", "小", "29", 0],
+    ["分鏡匯出 PDF 與列印版面", "給客戶審稿用。", "中", "", 0],
+    ["角色外觀卡", "每個角色存外觀描述與參考圖，生圖時自動帶入，維持一致。", "中", "186", 0],
+    ["鏡頭版本並排比較", "同一鏡頭兩個版本左右並排看。", "中", "", 0],
+    ["客戶審稿網頁", "匯出唯讀網頁讓客戶在每鏡留言，再匯回專案。", "大", "", 0],
+    ["劇本與分鏡雙向同步", "改分鏡描述時回寫劇本，反之亦然。", "大", "", 1],
+  ]},
+  { code: "LG", name: "本地生成與 ComfyUI", items: [
+    ["重試時可換種子", "重試可選「沿用」或「新種子」。", "小", "9", 0],
+    ["ComfyUI 多執行線", "多台主機或多張顯示卡時平行送出。", "大", "8", 0],
+    ["中斷後避免重複送出", "重啟時先查 ComfyUI 佇列再決定是否重送。", "中", "10", 0],
+    ["範本被刪時提前警告", "鏡頭指定的範本不存在時在分鏡上標紅。", "小", "11,12", 0],
+    ["範本 kind 與 mode 交叉驗證", "匯入範本時檢查兩者一致。", "小", "13", 0],
+    ["參數沒綁節點時提示", "調整沒效果時說明原因。", "小", "14", 0],
+    ["範本編輯器可增刪節點", "不用回 ComfyUI 改。", "大", "15", 0],
+    ["新增伺服器時直接填權杖", "不用先儲存再設定。", "小", "16", 0],
+    ["LTX 長片段分段接續", "超過 10.7 秒時分兩段生成再接，不截短。", "大", "72", 1],
+    ["Klein 範本模型下載清單", "缺模型時列出檔名與下載位置。", "小", "123", 0],
+    ["送出前檢查模型是否存在", "範本需要的模型缺了就先提示，不浪費排隊時間。", "中", "", 0],
+    ["顯示卡記憶體監看", "佇列頁顯示 VRAM 用量，提醒與 Audio8Voice 衝突。", "中", "70,79", 0],
+  ]},
+  { code: "CL", name: "雲端影片 API", items: [
+    ["雲端生成費用預估", "送出前顯示預估花費與本月累計。", "中", "68", 0],
+    ["雲端工作結果快取", "同提示詞、同參數不重複扣費。", "中", "", 0],
+    ["Replicate 自動偵測模型", "與 fal.ai 一樣抓模型清單。", "中", "54", 0],
+    ["直連供應商模型清單線上更新", "可靈、Runway、MiniMax、Stability 不再寫死。", "中", "55", 0],
+    ["fal.ai 以外也偵測秒數", "避免送出模型不支援的秒數。", "中", "60", 0],
+    ["預設模型更新時提示切換", "已儲存的設定不會自動換，改成詢問。", "小", "161", 0],
+    ["LTX 2.5 支援更多畫面比例", "1:1、4:5 改用其他模型或自動裁切。", "中", "159", 0],
+    ["Gemini Omni 實際生成驗收", "目前是 Shell，要付費實測一次。", "中", "64", 1],
+    ["文字模型測試連線送一句話", "不只查模型清單，實際回應一句。", "小", "80", 0],
+    ["雲端錯誤訊息中文化", "把 API 錯誤碼轉成看得懂的原因與處理建議。", "小", "", 0],
+  ]},
+  { code: "IM", name: "圖片生成與參考圖", items: [
+    ["參考圖排序與權重", "指定哪張參考圖最重要。", "中", "", 0],
+    ["多圖合成框選位置", "在畫面上框出每張參考圖要擺的位置。", "大", "119", 1],
+    ["局部重繪（Inpaint）", "在鏡頭圖片上塗抹要重畫的區域。", "大", "", 1],
+    ["生圖後一鍵放大", "放大到 2 倍再轉影片，細節更清楚。", "中", "", 0],
+    ["版面配置海報從 APP 實測", "補上沒從 APP 生過的缺口。", "小", "120", 0],
+    ["場景假字偵測", "生圖後用 OCR 檢查招牌假字，有就提示重生。", "中", "117", 1],
+    ["風格參考庫", "存常用風格圖與提示詞，一鍵套到整個專案。", "中", "", 0],
+    ["一次生多張挑選", "一次生 4 張讓使用者挑。", "中", "", 0],
+  ]},
+  { code: "GR", name: "調色與特效", items: [
+    ["單一鏡頭調色", "每鏡獨立調色，不只靠調整圖層。", "中", "153", 0],
+    ["調色關鍵幀平滑過渡", "目前是階梯變化。", "中", "163", 0],
+    ["色輪支援鍵盤操作", "方向鍵微調色輪。", "小", "156", 0],
+    ["方向鍵連按合併成一個復原步驟", "避免復原要按幾十次。", "小", "157", 0],
+    ["字幕可選擇受調整圖層影響", "例如整片褪色時字幕一起變色，或維持原色。", "小", "155", 0],
+    ["調色前後對照", "預覽左右各半顯示調色前後。", "中", "", 0],
+    ["示波器與向量儀", "顯示亮度波形與色彩向量，客觀判斷曝光與膚色。", "大", "", 0],
+    ["跨鏡頭配色（Match Color）", "讓不同 AI 生成的鏡頭色調一致。", "大", "", 1],
+    ["綠幕去背（Chroma Key）", "上層片段去除綠色背景。", "中", "", 0],
+    ["標題字卡範本", "常用片頭標題、下標字卡，可改字與顏色。", "大", "", 0],
+    ["畫面防手震", "對手持素材套 ffmpeg vidstab。", "中", "", 1],
+    ["模糊與馬賽克遮罩", "遮住人臉或商標。", "中", "", 0],
+  ]},
+  { code: "EX", name: "輸出", items: [
+    ["輸出時 LUFS 響度正規化", "一鍵調到 -14 LUFS（YouTube）或 -16 LUFS（Podcast）。", "中", "", 0],
+    ["含配音與增益的 MP4 實測", "驗證 +6dB 在成片裡的響度，確認沒有爆音。", "小", "43", 0],
+    ["輸出預設組", "YouTube、Reels、Shorts、LINE 一鍵套尺寸與位元率。", "小", "", 0],
+    ["一次輸出多種比例", "16:9 與 9:16 同時輸出，各自的裁切位置可調。", "大", "", 0],
+    ["只輸出區域（入點到出點）", "用 I、O 範圍輸出片段。", "小", "", 0],
+    ["批次輸出佇列", "多個專案排隊輸出。", "中", "", 0],
+    ["輸出剩餘時間預估", "依片長與編碼器估算。", "小", "", 0],
+    ["輸出前自動檢查", "找出離線素材、空白段落、未生成的鏡頭。", "小", "", 0],
+    ["輸出封面圖", "自動擷取或指定一格存成 JPG 縮圖。", "小", "", 0],
+    ["YouTube 章節時間碼", "依標記產生章節文字，直接貼到說明欄。", "小", "", 0],
+    ["單獨輸出音訊（WAV、MP3）", "給配音師或 Podcast 用；字幕 SRT 已可輸出。", "小", "", 0],
+    ["輸出尺寸不綁專案尺寸", "放大後可選輸出 1080p 或 4K。", "中", "77", 0],
+  ]},
+  { code: "LB", name: "素材庫與檔案", items: [
+    ["素材庫多選", "一次刪除、收藏、加到時間軸。", "中", "27", 0],
+    ["素材庫直接拖到時間軸", "不用先指定給鏡頭。", "中", "27", 0],
+    ["圖片、影片拖到時間軸直接上軌", "不只進素材庫。", "中", "23", 0],
+    ["素材搜尋與標籤", "依名稱、類型、標籤篩選。", "中", "", 0],
+    ["未使用素材清理", "列出沒用到的素材與暫存檔，一鍵清理。", "小", "", 0],
+    ["資料夾用瀏覽選擇", "設定匯出資料夾時不用手打路徑。", "小", "189", 0],
+    ["刪除專案時詢問輸出檔", "可選一併刪除匯出資料夾裡的檔。", "小", "191", 0],
+    ["舊素材補波形與透明資訊", "背景補算缺的波形與 alpha 標記。", "小", "138,193", 0],
+    ["素材重新連結（Relink）", "檔案搬家後重新指向，不用重放。", "中", "", 0],
+    ["代理檔（Proxy）", "4K 素材自動產生低解析度代理，剪輯更順。", "大", "", 0],
+  ]},
+  { code: "QU", name: "佇列與工作", items: [
+    ["經過時間每秒更新", "不再只在畫面重繪時更新。", "小", "37", 0],
+    ["拖曳調整工作順序", "把急的工作拉到前面。", "中", "", 0],
+    ["推播條件可選", "只通知失敗，或整批完成才通知。", "小", "", 0],
+    ["語音轉字幕完成推播", "補上 ntfy 通知。", "小", "141", 0],
+    ["失敗自動重試次數", "網路錯誤時自動重試 N 次。", "小", "", 0],
+    ["排程夜間生成", "設定時間才開始跑佇列，白天不佔電腦。", "中", "", 0],
+    ["佇列暫停與恢復", "暫停整個佇列，不取消工作。", "小", "", 0],
+    ["工作記錄匯出", "匯出 CSV，看每個工作花多久、用哪個模型。", "小", "", 0],
+  ]},
+  { code: "UI", name: "介面與快捷鍵", items: [
+    ["跟隨系統主題時圖示即時更新", "左側主題圖示跟著系統切換。", "小", "36", 0],
+    ["下拉選單再按一次就關閉", "不再關閉後立刻重開。", "小", "38", 0],
+    ["指令面板空白時顯示更多", "不只每組前 12 筆，或改顯示最近使用。", "小", "39", 0],
+    ["快捷鍵衝突說明誰生效", "衝突警告指出哪一個指令會作用。", "小", "103", 0],
+    ["對話框裡的按鍵可自訂", "對話框內的確認、取消、切換等按鍵也能改。", "中", "104", 0],
+    ["說明文字跟著自訂鍵位", "不寫死鍵位。", "小", "101", 0],
+    ["片段滑鼠提示更新", "改成符合目前選擇、分割模式的說法。", "小", "196", 0],
+    ["工作區版面儲存", "面板大小與顯示的面板存成版面，可切換。", "中", "", 0],
+    ["首次使用導覽", "第一次開啟時逐步指出分鏡、生成、剪輯、輸出。", "中", "", 0],
+    ["英文介面", "切換英文，方便海外合作者使用。", "大", "", 0],
+    ["介面字級縮放", "高解析螢幕或樂齡使用者可放大全部文字。", "小", "", 0],
+    ["時間軸迷你導覽列", "長片顯示整條縮圖，點擊跳轉。", "中", "", 0],
+  ]},
+  { code: "PF", name: "效能", items: [
+    ["匯入影片只解碼一次", "波形與縮圖共用一次解碼。", "小", "143", 0],
+    ["大量片段只繪製可見範圍", "超過 500 個片段時時間軸仍流暢。", "中", "", 0],
+    ["縮圖快取到磁碟", "重開專案不用重算。", "小", "", 0],
+    ["專案存檔改增量寫入", "大型專案存檔不卡頓。", "中", "", 0],
+    ["長音檔解碼不卡畫面", "預覽用的音訊解碼移到背景。", "中", "", 0],
+    ["Real-ESRGAN 放大進度回報", "進度條改看實際處理格數。", "小", "81", 0],
+  ]},
+  { code: "QA", name: "穩定性、測試與程式碼", items: [
+    ["拆分 ops.py", "831 行超過 800 行上限，依功能拆檔。", "小", "202", 0],
+    ["剪輯指令前後端合一", "目前兩份實作，改一處容易漏另一處。", "大", "171", 0],
+    ["前端自動化測試", "參考圖區、匯入音量、音量表補瀏覽器自動測試。", "中", "122", 0],
+    ["預覽與輸出逐像素比對", "確認預覽所見就是輸出結果。", "中", "149", 0],
+    ["雲端供應商錄製回放測試", "錄下真實回應做回放，取代手寫 mock。", "中", "4,84", 0],
+    ["真機快捷鍵實按驗收", "F1、F3、F5～F7、Ctrl+R 等在 APP 視窗實按一次。", "小", "167", 0],
+    ["超過 2000 個操作自動分批", "放寬單次操作上限。", "小", "206", 0],
+    ["專案歷史版本", "每次存檔留快照，可回到任一時間點。", "中", "", 0],
+    ["當機資訊收集", "當機時打包記錄檔與專案狀態，方便除錯。", "小", "", 0],
+    ["長時間穩定性測試", "連續生成 50 個鏡頭、剪輯 2 小時不中斷。", "中", "", 0],
+  ]},
+  { code: "IN", name: "安裝、更新與發佈", items: [
+    ["執行檔數位簽章", "避免 Windows SmartScreen 警告。", "中", "125", 0],
+    ["全新 Windows 安裝驗收", "在乾淨的虛擬機跑一次執行檔。", "小", "124", 0],
+    ["依賴下載斷點續傳與備援來源", "網路不穩時不用從頭下載。", "中", "126", 0],
+    ["APP 內檢查更新", "啟動時比對 GitHub 最新版並提示。", "中", "", 0],
+    ["依賴版本可更新", "不再寫死版本。", "中", "127", 0],
+    ["換版後舊視窗自動重新載入", "舊程序被換掉時通知已開的視窗重載。", "小", "221", 0],
+  ]},
+  { code: "AI", name: "Claude 整合與 API", items: [
+    ["執行檔版 vc_client 也比對 build", "只裝執行檔時也能偵測舊版程序。", "小", "219", 0],
+    ["MCP 伺服器", "讓 Claude 直接呼叫分鏡、生成、輸出指令。", "大", "", 1],
+    ["Claude 審片報告", "輸出後抽樣畫格與字幕給 Claude 檢查，列出問題清單。", "中", "", 1],
+    ["用 Claude 濃縮字幕", "字幕太長時一鍵濃縮到每秒 4～5 字。", "中", "", 0],
+    ["劇本細拆模型比較", "比較各文字模型細拆品質，挑最佳的當預設。", "中", "180", 1],
+    ["本機 API 文件與範例", "整理端點與範例，方便寫自動化腳本。", "小", "", 0],
+  ]},
+];
+
+const KEY = "vc-improve-2026-10-24";
+const THEME_KEY = "vc-improve-theme";
+const EFFORT_CLASS = { "小": "e-s", "中": "e-m", "大": "e-l" };
+
+const ITEMS = DATA.flatMap((c) => c.items.map((it, i) => ({
+  id: `${c.code}-${String(i + 1).padStart(2, "0")}`,
+  cat: c.code,
+  catName: c.name,
+  title: it[0],
+  why: it[1],
+  effort: it[2],
+  gaps: it[3] ? it[3].split(",").map((n) => `#${n}`) : [],
+  spike: Boolean(it[4]),
+})));
+const BY_ID = new Map(ITEMS.map((it) => [it.id, it]));
+
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+
+function load() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY));
+    if (saved && typeof saved.picked === "object") return { picked: saved.picked, note: saved.note || "" };
+  } catch (err) { /* storage blocked or corrupt: start empty */ }
+  return { picked: {}, note: "" };
+}
+
+let state = load();
+let filter = { q: "", cat: "", effort: "", only: false };
+
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (err) { /* private window: keep in memory only */ }
+}
+
+function setPicked(id, value) {
+  const picked = { ...state.picked };
+  if (value) picked[id] = value; else delete picked[id];
+  state = { ...state, picked };
+}
+
+function render() {
+  $("#total").textContent = ITEMS.length;
+  $("#cat").insertAdjacentHTML("beforeend", DATA.map((c) => `<option value="${c.code}">${esc(c.name)}（${c.items.length}）</option>`).join(""));
+  $("#list").innerHTML = DATA.map((c) => `
+    <section class="cat" data-cat="${c.code}">
+      <div class="cat-head"><h2>${esc(c.name)}</h2><span class="cat-count"></span><button type="button" class="btn cat-all">全選本類</button></div>
+      <div class="items">${ITEMS.filter((it) => it.cat === c.code).map(itemHtml).join("")}</div>
+    </section>`).join("") + `<p class="empty" hidden>沒有符合條件的項目。</p>`;
+  $("#note").value = state.note;
+  syncAll();
+}
+
+function itemHtml(it) {
+  const tags = [`<span class="tag ${EFFORT_CLASS[it.effort]}">${it.effort}</span>`]
+    .concat(it.spike ? [`<span class="tag spike">需先驗證</span>`] : [])
+    .concat(it.gaps.map((g) => `<span class="tag gaps">GAPS ${g}</span>`));
+  return `
+    <article class="item" data-id="${it.id}">
+      <label class="pick">
+        <input type="checkbox" aria-label="${esc(it.title)}">
+        <span class="code">${it.id}</span>
+        <span class="body">
+          <span class="t">${esc(it.title)}</span>
+          ${it.why ? `<span class="why">${esc(it.why)}</span>` : ""}
+          <span class="tags">${tags.join("")}</span>
+        </span>
+      </label>
+      <div class="extra">
+        <select class="pri" aria-label="優先順序">
+          <option value="高">優先：高</option><option value="中">優先：中</option><option value="低">優先：低</option>
+        </select>
+        <input class="memo" type="text" placeholder="備註（選填）" aria-label="備註">
+      </div>
+    </article>`;
+}
+
+function syncItem(el) {
+  const pick = state.picked[el.dataset.id];
+  el.classList.toggle("on", Boolean(pick));
+  el.querySelector("input[type=checkbox]").checked = Boolean(pick);
+  if (pick) {
+    el.querySelector(".pri").value = pick.p;
+    const memo = el.querySelector(".memo");
+    if (memo !== document.activeElement) memo.value = pick.n;
+  }
+}
+
+function matches(it) {
+  if (filter.cat && it.cat !== filter.cat) return false;
+  if (filter.effort && it.effort !== filter.effort) return false;
+  if (filter.only && !state.picked[it.id]) return false;
+  if (!filter.q) return true;
+  const hay = `${it.id} ${it.title} ${it.why} ${it.catName} ${it.gaps.map((g) => `gaps ${g}`).join(" ")} ${it.spike ? "需先驗證" : ""}`.toLowerCase();
+  // "#20" must not also match #200～#212, so GAPS numbers compare exactly.
+  return filter.q.split(/\s+/).every((word) => (/^#\d+$/.test(word) ? it.gaps.includes(word) : hay.includes(word)));
+}
+
+function syncAll() {
+  let shown = 0;
+  document.querySelectorAll(".cat").forEach((sec) => {
+    let visible = 0;
+    let on = 0;
+    const items = sec.querySelectorAll(".item");
+    items.forEach((el) => {
+      syncItem(el);
+      const it = BY_ID.get(el.dataset.id);
+      const show = matches(it);
+      el.hidden = !show;
+      if (show) visible += 1;
+      if (state.picked[it.id]) on += 1;
+    });
+    sec.hidden = visible === 0;
+    sec.querySelector(".cat-count").textContent = `已勾 ${on}／${items.length}`;
+    shown += visible;
+  });
+  document.querySelector(".empty").hidden = shown > 0;
+  const total = Object.keys(state.picked).length;
+  $("#count").innerHTML = `已勾選 <b>${total}</b>／${ITEMS.length}　顯示 ${shown} 項`;
+}
+
+function pickedList() {
+  return ITEMS.filter((it) => state.picked[it.id]).map((it) => ({ ...it, priority: state.picked[it.id].p, note: state.picked[it.id].n }));
+}
+
+function asText() {
+  const list = pickedList();
+  const lines = [`Video Console 改進清單勾選結果（清單版本 2026-10-24）`, `勾選 ${list.length}／${ITEMS.length} 項`, ""];
+  DATA.forEach((c) => {
+    const rows = list.filter((it) => it.cat === c.code);
+    if (!rows.length) return;
+    lines.push(`【${c.name}】`);
+    rows.forEach((it) => {
+      const extras = [`工作量：${it.effort}`, `優先：${it.priority}`]
+        .concat(it.spike ? ["需先驗證"] : [])
+        .concat(it.gaps.length ? [`GAPS ${it.gaps.join("、")}`] : [])
+        .concat(it.note ? [`備註：${it.note}`] : []);
+      lines.push(`${it.id} ${it.title}｜${extras.join("｜")}`);
+    });
+    lines.push("");
+  });
+  if (state.note.trim()) lines.push("【整體備註】", state.note.trim());
+  return lines.join("\n").trim() + "\n";
+}
+
+function asJson() {
+  return JSON.stringify({
+    list: "Video Console 改進清單",
+    version: "2026-10-24",
+    total: ITEMS.length,
+    picked: pickedList().map((it) => ({ id: it.id, category: it.catName, title: it.title, effort: it.effort, spike: it.spike, gaps: it.gaps, priority: it.priority, note: it.note })),
+    note: state.note.trim(),
+  }, null, 2);
+}
+
+let toastTimer = 0;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+function nothingPicked() {
+  if (Object.keys(state.picked).length) return false;
+  toast("還沒有勾選任何項目");
+  return true;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (err) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
+}
+
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type: `${type};charset=utf-8` }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function applyTheme(theme) {
+  if (theme) document.documentElement.dataset.theme = theme;
+  else delete document.documentElement.dataset.theme;
+}
+
+// Events
+$("#list").addEventListener("change", (e) => {
+  const el = e.target.closest(".item");
+  if (!el) return;
+  const id = el.dataset.id;
+  if (e.target.type === "checkbox") setPicked(id, e.target.checked ? { p: "中", n: "" } : null);
+  else if (e.target.classList.contains("pri")) setPicked(id, { ...state.picked[id], p: e.target.value });
+  else return;
+  save();
+  syncAll();
+});
+
+$("#list").addEventListener("input", (e) => {
+  if (!e.target.classList.contains("memo")) return;
+  const id = e.target.closest(".item").dataset.id;
+  setPicked(id, { ...state.picked[id], n: e.target.value });
+  save();
+});
+
+$("#list").addEventListener("click", (e) => {
+  const btn = e.target.closest(".cat-all");
+  if (!btn) return;
+  const items = [...btn.closest(".cat").querySelectorAll(".item:not([hidden])")];
+  const allOn = items.every((el) => state.picked[el.dataset.id]);
+  items.forEach((el) => setPicked(el.dataset.id, allOn ? null : (state.picked[el.dataset.id] || { p: "中", n: "" })));
+  save();
+  syncAll();
+});
+
+$("#q").addEventListener("input", (e) => { filter = { ...filter, q: e.target.value.trim().toLowerCase() }; syncAll(); });
+$("#cat").addEventListener("change", (e) => { filter = { ...filter, cat: e.target.value }; syncAll(); });
+$("#only").addEventListener("change", (e) => { filter = { ...filter, only: e.target.checked }; syncAll(); });
+$("#effort").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  document.querySelectorAll("#effort button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+  filter = { ...filter, effort: btn.dataset.v };
+  syncAll();
+});
+
+$("#selVisible").addEventListener("click", () => {
+  const visible = [...document.querySelectorAll(".cat:not([hidden]) .item:not([hidden])")];
+  visible.forEach((el) => setPicked(el.dataset.id, state.picked[el.dataset.id] || { p: "中", n: "" }));
+  save();
+  syncAll();
+  toast(`已勾選目前顯示的 ${visible.length} 項`);
+});
+
+$("#clearAll").addEventListener("click", () => {
+  const n = Object.keys(state.picked).length;
+  if (!n || !confirm(`確定清除全部 ${n} 項勾選與備註？`)) return;
+  state = { ...state, picked: {} };
+  save();
+  syncAll();
+});
+
+$("#note").addEventListener("input", (e) => { state = { ...state, note: e.target.value }; save(); });
+
+$("#copy").addEventListener("click", async () => {
+  if (nothingPicked()) return;
+  const ok = await copyText(asText());
+  toast(ok ? `已複製 ${Object.keys(state.picked).length} 項，貼回給 Claude 即可` : "複製失敗，請改用「下載 TXT」");
+});
+$("#dlTxt").addEventListener("click", () => { if (!nothingPicked()) download("改進清單勾選結果.txt", asText(), "text/plain"); });
+$("#dlJson").addEventListener("click", () => { if (!nothingPicked()) download("改進清單勾選結果.json", asJson(), "application/json"); });
+
+$("#theme").addEventListener("click", () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const current = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = current === "dark" ? "light" : "dark";
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch (err) { /* ignore */ }
+});
+
+try { applyTheme(localStorage.getItem(THEME_KEY)); } catch (err) { /* ignore */ }
+render();
+</script>
+</body>
+</html>

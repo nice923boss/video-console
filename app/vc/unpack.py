@@ -55,6 +55,9 @@ def _prune(project: dict, restored: set[str]) -> int:
         if shot.get("ref") not in project["takes"] and shot.get("ref") not in project["media"]:
             shot["ref"] = None
         shot["extraRefs"] = [r for r in shot.get("extraRefs") or [] if r in project["takes"] or r in project["media"]]
+    for member in project.get("cast") or []:
+        if isinstance(member, dict) and member.get("lookRef") not in project["takes"] and member.get("lookRef") not in project["media"]:
+            member["lookRef"] = None
     audio = project.get("audio") if isinstance(project.get("audio"), list) else []
     project["audio"] = [c for c in audio if isinstance(c, dict) and c.get("mediaId") in project["media"]]
     layers = project.get("layers") if isinstance(project.get("layers"), list) else []

@@ -13,8 +13,10 @@ function isTyping(el) {
 export function comboOf(e) {
   let key = e.key === " " ? "space" : (e.key || "").toLowerCase();
   if (key === "esc") key = "escape";
-  // Option on a Mac turns letters into symbols (Option+C types "ç"), so read the physical key instead.
-  if (e.altKey && /^(Key[A-Z]|Digit[0-9])$/.test(e.code || "")) key = e.code.slice(-1).toLowerCase();
+  // Option on a Mac turns letters into symbols (Option+C types "ç"), and Shift turns digits into symbols
+  // (Ctrl+Shift+8 arrives as "*"), so read the physical key instead.
+  const shiftedMod = e.shiftKey && (e.ctrlKey || e.metaKey);
+  if ((e.altKey || shiftedMod) && /^(Key[A-Z]|Digit[0-9])$/.test(e.code || "")) key = e.code.slice(-1).toLowerCase();
   const parts = [];
   if (e.ctrlKey || e.metaKey) parts.push("mod");
   if (e.altKey) parts.push("alt");

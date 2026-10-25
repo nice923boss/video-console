@@ -10,17 +10,17 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .edits import track_busy
-from .export import export_options, render
+from .export import AUDIO_CODECS, export_options, render
 from .exportdir import ensure_root, export_root, record_export
 from .jobs import JobControl
 from .media import KENBURNS, KENBURNS_LABELS, Media
-from .ops import new_overlay, valid_id
+from .opfields import new_overlay, valid_id
 from .package import build_package
 from .sequence import VOICE_TRACK, build_sequence
 from .settings import SettingsStore
 from .store import ProjectStore
-from .takes import (IMPORT_DIR, TAKE_DIR, commit_takes, find_item, find_shot, item_path, new_media, new_take,
-                    shot_label, stage_file)
+from .takes import (IMPORT_DIR, TAKE_DIR, commit_takes, find_item, find_shot, item_path, linked, new_media,
+                    new_take, relink_ops, shot_label, stage_file)
 from .util import AppError, clamp, kind_of, new_id
 
 log = logging.getLogger("vc.localjobs")
@@ -125,7 +125,7 @@ class LocalJobs:
             prompt=item.get("prompt") or "", negative=item.get("negative") or "", seed=item.get("seed"),
             params={"duration": p["duration"], "preset": p["preset"]},
         )
-        commit_takes(self._store, ctl.pid, [take], "activeVideo")
+        commit_takes(self._store, ctl.pid, [take], "activeVideo", link=linked(ctl))
         return {"takeIds": [tid], "message": "運鏡動畫完成"}
 
     # ---------------------------------------------------------------- lastframe
@@ -185,7 +185,7 @@ class LocalJobs:
             source={"backend": "local", "tool": "lastframe", "from": item["id"]},
             prompt=item.get("prompt") or "", negative=item.get("negative") or "",
         )
-        commit_takes(self._store, ctl.pid, [take], "activeImage")
+        commit_takes(self._store, ctl.pid, [take], "activeImage", link=linked(ctl))
         return {"takeIds": [tid], "message": "已擷取畫面"}
 
     # ---------------------------------------------------------------- reverse
@@ -226,7 +226,7 @@ class LocalJobs:
             t_in, t_out = float(shot.get("trimIn") or 0.0), shot.get("trimOut")
             extra = {"trimIn": round(max(0.0, dur - float(t_out)), 3) if t_out is not None else 0.0,
                      "trimOut": round(dur - t_in, 3) if t_in > 0 else None}
-        commit_takes(self._store, ctl.pid, [take], "activeVideo", extra)
+        commit_takes(self._store, ctl.pid, [take], "activeVideo", extra, link=linked(ctl))
         return {"takeIds": [tid], "message": "倒放完成"}
 
     # ---------------------------------------------------------------- ingest
@@ -241,9 +241,20 @@ class LocalJobs:
         if kind is None:
             raise AppError(f"不支援的檔案類型：{Path(rel).suffix}", 415)
         target = payload.get("target") or "library"
-        if target not in ("library", "shot"):
+        if target not in ("library", "shot", "relink"):
             raise AppError("匯入目標不正確")
         out: dict[str, Any] = {"upload": rel, "name": name, "target": target}
+        if target == "relink":
+            old = project["media"].get(payload.get("media") or "")
+            if old is None:
+                raise AppError("找不到要重新連結的素材", 404)
+            if old.get("kind") != kind:
+                names = {"image": "圖片", "video": "影片", "audio": "聲音"}
+                raise AppError(f"請選同類型的檔案：「{old.get('name')}」是{names.get(old.get('kind'), '素材')}")
+            return {"title": f"重新連結：{old.get('name')} ← {name}", "lane": "local:ffmpeg", "shotId": None,
+                    "payload": {**out, "media": old["id"]}}
+        if kind == "audio" and payload.get("gain") is not None:
+            out["gain"] = round(clamp(number(payload.get("gain"), 1.0), 0.0, 4.0), 4)
         shot_key = None
         title = f"匯入：{name}"
         if target == "shot":
@@ -278,32 +289,50 @@ class LocalJobs:
         src = work / f"source{upload.suffix.lower()}"
         _link_or_copy(upload, src)
         ctl.progress(0.05, "處理檔案")
-        if p["target"] == "shot":
+        if p["target"] == "relink":
+            staged = stage_file(media, pdir, src, IMPORT_DIR, new_id("m"), cancelled=ctl.cancelled,
+                                on_progress=ctl.progress)
+            with self._store.locked(ctl.pid):
+                project = self._store.get(ctl.pid)
+                item = project["media"].get(p["media"])
+                if item is None:
+                    raise AppError("素材已被刪除，沒有重新連結", 410)
+                # Undoable: the user asked for this swap, and the old file stays on disk until cleaned up.
+                self._store.apply(ctl.pid, relink_ops(project, item, staged), origin="job", label="重新連結素材")
+            result: dict[str, Any] = {"mediaIds": [item["id"]]}
+        elif p["target"] == "shot":
             tid = new_id("t")
             staged = stage_file(media, pdir, src, IMPORT_DIR, tid, cancelled=ctl.cancelled, on_progress=ctl.progress)
             take = new_take(ctl.shot_id, staged, take_id=tid, job_id=ctl.id, label=Path(p["name"]).stem[:120],
                             source={"backend": "import", "name": p["name"]})
-            commit_takes(self._store, ctl.pid, [take], "activeImage" if staged["kind"] == "image" else "activeVideo")
-            result: dict[str, Any] = {"takeIds": [tid]}
+            commit_takes(self._store, ctl.pid, [take], "activeImage" if staged["kind"] == "image" else "activeVideo",
+                         link=linked(ctl))
+            result = {"takeIds": [tid]}
         else:
             mid = new_id("m")
             staged = stage_file(media, pdir, src, IMPORT_DIR, mid, cancelled=ctl.cancelled, on_progress=ctl.progress)
             item = new_media(staged, p["name"], mid)
+            if "gain" in p:
+                item["gain"] = p["gain"]  # the volume picked at import; the library's "加到音軌" starts there too
             ops = [{"op": "media.add", "media": item}]
-            if staged["kind"] == "audio" and p.get("track"):
-                clip = {"id": new_id("a"), "mediaId": mid, "name": p["name"][:120], "start": p.get("start", 0.0), "volume": 1.0}
-                # The track it was dropped on, unless that track already plays something there: then one of its own.
-                track = p.get("audioTrack")
-                length = max(0.1, float(item.get("duration") or 0.0))
-                if track and not track_busy(self._store.get(ctl.pid), track, clip["start"], length):
-                    clip["track"] = track
-                ops.append({"op": "audio.add", "item": clip})
-            project = self._store.get(ctl.pid) if p.get("layer") else None
-            if project and any(x.get("id") == p["layer"] for x in project.get("layers", [])):
-                frame = project["settings"]
-                ops.append({"op": "overlay.add", "item": new_overlay(new_id("o"), item, p["layer"], p.get("start", 0.0),
-                                                                    frame["width"], frame["height"])})
-            self._store.apply(ctl.pid, ops, origin="job", undoable=False)
+            # Checked and added under the project lock: two sounds dropped on one spot finish side by side.
+            with self._store.locked(ctl.pid):
+                if staged["kind"] == "audio" and p.get("track"):
+                    clip = {"id": new_id("a"), "mediaId": mid, "name": p["name"][:120], "start": p.get("start", 0.0),
+                            "volume": p.get("gain", 1.0)}
+                    # The track it was dropped on, unless that track already plays something there: then one of its own.
+                    track = p.get("audioTrack")
+                    length = max(0.1, float(item.get("duration") or 0.0))
+                    if track and not track_busy(self._store.get(ctl.pid), track, clip["start"], length):
+                        clip["track"] = track
+                    ops.append({"op": "audio.add", "item": clip})
+                project = self._store.get(ctl.pid) if p.get("layer") else None
+                if project and any(x.get("id") == p["layer"] for x in project.get("layers", [])):
+                    frame = project["settings"]
+                    ops.append({"op": "overlay.add", "item": new_overlay(new_id("o"), item, p["layer"],
+                                                                        p.get("start", 0.0), frame["width"],
+                                                                        frame["height"])})
+                self._store.apply(ctl.pid, ops, origin="job", undoable=False)
             result = {"mediaIds": [mid]}
         upload.unlink(missing_ok=True)
         return {**result, "message": "匯入完成"}
@@ -320,10 +349,13 @@ class LocalJobs:
                 overrides[key] = bool(overrides[key])
         if (overrides.get("encoder") or "auto") not in ENCODERS:
             raise AppError("不支援的影片編碼器")
+        if (overrides.get("format") or "mp4") not in ("mp4", *AUDIO_CODECS):
+            raise AppError("不支援的輸出格式")
         opts = export_options(project, self._settings.section("export"), overrides)
         if not build_sequence(project):
             raise AppError("序列裡沒有任何鏡頭可以輸出（請確認鏡頭有勾選「放入序列」）")
-        return {"title": f"輸出影片：{project['name']}", "lane": "local:export", "shotId": None,
+        what = "音訊" if opts["format"] in AUDIO_CODECS else "影片"
+        return {"title": f"輸出{what}：{project['name']}", "lane": "local:export", "shotId": None,
                 "payload": {"options": opts}}
 
     def _run_export(self, ctl: JobControl, work: Path) -> dict:
@@ -336,13 +368,20 @@ class LocalJobs:
         ctl.progress(0.0, "準備輸出")
         pdir = self._store.project_dir(ctl.pid)
         result = render(media, self._store.get(ctl.pid), pdir, opts, pref,
-                        on_progress=lambda f: ctl.progress(f, "輸出影片中"), cancelled=ctl.cancelled,
+                        on_progress=lambda f: ctl.progress(f, "輸出音訊中" if opts.get("format") in AUDIO_CODECS
+                                                           else "輸出影片中"), cancelled=ctl.cancelled,
                         out_dir=self._export_root())
         record_export(pdir, pdir / result["file"])
         if result["missing"]:
             ctl.note(f"有 {result['missing']} 個鏡頭的畫面檔案遺失，已用文字卡代替")
         if result["empty"]:
             ctl.note(f"有 {result['empty']} 個鏡頭還沒有畫面，已用文字卡代替")
+        loud = result["loudness"]
+        if loud and loud["measured"] is None:
+            ctl.note("混音幾乎沒有聲音，沒有調整響度")
+        elif loud:
+            ctl.note(f"響度從 {loud['measured']:g} 調整到 {loud['target']:g} LUFS"
+                     + ("" if loud["linear"] else "（峰值太高，部分段落經過壓縮）"))
         return {"file": result["file"], "export": result, "message": f"輸出完成：{result['name']}"}
 
     def _prepare_package(self, project: dict, shot_id: str | None, payload: dict) -> dict:

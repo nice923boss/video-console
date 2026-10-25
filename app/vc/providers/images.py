@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .. import net
 from ..util import AppError
-from . import catalog
+from . import catalog, published
 from .base import (Context, Provider, Request, b64decode_loose, clean_model, combo, nearest_ratio, select,
                    url_field, with_avoid)
 
@@ -164,15 +164,15 @@ class StabilityImage(Provider):
     modes = ("t2i", "i2i")
     docs = "https://platform.stability.ai/account/keys"
     notes = ("Core 便宜快速但不吃參考圖（帶參考圖時會自動改用 SD 3.5）；Ultra 品質最高，可帶參考圖。"
-             "Stability 沒有提供模型清單，SD 3.5 選單不會自動更新；要用較新的模型，請改用「fal.ai 圖片」。")
+             "Stability 沒有提供模型清單 API，SD 3.5 選單來自 Video Console 在 GitHub 上維護的清單，按「偵測模型」取得最新版；也可以改用「fal.ai 圖片」。")
     online_test = True
     expected_seconds = 20
     fields = (
         url_field("baseUrl", "API 網址", "https://api.stability.ai"),
         select("service", "服務", [("core", "Stable Image Core（快、便宜）"), ("ultra", "Stable Image Ultra（高品質）"),
                                    ("sd3", "Stable Diffusion 3.5")], "core"),
-        combo("model", "SD 3.5 模型", ["sd3.5-large", "sd3.5-large-turbo", "sd3.5-medium", "sd3.5-flash"],
-              "sd3.5-large", help="服務選 Stable Diffusion 3.5 時使用"),
+        combo("model", "SD 3.5 模型", published.options("stability-image", "model"), "sd3.5-large",
+              help="服務選 Stable Diffusion 3.5 時使用"),
         select("stylePreset", "風格預設（僅 Core）",
                [("", "不指定"), ("photographic", "攝影"), ("cinematic", "電影感"), ("anime", "動漫"),
                 ("digital-art", "數位繪畫"), ("3d-model", "3D 模型"), ("analog-film", "底片"),
@@ -180,6 +180,10 @@ class StabilityImage(Provider):
                 ("pixel-art", "像素")], ""),
     )
     ASPECTS = ("16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21")
+    model_keys = {"t2i": "model", "i2i": "model"}
+
+    def detect_models(self, ctx: Context) -> dict[str, dict]:
+        return published.detect(self.id, ctx.config, self.vendor)
 
     def run(self, ctx: Context, req: Request) -> list[Path]:
         cfg = ctx.config

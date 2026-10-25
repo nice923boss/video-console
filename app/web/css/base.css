@@ -101,6 +101,7 @@
 }
 
 :root {
+  --text-scale: 1; /* settings ui.textScale: every font size is multiplied by it */
   --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft JhengHei UI", "Noto Sans TC", system-ui, sans-serif;
   --mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
   --r-card: 10px;
@@ -131,7 +132,7 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13.5px/1.5 var(--font);
+  font: calc(13.5px * var(--text-scale))/1.5 var(--font);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
@@ -311,7 +312,7 @@ svg.icon {
 }
 
 .eyebrow {
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 700;
   letter-spacing: .14em;
   text-transform: uppercase;
@@ -343,7 +344,7 @@ svg.icon {
   background: var(--accent);
   color: var(--accent-ink);
   font-weight: 800;
-  font-size: 19px;
+  font-size: calc(19px * var(--text-scale));
   letter-spacing: -.02em;
   box-shadow: 0 0 0 6px var(--accent-soft);
   animation: vc-breathe 1.8s var(--ease) infinite;
@@ -370,12 +371,12 @@ svg.icon {
   width: 44px;
   height: 44px;
   border-radius: 12px;
-  font-size: 15px;
+  font-size: calc(15px * var(--text-scale));
   animation: none;
 }
 
 .boot-card h1 {
-  font-size: 18px;
+  font-size: calc(18px * var(--text-scale));
 }
 
 .boot-card p {

@@ -6,13 +6,11 @@ Sizes are pixels on a 1080-high frame (PlayResY 1080 with ScaledBorderAndShadow)
 """
 from __future__ import annotations
 
-import logging
 import re
-import sys
+from typing import Callable
 
-from .ops import DEFAULT_CAPTION_STYLE
-
-log = logging.getLogger("vc.captions")
+from .fontmetrics import measurer, registry_fonts
+from .opfields import DEFAULT_CAPTION_STYLE
 
 PLAY_Y = 1080
 # Row (caption "position") and horizontal alignment to the ASS numpad alignment.
@@ -97,6 +95,91 @@ def _shadow_tags(s: dict) -> str:
     return f"\\1a&HFF&{blur}"
 
 
+# Chrome keeps these off the start of a line (closing punctuation) and the end of one (opening brackets).
+_NO_START = set("，。、．,.!?！？;；:：」』）)》〉】]}…%％〜～・")
+_NO_END = set("「『（(《〈【[{")
+# A run of spaces, a word of non-CJK letters (with its punctuation), or one CJK / full-width character.
+_TOKEN = re.compile(r"\s+|[^\s⺀-鿿가-힯豈-﫿＀-￯]+|.")
+
+
+def wrap_text(text: str, limit: float, width: Callable[[str], float]) -> list[str]:
+    """The caption's lines as the preview wraps them: its own line breaks, then greedy breaks at limit pixels.
+
+    Chinese breaks between any two characters, other text only at spaces (a word longer than the line stays
+    whole), and closing punctuation pulls the character before it down rather than starting a line.
+    """
+    lines = []
+    for para in text.split("\n"):
+        line: list[str] = []
+        used = 0.0
+        for tok in _TOKEN.findall(para):
+            if line and not tok.isspace() and used + width(tok) > limit:
+                carry = []
+                if tok[0] in _NO_START and len(line) > 1 and not line[-1].isspace():
+                    carry.append(line.pop())
+                while len(line) > 1 and line[-1][-1] in _NO_END:
+                    carry.insert(0, line.pop())
+                lines.append("".join(line).rstrip())
+                line = carry
+                used = sum(width(t) for t in line)
+            if line or not tok.isspace():
+                line.append(tok)
+                used += width(tok)
+        lines.append("".join(line).rstrip())
+    return lines
+
+
+def wrap_width(style: dict, point: tuple[float, float] | None, play_x: int) -> float:
+    """How wide a line may run: the frame less the side margins, or for a dragged caption the room between its
+    anchor and the frame edge it grows toward (at least three font sizes), so it never leaves the frame."""
+    margin = float(style["marginH"])
+    full = play_x - 2 * margin
+    if point is None:
+        return full
+    x = point[0] * play_x
+    room = {"left": play_x - x - margin, "right": x - margin}.get(style["align"], 2 * (min(x, play_x - x) - margin))
+    return max(min(full, room), 3 * float(style["size"]))
+
+
+def stack_dragged(boxes: list[dict]) -> dict:
+    """How far each dragged caption moves down (frame pixels; negative is up) so two shown at once do not cover
+    each other (CP-08). libass leaves \\pos captions where they are, so this does what it does for rows: in order of
+    start (list order for a tie), a caption that would cover one placed before it moves away from the nearer frame
+    edge, up in the lower half and down in the upper half, until it is clear. The preview runs the same steps.
+
+    boxes: {key, start, end, left, right, top, bottom} in frame pixels.
+    """
+    placed: list[dict] = []
+    shifts: dict = {}
+    for b in sorted(boxes, key=lambda b: b["start"]):
+        up = b["top"] + b["bottom"] >= PLAY_Y
+        dy = 0.0
+        while True:
+            hit = next((p for p in placed if p["start"] < b["end"] and b["start"] < p["end"]
+                        and p["left"] < b["right"] and b["left"] < p["right"]
+                        and p["top"] < b["bottom"] + dy and b["top"] + dy < p["bottom"]), None)
+            if hit is None:
+                break
+            # Each step clears the caption it hit for good, so this ends after at most len(placed) steps.
+            dy = hit["top"] - b["bottom"] if up else hit["bottom"] - b["top"]
+        placed.append({**b, "top": b["top"] + dy, "bottom": b["bottom"] + dy})
+        shifts[b["key"]] = dy
+    return shifts
+
+
+def _drag_box(key: int, cap: dict, s: dict, point: tuple[float, float], lines: list[str],
+              width: Callable[[str], float], play_x: int) -> dict:
+    """A dragged caption's box in frame pixels: its widest line by its lines one size apart around the anchor
+    (\\an4/5/6 centre it vertically), grown by the box padding when it has a box."""
+    w = max(width(line) for line in lines)
+    h = len(lines) * float(s["size"])
+    x, y = point[0] * play_x, point[1] * PLAY_Y
+    left = {"left": x, "right": x - w}.get(s["align"], x - w / 2)
+    pad = float(s["boxPadding"]) if s["box"] else 0.0
+    return {"key": key, "start": float(cap["start"]), "end": float(cap["end"]),
+            "left": left - pad, "right": left + w + pad, "top": y - h / 2 - pad, "bottom": y + h / 2 + pad}
+
+
 def caption_ass(project: dict, captions: list[dict], play_x: int, legacy_size: int) -> tuple[list[str], list[str]]:
     """ASS style lines and dialogue lines for the captions to burn in.
 
@@ -105,21 +188,28 @@ def caption_ass(project: dict, captions: list[dict], play_x: int, legacy_size: i
     keys: dict[str | None, str] = {}
     styles: list[str] = []
     events: list[str] = []
+    laid = []
     for cap in captions:
         s = resolve_style(project, cap, legacy_size)
+        point = anchor(s, cap)
+        width = measurer(s["font"], s["bold"], float(s["size"]), float(s["spacing"]))
+        lines = wrap_text((cap.get("text") or "").strip().replace("\r\n", "\n"), wrap_width(s, point, play_x), width)
+        laid.append((cap, s, point, lines, width))
+    shifts = stack_dragged([_drag_box(i, cap, s, point, lines, width, play_x)
+                            for i, (cap, s, point, lines, width) in enumerate(laid) if point is not None])
+    for i, (cap, s, point, lines, _) in enumerate(laid):
         if s["id"] not in keys:
             keys[s["id"]] = f"C{len(keys) + 1}"
             styles += _style_lines(keys[s["id"]], s)
         key = keys[s["id"]]
-        point = anchor(s, cap)
         if point is None:
             an = _AN.get(cap.get("position") or "bottom", _AN["bottom"])[s["align"]]
             place = f"\\an{an}"
         else:
             an = _AN["middle"][s["align"]]
-            place = f"\\an{an}\\pos({round(point[0] * play_x)},{round(point[1] * PLAY_Y)})"
+            place = f"\\an{an}\\pos({round(point[0] * play_x)},{round(point[1] * PLAY_Y + shifts[i])})"
         times = f"{ass_time(float(cap['start']))},{ass_time(float(cap['end']))}"
-        text = ass_text((cap.get("text") or "").strip())
+        text = ass_text("\n".join(lines))
         if s["box"]:
             events.append(f"Dialogue: 1,{times},{key}B,,0,0,0,,{{{place}}}{text}")
         if s["shadow"]:
@@ -171,23 +261,8 @@ def _family_names(value_name: str, file_name: str) -> list[str]:
 def list_fonts() -> list[dict]:
     """Installed font families, CJK ones with a Chinese name first; [] off Windows."""
     families: set[str] = set()
-    if sys.platform == "win32":
-        import winreg
-
-        key_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
-        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-            try:
-                with winreg.OpenKey(hive, key_path) as key:
-                    i = 0
-                    while True:
-                        try:
-                            value_name, file_name, _ = winreg.EnumValue(key, i)
-                        except OSError:
-                            break
-                        families.update(_family_names(value_name, file_name))
-                        i += 1
-            except OSError as exc:
-                log.debug("Font registry key unreadable in hive %s: %s", hive, exc)
+    for value_name, file_name in registry_fonts():
+        families.update(_family_names(value_name, file_name))
     labelled = sorted((f for f in families if f in FONT_LABELS), key=list(FONT_LABELS).index)
     rest = sorted((f for f in families if f not in FONT_LABELS), key=str.lower)
     return [{"name": f, "label": FONT_LABELS.get(f, f)} for f in labelled + rest]

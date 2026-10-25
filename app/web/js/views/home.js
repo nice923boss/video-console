@@ -14,6 +14,7 @@ import { toast, toastError } from "../components/toast.js";
 import { openNewProject } from "../dialogs/new-project.js";
 import { openScriptImport } from "../dialogs/script-import.js";
 import { openExportDialog } from "../dialogs/export-dialog.js";
+import { openBatchExport } from "../dialogs/batch-export.js";
 
 const enc = encodeURIComponent;
 const SORTS = [
@@ -234,8 +235,10 @@ export function HomeView() {
             <h2>所有專案<span class="count">${projects.length}</span></h2>
             <${Button} size="sm" kind="ghost" icon="folder-open" title="開啟存放所有專案的資料夾"
               onClick=${() => revealSystemFolder("projects")}>專案資料夾<//>
-            <${Button} size="sm" kind="ghost" icon="film" title="開啟所有專案輸出的影片與 ZIP 所在的資料夾"
+            <${Button} size="sm" kind="ghost" icon="film" title="開啟所有專案輸出的影片、音訊與 ZIP 所在的資料夾"
               onClick=${() => revealSystemFolder("exports")}>匯出資料夾<//>
+            <${Button} size="sm" kind="ghost" icon="queue" title="勾選多個專案，一次排進輸出佇列"
+              onClick=${openBatchExport}>批次輸出<//>
             <span class="grow"></span>
             <label class="search-box">
               <${Icon} name="search" size=${15} />

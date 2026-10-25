@@ -14,6 +14,9 @@ import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
 import { keyHint } from "../lib/keymap.js";
 import { reverseClip, detachAudio, isReverse } from "./tl-commands.js";
+import { GradeEditor } from "./grade-panel.js";
+import { MaskEditor } from "./mask-panel.js";
+import { fullGrade, isNeutral } from "../lib/grade.js";
 
 const NONE = [];
 const MIN_LEN = 0.1;
@@ -34,9 +37,11 @@ function playheadSource(clip) {
 
 function SequenceSection({ shot, clip, position, total }) {
   const inSeq = shot.inSequence !== false;
+  const held = Object.values(shot.parked || {}).reduce((n, list) => n + list.length, 0);
   return html`<${Section} title="輸出序列" icon="rows">
     <${Toggle} checked=${inSeq} label="放入輸出序列" hint="關掉後預覽與匯出都會跳過這個鏡頭，生成結果仍會保留"
       onChange=${(v) => updateShot(shot.id, { inSequence: v }, { label: v ? "放入序列" : "移出序列" })} />
+    ${held > 0 && html`<${Hint}>${held} 個字幕、音訊與畫面隨鏡頭收起，放回序列時回到鏡頭上的原位。<//>`}
     ${clip && html`<div class="seq-pos">
       <div class="seq-pos-text">
         <span class="dim">第 ${position} 段，共 ${total} 段</span>
@@ -112,8 +117,7 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
   const options = (SPEEDS.includes(speed) ? SPEEDS : [...SPEEDS, speed].sort((a, b) => a - b))
     .map((v) => ({ value: v, label: `${v}x` }));
   let note = null;
-  if (detached) note = `原聲已分離到音訊軌，要先還原原聲${keyHint("edit.detachAudio")}才能變速或倒放。`;
-  else if (speed !== 1 && vid.hasAudio) note = "變速鏡頭不能分離原聲；要分離，先把速度改回 1x。";
+  if (detached) note = `原聲已分離到音訊軌，要先還原原聲${keyHint("edit.detachAudio")}才能變速；倒放只換畫面，原聲照常順向播放。`;
 
   return html`<${Section} title="速度與方向" icon="clock">
     <div class="row-2">
@@ -122,12 +126,12 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
           onChange=${(v) => updateShot(shot.id, { speed: v }, { label: "變速" })} />
       <//>
       <${Field} label="方向">
-        <${Button} icon="undo" busy=${rendering} disabled=${detached || rendering}
+        <${Button} icon="undo" busy=${rendering} disabled=${rendering}
           title=${`倒放${keyHint("edit.reverseClip")}；第一次會先產生倒放的影片`}
           onClick=${() => reverseClip(project, clips, sel)}>${rendering ? "產生中" : reversed ? "取消倒放" : "倒放"}<//>
       <//>
     </div>
-    ${vid.hasAudio && html`<${Button} icon="music" disabled=${!detached && speed !== 1}
+    ${vid.hasAudio && html`<${Button} icon="music"
       title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、調音量"}${keyHint("edit.detachAudio")}`}
       onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}
     ${note && html`<${Hint}>${note}<//>`}
@@ -200,18 +204,40 @@ function MarkSection({ shot }) {
   <//>`;
 }
 
+// The shot's own colour grade (GR-01): only its picture, under any adjustment layer above it.
+function GradeSection({ shot }) {
+  return html`<${Section} title="鏡頭調色" icon="palette" collapsible defaultOpen=${false} id="shot-grade"
+      actions=${!isNeutral(shot.grade) && html`<${Badge} tone="blue">已調色<//>`}>
+    <${GradeEditor} id=${shot.id} saved=${fullGrade(shot.grade)}
+      onSave=${(grade, label) => updateShot(shot.id, { grade }, { label: `鏡頭${label}` })} />
+    <${Hint}>只改這個鏡頭的畫面；時間軸上的調整圖層會再疊在它上面。<//>
+  <//>`;
+}
+
+function MaskSection({ shot }) {
+  const count = (shot.masks || []).length;
+  return html`<${Section} title="遮罩（模糊／馬賽克）" icon="eye-off" collapsible defaultOpen=${false} id="shot-masks"
+      actions=${count > 0 && html`<${Badge} tone="blue">${count} 個<//>`}>
+    <${MaskEditor} shot=${shot} />
+    <${Hint}>遮住人臉或商標；框固定在畫面上，不會跟著移動的物體走，也不蓋到子母畫面與字幕。<//>
+  <//>`;
+}
+
 // Speech-to-subtitle turns the clip's own sound into captions at the clip's place on the timeline.
 function TranscribeSection({ project, shot, vid, clip, busy }) {
   if (!vid || !vid.hasAudio) return null;
   const job = busy.find((j) => j.kind === "transcribe");
   const end = clip ? clip.start + clip.length : 0;
-  const overlap = clip ? project.captions.filter((c) => c.end > clip.start && c.start < end).length : 0;
-  const label = !job ? "轉成字幕" : job.status === "running" ? `轉錄中 ${Math.round((job.progress || 0) * 100)}%` : "排隊中";
+  // captions the last run on this shot added are replaced by the next run; any others in range stay
+  const previous = project.captions.filter((c) => c.sttShot === shot.id).length;
+  const overlap = clip ? project.captions.filter((c) => c.sttShot !== shot.id && c.end > clip.start && c.start < end).length : 0;
+  const label = !job ? (previous ? "重新轉成字幕" : "轉成字幕") : job.status === "running" ? `轉錄中 ${Math.round((job.progress || 0) * 100)}%` : "排隊中";
   return html`<${Section} title="語音轉字幕" icon="captions">
     <${Button} icon="captions" busy=${!!job} disabled=${!clip || !!job} onClick=${() => submitJob("transcribe", shot.id)}>${label}<//>
     ${!clip && html`<${Hint} icon="alert" tone="warn-text">這個鏡頭不在序列裡，放回序列後才能轉成字幕。<//>`}
-    ${clip && overlap > 0 && html`<${Hint} icon="alert" tone="warn-text">片段範圍內已有 ${overlap} 句字幕，轉出的字幕會另外加入，不會取代。<//>`}
-    ${clip && !overlap && html`<${Hint}>辨識修剪範圍內的原聲，字幕直接加到時間軸；不滿意可以按復原整批收回。<//>`}
+    ${clip && previous > 0 && html`<${Hint} icon="alert" tone="warn-text">上次從這個片段轉出的 ${previous} 句字幕會被新結果取代（包含手動改過的），按復原可整批還原。<//>`}
+    ${clip && overlap > 0 && html`<${Hint} icon="alert" tone="warn-text">片段範圍內另有 ${overlap} 句其他字幕，會保留，新字幕另外加入。<//>`}
+    ${clip && !previous && !overlap && html`<${Hint}>辨識修剪範圍內的原聲，字幕直接加到時間軸；不滿意可以按復原整批收回。<//>`}
   <//>`;
 }
 
@@ -231,6 +257,8 @@ export function EditTab({ project, shot, busy = NONE }) {
       ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />
         <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`
       : html`<${StillSection} shot=${shot} img=${img} />`}
+    ${(vid || img) && html`<${GradeSection} shot=${shot} />`}
+    ${(vid || img) && html`<${MaskSection} shot=${shot} />`}
     <${TransitionSection} shot=${shot} clip=${clip} isLast=${pos >= 0 && pos === clips.length - 1} transitions=${transitions} />
     <${TranscribeSection} project=${project} shot=${shot} vid=${vid} clip=${clip} busy=${busy} />`;
 }

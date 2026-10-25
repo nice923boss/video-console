@@ -8,6 +8,7 @@ import { fmtDateTime, fmtRelTime } from "../lib/format.js";
 import { openModal, Modal, confirmDialog } from "../components/overlay.js";
 import { Button, Empty, Spinner } from "../components/ui.js";
 import { toast, toastError } from "../components/toast.js";
+import { undoKeyText } from "../lib/keymap.js";
 
 const enc = encodeURIComponent;
 
@@ -24,7 +25,7 @@ function HistoryBody({ pid, close }) {
     const ok = await confirmDialog({
       title: `還原到 r${item.rev}？`,
       message: `專案內容會換成 ${fmtDateTime(item.time)} 的版本（${item.shots} 個鏡頭）。`
-        + "還原本身也會記進復原紀錄，按 Ctrl+Z 就能回到現在的內容。",
+        + `還原本身也會記進復原紀錄，${undoKeyText()}就能回到現在的內容。`,
       confirmLabel: "還原這個版本",
     });
     if (!ok) return;

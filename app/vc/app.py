@@ -9,16 +9,19 @@ import time
 import uuid
 from pathlib import Path
 
-from . import DEFAULT_PORT, VERSION, api, video2x
+from . import BUILD, DEFAULT_PORT, VERSION, api, video2x
 from .api.deps import deps_status
 from .api.system import system_info
+from .backfill import Backfill
 from .comfy.manager import ComfyManager
 from .comfy.workflows import WorkflowStore
+from .costs import CostLedger
 from .deps import DepInstaller
 from .events import EventBus
 from .exportdir import export_root
 from .jobs import JobManager
 from .llm import LLMClient
+from .lowres import LowRes
 from .media import Media, find_ffmpeg
 from .notify import Notifier
 from .paths import Paths
@@ -27,7 +30,7 @@ from .runners import Runners
 from .secrets import SecretStore
 from .server import HttpServer, Router, serve_in_thread
 from .settings import SettingsStore
-from .store import ProjectStore
+from .store import CACHE_MAX_AGE, CACHE_PREFIXES, ProjectStore
 from .tray import Tray
 from .util import new_id
 
@@ -35,8 +38,6 @@ log = logging.getLogger("vc.app")
 
 IDLE_EXIT_SEC = 120  # no window open and nothing to run for this long: the server exits
 WATCH_SEC = 5
-CACHE_MAX_AGE = 86400
-CACHE_PREFIXES = ("upload-", "job-", "export-")
 CLIENT_ID_RE = re.compile(r"^[a-z0-9-]{8,64}$")
 
 
@@ -57,12 +58,17 @@ class App:
         video2x.PORTABLE_EXE = self.paths.tools / "video2x" / "video2x.exe"
         self.deps = DepInstaller(self.paths.tools, self._deps_changed)
         self.model_catalog = ModelCatalog(self.paths.model_catalog_file)
+        self.costs = CostLedger(self.paths.costs_file, self.bus)
         self.runners = Runners(store=self.store, settings=self.settings, secrets=self.secrets, comfy=self.comfy,
-                               workflows=self.workflows, media=self.media, catalog=self.model_catalog)
-        self.jobs = JobManager(self.paths, self.bus, self.runners)
+                               workflows=self.workflows, media=self.media, catalog=self.model_catalog,
+                               costs=self.costs)
+        self.jobs = JobManager(self.paths, self.bus, self.runners,
+                               retry_limit=lambda: self.settings.section("queue")["autoRetry"])
         self.notifier = Notifier(self.settings, self.secrets, self.bus)
         self.jobs.add_listener(self.notifier.on_job)
         self.llm = LLMClient(self.settings, self.secrets)
+        self.backfill = Backfill(self.store, self.media)
+        self.lowres = LowRes(self.store, self.media)
         self.router = Router()
         api.register(self.router, self)
         self.server: HttpServer | None = None
@@ -91,7 +97,7 @@ class App:
         self.bus.publish("deps", deps_status(self))
 
     def hello(self) -> dict:
-        return {"instance": self.instance, "version": VERSION}
+        return {"instance": self.instance, "version": VERSION, "build": BUILD}
 
     def _client_id(self) -> str:
         """A ComfyUI client id kept across restarts, so resumed jobs still receive their progress events."""
@@ -186,4 +192,5 @@ class App:
             self.comfy.stop()
             self.jobs.stop()
         finally:
+            self.store.close()
             self._stopped.set()

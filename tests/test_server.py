@@ -181,7 +181,8 @@ def test_edits_reach_the_event_stream_and_undo(client: Client, project: dict) ->
     pid, sid = project["id"], project["shots"][0]["id"]
     conn, next_event = sse_reader(client.port)
     try:
-        assert next_event()["type"] == "hello"
+        hello = next_event()
+        assert hello["type"] == "hello" and hello["data"]["build"] == client.json("GET", "/api/ping")["build"]
         op = {"op": "shot.update", "id": sid, "patch": {"name": "日出"}}
         result = client.json("POST", f"/api/projects/{pid}/ops", {"ops": [op], "batch": "b1", "label": "改名"})
         assert result["changed"] is True
@@ -215,6 +216,9 @@ def test_script_parse_then_apply(client: Client, project: dict) -> None:
     # the untouched 鏡頭 1 a new project starts with gives way to the script
     assert [s["id"] for s in saved["shots"]] == applied["shotIds"]
     assert [c["text"] for c in saved["captions"]] == ["爸爸回來了！"]
+    # the caption is bound to the shot it came with (CP-07)
+    spoken = next(i for i, s in enumerate(parsed["shots"]) if s["caption"])
+    assert saved["captions"][0]["shot"] == applied["shotIds"][spoken]
     client.json("POST", f"/api/projects/{pid}/script/apply", {"shots": []}, status=400)
     client.json("POST", f"/api/projects/{pid}/undo")
     assert [s["name"] for s in client.json("GET", f"/api/projects/{pid}")["project"]["shots"]] == ["鏡頭 1"]
@@ -227,6 +231,7 @@ def test_script_apply_keeps_a_shot_the_user_wrote(client: Client, project: dict)
     applied = client.json("POST", f"/api/projects/{pid}/script/apply", {"shots": parsed["shots"]})
     saved = client.json("GET", f"/api/projects/{pid}")["project"]
     assert [s["id"] for s in saved["shots"]] == [sid, *applied["shotIds"]]
+
 
 
 def test_word_script_is_read_as_text(client: Client) -> None:
@@ -347,7 +352,7 @@ def test_picture_in_picture_tracks_edit_and_undo(app: App, client: Client, proje
     p = saved()
     assert [x["id"] for x in p["layers"]] == ["l_low00000a", "l_top00000a"]  # bottom to top
     assert p["layers"][1] == {"id": "l_top00000a", "name": "", "hidden": True, "muted": True}
-    assert p["overlays"][0]["x"] == 1.0 and p["overlays"][0]["layer"] == "l_low00000a"
+    assert p["overlays"][0]["x"] == 4.0 and p["overlays"][0]["layer"] == "l_low00000a"
     assert p["tracks"]["videoHidden"] is True and p["tracks"]["captionsHidden"] is True
 
     send({"op": "layer.delete", "id": "l_low00000a"})
@@ -723,6 +728,33 @@ def test_cache_sweep_removes_only_leftovers(app: App, project: dict) -> None:
     app._sweep_cache()
     assert fresh.exists()
     assert not old.exists() and not job_dir.exists() and not part.exists()
+
+
+def test_purge_also_clears_stale_leftovers(app: App, client: Client, project: dict) -> None:
+    pdir = app.store.project_dir(project["id"])
+    cache = pdir / "media" / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    job_dir, fresh, save = cache / "job-j_old", cache / "upload-u_new0000000.png", pdir / ".tmp-abc.json"
+    job_dir.mkdir()
+    (job_dir / "frame.png").write_bytes(b"x" * 10)
+    fresh.write_bytes(b"x")
+    save.write_bytes(b"{}")
+    two_days_ago = time.time() - 2 * 86400
+    for f in (job_dir, save):
+        os.utime(f, (two_days_ago, two_days_ago))
+
+    usage = client.json("GET", f"/api/projects/{project['id']}/usage")
+    assert (usage["orphans"], usage["unused"]) == (2, 12)
+    assert client.json("POST", f"/api/projects/{project['id']}/purge")["freed"] == 12
+    assert not job_dir.exists() and not save.exists() and fresh.exists()
+
+
+def test_export_check_lists_what_the_export_would_get_wrong(client: Client, project: dict) -> None:
+    pid = project["id"]
+    shots = client.json("GET", f"/api/projects/{pid}")["project"]["shots"]
+    check = client.json("GET", f"/api/projects/{pid}/export-check")
+    assert check["empty"] == list(range(1, len(shots) + 1)) and check["missing"] == []
+    assert client.json("GET", "/api/projects/p_nothere00/export-check", status=404)
 
 
 def test_launcher_lock_is_exclusive(tmp_path: Path) -> None:

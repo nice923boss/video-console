@@ -27,6 +27,7 @@ class Paths:
         self.secrets_file = self.data / "secrets.json"
         self.jobs_file = self.data / "jobs.json"
         self.model_catalog_file = self.data / "model-catalog.json"
+        self.costs_file = self.data / "costs.json"
         self.pid_file = self.run / "server.json"
 
     def ensure(self) -> None:

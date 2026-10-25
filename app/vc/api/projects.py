@@ -6,6 +6,8 @@ import shutil
 from typing import TYPE_CHECKING, Any
 
 from .. import edits
+from ..exportcheck import export_check
+from ..exportdir import remove_shared_exports
 from ..ops import apply_ops
 from ..pacing import break_down, fill_coverage, pace_notes
 from ..script import MAX_SHOTS, docx_to_text, normalize_shot, parse_script
@@ -42,7 +44,8 @@ def untouched_blank_shot(project: dict) -> str | None:
 
 
 def script_ops(project: dict, defaults: dict, shots: list[dict], index: int, captions: bool) -> list[dict]:
-    """shot.add ops for parsed shots, plus caption.add ops timed to where those shots land in the sequence."""
+    """shot.add ops for parsed shots, plus caption.add ops timed to where those shots land in the sequence and
+    bound to the shot they came with (CP-07)."""
     shot_ops: list[dict] = []
     texts: dict[str, str] = {}
     for i, s in enumerate(shots):
@@ -64,7 +67,8 @@ def script_ops(project: dict, defaults: dict, shots: list[dict], index: int, cap
     caption_ops = [
         {"op": "caption.add", "item": {"id": new_id("c"), "start": clip["start"],
                                        "end": round(clip["start"] + clip["length"], 4),
-                                       "text": texts[clip["shot"]["id"]], "position": "bottom"}}
+                                       "text": texts[clip["shot"]["id"]], "position": "bottom",
+                                       "shot": clip["shot"]["id"]}}
         for clip in build_sequence(work) if clip["shot"]["id"] in texts
     ]
     return shot_ops + caption_ops
@@ -116,16 +120,26 @@ def register(router: Router, app: App) -> None:
         pid = req.params["pid"]
         store.get(pid)
         app.settings.set_last_project(pid)
+        app.backfill.check(pid)
+
+    @router.route("POST", "/api/projects/{pid}/preview-files")
+    def preview_files(req: Request) -> dict:
+        """Make the smaller preview copies of the played video files at body.scale (2 or 4) in the background
+        (PV-06); returns how many are still to be made. Each copy arrives as a project change."""
+        return {"pending": app.lowres.request(req.params["pid"], req.json_object().get("scale"))}
 
     @router.route("DELETE", "/api/projects/{pid}")
-    def project_delete(req: Request) -> None:
+    def project_delete(req: Request) -> dict:
+        """Move the project to the trash; ?exports=1 also deletes what it wrote to the shared export folder."""
         pid = req.params["pid"]
         if app.jobs.active_count(pid):
             raise AppError("這個專案還有工作在執行，請先取消或等待完成", 409)
+        removed, in_use = remove_shared_exports(store.project_dir(pid)) if req.query.get("exports") == "1" else (0, 0)
         store.trash(pid)
         if app.settings.section("ui").get("lastProjectId") == pid:
             app.settings.set_last_project(None)
         app.jobs.clear(pid)
+        return {"removedExports": removed, "exportsInUse": in_use}
 
     @router.route("POST", "/api/projects/{pid}/duplicate")
     def project_duplicate(req: Request) -> dict:
@@ -190,6 +204,18 @@ def register(router: Router, app: App) -> None:
         info = store.usage(req.params["pid"])
         return {"used": info["used"], "unused": info["unused"], "orphans": len(info["orphans"])}
 
+    @router.route("GET", "/api/projects/{pid}/missing")
+    def project_missing(req: Request) -> dict:
+        pid = req.params["pid"]
+        root = store.project_dir(pid)
+        media = store.get(pid)["media"].values()
+        return {"media": [m["id"] for m in media if m.get("file") and not (root / m["file"]).is_file()]}
+
+    @router.route("GET", "/api/projects/{pid}/export-check")
+    def project_export_check(req: Request) -> dict:
+        pid = req.params["pid"]
+        return export_check(store.get(pid), store.project_dir(pid))
+
     @router.route("POST", "/api/projects/{pid}/purge")
     def project_purge(req: Request) -> dict:
         return {"freed": store.purge_orphans(req.params["pid"])}
@@ -251,9 +277,11 @@ def register(router: Router, app: App) -> None:
         count = len(project["shots"])
         index = data.get("index")
         index = count if not isinstance(index, int) or isinstance(index, bool) else max(0, min(count, index))
-        ops = lead + script_ops(project, app.settings.section("defaults"), shots, index,
-                                captions=data.get("captions", True) is not False)
-        result = store.apply(pid, ops, label="匯入劇本")
+        ops = script_ops(project, app.settings.section("defaults"), shots, index,
+                         captions=data.get("captions", True) is not False)
+        # With the timeline's link toggle on, items after the insertion point move back to make room.
+        sent = [{"op": "linked", "ops": ops}] if data.get("link", True) is not False else ops
+        result = store.apply(pid, lead + sent, label="匯入劇本")
         shot_ids = [op["shot"]["id"] for op in ops if op["op"] == "shot.add"]
         return {"rev": result["rev"], "added": len(shot_ids), "captions": sum(op["op"] == "caption.add" for op in ops),
                 "shotIds": shot_ids}

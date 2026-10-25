@@ -2,14 +2,19 @@
 
 Before a batch of shot edits each item is pinned to the clip under its start (the later clip inside a
 transition overlap), at a point in that clip's source. Afterwards the item moves by however far that
-point moved. Items on a shot that left the sequence keep their offset from where that shot used to
-begin. Items the batch itself changed are left alone.
+point moved. Items on a deleted shot keep their offset from where that shot used to begin. Items the
+batch itself changed, and soundtrack clips fixed to the timeline, are left alone.
+
+A shot taken out of the sequence takes the items lying wholly on it along: they leave the project's
+lists and wait in the shot's "parked" field, timed from the shot's start, until it comes back.
 """
 from __future__ import annotations
 
+from .edits import audio_length
 from .sequence import build_sequence
 
 EPS = 1e-4
+LISTS = (("captions", "caption"), ("audio", "audio"), ("overlays", "overlay"), ("adjustments", "adjust"))
 
 
 def _clip_at(clips: list[dict], t: float) -> int:
@@ -24,7 +29,7 @@ def _clip_at(clips: list[dict], t: float) -> int:
 
 def _starts(project: dict) -> dict[tuple[str, str], float]:
     out: dict[tuple[str, str], float] = {}
-    for key in ("captions", "audio", "overlays", "adjustments"):
+    for key, _ in LISTS:
         for item in project.get(key) or []:
             out[(key, item["id"])] = float(item.get("start") or 0.0)
     return out
@@ -56,58 +61,117 @@ def _shift(old_clips: list[dict], new_clips: list[dict], t: float) -> float:
     return gap + local - t
 
 
-def _inside_deleted(old_clips: list[dict], deleted: set[str], start: float, end: float) -> bool:
-    """True when the span start..end sat wholly on a clip whose shot was deleted."""
+def _owner(old_clips: list[dict], shots: set[str], start: float, end: float) -> dict | None:
+    """The clip of one of `shots` that the span start..end sat wholly on, if any."""
     i = _clip_at(old_clips, start)
-    if i < 0 or old_clips[i]["shot"]["id"] not in deleted:
-        return False
-    return end <= old_clips[i]["start"] + old_clips[i]["length"] + EPS
+    if i < 0 or old_clips[i]["shot"]["id"] not in shots:
+        return None
+    return old_clips[i] if end <= old_clips[i]["start"] + old_clips[i]["length"] + EPS else None
 
 
-def follow_ops(before: dict, after: dict) -> list[dict]:
+def _end(project: dict, key: str, item: dict) -> float:
+    start = float(item.get("start") or 0.0)
+    if key == "captions":
+        return float(item.get("end") or 0.0)
+    if key == "audio":
+        return start + audio_length(project, item)
+    return start + float(item.get("length") or 0.0)
+
+
+def _moved(item: dict, d: float) -> dict:
+    out = {**item, "start": round(max(0.0, float(item.get("start") or 0.0) + d), 3)}
+    if "end" in item:
+        out["end"] = round(out["start"] + float(item["end"]) - float(item.get("start") or 0.0), 3)
+    return out
+
+
+def _restore_ops(project: dict, clips: list[dict]) -> list[dict]:
+    """Put back what shots now in the sequence parked, at their new start; items whose file or track was
+    deleted meanwhile stay out."""
+    ops: list[dict] = []
+    layers = {layer["id"] for layer in project.get("layers") or []}
+    for clip in clips:
+        parked = clip["shot"].get("parked")
+        if not parked:
+            continue
+        for key, name in LISTS:
+            for item in parked.get(key) or []:
+                if key == "audio" and item.get("mediaId") not in project["media"] \
+                        and item.get("takeId") not in project["takes"]:
+                    continue
+                if key == "overlays" and (item.get("mediaId") not in project["media"] or item.get("layer") not in layers):
+                    continue
+                ops.append({"op": f"{name}.add", "item": _moved(item, clip["start"])})
+        ops.append({"op": "shot.update", "id": clip["shot"]["id"], "patch": {}, "unset": ["parked"]})
+    return ops
+
+
+def follow_ops(before: dict, after: dict, shift: bool = True) -> list[dict]:
     """Update ops that move the items of `after` to follow its shots, compared with `before`.
 
     Captions lying wholly on a deleted shot go with it (and so do their voice-overs), the way a ripple
-    delete clears the linked tracks; a shot only taken out of the sequence keeps them.
+    delete clears the linked tracks. A shot taken out of the sequence parks the items lying wholly on
+    it, and puts them back when it returns. With shift False only that putting back happens.
     """
-    old_clips = build_sequence(before)
-    if not old_clips:
-        return []
     new_clips = build_sequence(after)
+    ops = _restore_ops(after, new_clips)
+    old_clips = build_sequence(before)
+    if not old_clips or not shift:
+        return ops
     old_starts = _starts(before)
     deleted = {s["id"] for s in before.get("shots") or []} - {s["id"] for s in after.get("shots") or []}
-    ops: list[dict] = []
+    taken_out = {c["shot"]["id"] for c in old_clips} - deleted - {c["shot"]["id"] for c in new_clips}
     caption_shift: dict[str, float] = {}
     dropped: set[str] = set()
+    parked: dict[str, dict[str, list[dict]]] = {}  # shot id -> list key -> items timed from the shot's start
+    parked_caps: dict[str, str] = {}  # caption id -> shot id
+
+    def park(clip: dict, key: str, name: str, item: dict) -> None:
+        parked.setdefault(clip["shot"]["id"], {}).setdefault(key, []).append(_moved(item, -clip["start"]))
+        ops.append({"op": f"{name}.delete", "id": item["id"]})
 
     for cap in after.get("captions") or []:
         start = float(cap.get("start") or 0.0)
         if old_starts.get(("captions", cap["id"])) != start:
             continue
-        if deleted and _inside_deleted(old_clips, deleted, start, float(cap.get("end") or 0.0)):
+        end = float(cap.get("end") or 0.0)
+        if deleted and _owner(old_clips, deleted, start, end):
             dropped.add(cap["id"])
             ops.append({"op": "caption.delete", "id": cap["id"]})
+            continue
+        clip = _owner(old_clips, taken_out, start, end) if taken_out else None
+        if clip:
+            parked_caps[cap["id"]] = clip["shot"]["id"]
+            park(clip, "captions", "caption", cap)
             continue
         d = _shift(old_clips, new_clips, start)
         caption_shift[cap["id"]] = d
         if abs(d) <= EPS:
             continue
         new_start = round(max(0.0, start + d), 3)
-        length = float(cap.get("end") or 0.0) - start
         ops.append({"op": "caption.update", "id": cap["id"],
-                    "patch": {"start": new_start, "end": round(new_start + length, 3)}})
+                    "patch": {"start": new_start, "end": round(new_start + end - start, 3)}})
 
-    for key, name in (("audio", "audio"), ("overlays", "overlay"), ("adjustments", "adjust")):
+    by_shot = {c["shot"]["id"]: c for c in old_clips}
+    for key, name in LISTS[1:]:
         for item in after.get(key) or []:
             start = float(item.get("start") or 0.0)
-            if old_starts.get((key, item["id"])) != start:
+            if old_starts.get((key, item["id"])) != start or item.get("fixed"):
                 continue
             # A voice-over keeps in step with its caption.
             cid = item.get("captionId") if key == "audio" else None
             if cid in dropped:
                 ops.append({"op": "audio.delete", "id": item["id"]})
                 continue
+            clip = by_shot[parked_caps[cid]] if cid in parked_caps else None
+            if clip is None and taken_out and cid not in caption_shift:
+                clip = _owner(old_clips, taken_out, start, _end(after, key, item))
+            if clip:
+                park(clip, key, name, item)
+                continue
             d = caption_shift[cid] if cid in caption_shift else _shift(old_clips, new_clips, start)
             if abs(d) > EPS:
                 ops.append({"op": f"{name}.update", "id": item["id"], "patch": {"start": round(max(0.0, start + d), 3)}})
+    for sid, lists in parked.items():
+        ops.append({"op": "shot.update", "id": sid, "patch": {"parked": lists}})
     return ops

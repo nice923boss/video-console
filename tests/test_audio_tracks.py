@@ -4,14 +4,15 @@ mutes it with its row, a sound dropped on a track lands there unless the track a
 from __future__ import annotations
 
 import shutil
+import threading
 from pathlib import Path
 
 import pytest
 
-from test_server import Client, app, client, needs_ffmpeg, project  # noqa: F401  (server fixtures)
+from test_server import App, Client, app, client, needs_ffmpeg, project  # noqa: F401  (server fixtures)
 from test_timeline_keys import JS, VID, make_project, plan, run_js, with_video
 from test_voice import wav_bytes
-from vc import edits
+from vc import edits, localjobs
 from vc.ops import apply_ops
 from vc.util import AppError
 
@@ -73,6 +74,41 @@ def test_dropped_sound_lands_on_its_track_unless_it_plays_there(client: Client, 
     # The one at 1 s would play over the first (0 to 1.5 s), so it gets a track of its own.
     assert sorted(((a["start"], a.get("track")) for a in audio), key=str) == [
         (0.0, T1), (0.0, "voice"), (1.0, None), (2.0, T1)]
+
+
+@needs_ffmpeg
+def test_dropped_sound_picks_its_track_under_the_project_lock(app: App, client: Client, project: dict,  # noqa: F811
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two imports run at once (local:ffmpeg takes 2): checking the track and adding the clip must not interleave.
+    pid = project["id"]
+    held = []
+
+    def spy(*args: object) -> bool:
+        lock = app.store.locked(pid)
+        free = []
+        probe = threading.Thread(target=lambda: free.append(lock.acquire(blocking=False) and (lock.release() or True)))
+        probe.start()
+        probe.join()
+        held.append(not free[0])
+        return edits.track_busy(*args)
+
+    monkeypatch.setattr(localjobs, "track_busy", spy)
+    job = client.json("POST", f"/api/projects/{pid}/upload?name=s.wav&track=1&audioTrack={T1}", wav_bytes(0.5))["job"]
+    assert client.wait_job(job["id"])["status"] == "done"
+    assert held == [True]
+
+
+@needs_ffmpeg
+def test_import_gain_sets_the_clip_volume_and_the_library_default(client: Client, project: dict) -> None:  # noqa: F811
+    pid = project["id"]
+    for query in ("gain=1.9953&track=1", "gain=9&track=0", "track=1"):
+        job = client.json("POST", f"/api/projects/{pid}/upload?name=s.wav&{query}", wav_bytes(0.5))["job"]
+        done = client.wait_job(job["id"])
+        assert done["status"] == "done", done["error"]
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    # +6 dB lands on the clip and the library item; past 4 (+12 dB) it is held at 4; no choice stays at 1.
+    assert sorted(m.get("gain", 0) for m in saved["media"].values() if m["kind"] == "audio") == [0, 1.9953, 4.0]
+    assert sorted(a["volume"] for a in saved["audio"]) == [1.0, 1.9953]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

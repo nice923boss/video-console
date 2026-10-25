@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from .media import KENBURNS_LABELS
-from .ops import TRANSITIONS
+from .opfields import TRANSITIONS
 
 # Style prompts are English so they also work with CLIP-based workflows a user imports;
 # labels and descriptions are what the UI shows.

@@ -34,6 +34,9 @@ PORTABLE_EXE: Path | None = None  # data/tools/video2x/video2x.exe from the sett
 SHADER = "anime4k-v4-a"
 ESRGAN_MODEL = "realesrgan-plus"
 METHODS = {"anime4k": "Anime4K", "realesrgan": "Real-ESRGAN"}  # setting value -> name shown in notes
+# Part of a generate-then-upscale job's progress bar the upscale gets (PF-06, GAPS #81), from the timings above:
+# Anime4K takes seconds; Real-ESRGAN takes minutes, about as long as a ComfyUI video, so half the bar is a guess.
+PROGRESS_SHARE = {"anime4k": 0.05, "realesrgan": 0.5}
 SHORT_SIDE = 1080
 DONE_LINE = "Video processed successfully"
 _FRAME_RE = re.compile(r"frame=(\d+)/(\d+)")

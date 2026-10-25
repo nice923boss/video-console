@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,6 +24,7 @@ class Ctl:
     def __init__(self) -> None:
         self.notes: list[str] = []
         self.steps: list[str | None] = []
+        self.fracs: list[float] = []
 
     def check(self) -> None:
         pass
@@ -32,6 +34,7 @@ class Ctl:
 
     def progress(self, frac: float, message: str | None = None) -> None:
         self.steps.append(message)
+        self.fracs.append(round(frac, 4))
 
     def note(self, text: str) -> None:
         self.notes.append(text)
@@ -150,6 +153,8 @@ def test_upscale_step_swaps_in_the_1080p_clip_or_keeps_the_original(app: App, tm
     assert methods == ["realesrgan"] and source["upscaler"] == "Video2X Real-ESRGAN"
     assert ctl.steps == ["用 Video2X（Real-ESRGAN）放大到 1944×1080",
                          "用 Video2X（Real-ESRGAN）放大到 1944×1080：5/10 格"] and ctl.notes == []
+    # Real-ESRGAN gets the bar from 48.5% on, and half its frames done is halfway there (PF-06).
+    assert ctl.fracs == [0.485, 0.7375]
 
     full_hd = make_clip(tmp_path / "full.mp4", "1920x1080")
     assert app.runners._upscale_videos(Ctl(), [full_hd], {}, "anime4k") == [full_hd]
@@ -173,6 +178,26 @@ def test_upscale_step_swaps_in_the_1080p_clip_or_keeps_the_original(app: App, tm
 
 
 @needs_ffmpeg
+def test_comfy_progress_leaves_the_upscale_its_share_of_the_bar(app: App, tmp_path: Path,
+                                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    class Comfy:
+        def resume(self, sid: str, prompt_id: str, *, on_progress: Any, **_k: object) -> list[dict]:
+            on_progress(0.5, "生成中")
+            on_progress(0.96, "取回輸出檔")
+            return [{"kind": "video", "path": tmp_path / "clip.mp4"}]
+
+    monkeypatch.setattr(app.runners, "_comfy", Comfy())
+    monkeypatch.setattr(app.runners, "_upscale_videos", lambda ctl, files, source, method: files)
+    monkeypatch.setattr(app.runners, "_commit", lambda ctl, files, source: {})
+    for method, fracs in (("realesrgan", [0.25, 0.48]), ("anime4k", [0.475, 0.912]), (None, [0.5, 0.96])):
+        ctl = Ctl()
+        ctl.payload = {"workflow": "ltxv-2b-i2v", **({"upscale1080": method} if method else {})}
+        ctl.remote_data = {"type": "comfy", "server": "s", "promptId": "p"}
+        ctl.kind, ctl.preview = "video", lambda *_a: None
+        app.runners._run_comfy(ctl, tmp_path)
+        assert ctl.fracs == fracs and ctl.steps == ["生成中", "取回輸出檔"]
+
+
 @pytest.mark.skipif(not video2x.EXE.is_file(), reason="Video2X is not installed")
 @pytest.mark.parametrize("method", ["anime4k", "realesrgan"])
 def test_real_video2x_writes_a_1080p_h264_clip(app: App, tmp_path: Path, method: str) -> None:

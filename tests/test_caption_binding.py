@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from vc.ops import apply_ops, blank_shot
+from vc.opfields import blank_shot
+from vc.ops import apply_ops
 from vc.storyboard import render_storyboard
 from vc.util import AppError
 

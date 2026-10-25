@@ -1,0 +1,26 @@
+/* Storyboard print sheet (views/board-print.js). It exists only while printing; the app is hidden then. */
+.print-sheet { display: none; }
+
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body.is-printing { background: #fff !important; color: #111; overflow: visible !important; height: auto !important; }
+  body.is-printing > :not(.print-sheet) { display: none !important; }
+  body.is-printing .print-sheet { display: block; font: 10pt/1.5 "Microsoft JhengHei", "PingFang TC", sans-serif; color: #111; }
+}
+
+.ps-head h1 { margin: 0 0 2mm; font-size: 16pt; }
+.ps-head p { margin: 0 0 4mm; color: #555; }
+.ps-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.ps-table th, .ps-table td { border: 0.3mm solid #999; padding: 2mm; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
+.ps-table th { background: #eee; font-weight: 700; }
+.ps-table thead { display: table-header-group; }
+.ps-table tr { break-inside: avoid; }
+.ps-num { width: 9mm; text-align: center !important; }
+.ps-pic { width: 58mm; }
+.ps-note { width: 45mm; }
+.ps-frame { display: flex; align-items: center; justify-content: center; background: #ddd; overflow: hidden; color: #777; }
+.ps-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ps-table p { margin: 1.5mm 0 0; white-space: pre-wrap; }
+.ps-len { margin-left: 2mm; color: #555; }
+.ps-dim { color: #555; }
+.ps-cap { color: #333; }

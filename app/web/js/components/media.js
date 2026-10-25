@@ -1,6 +1,6 @@
 // Thumbnails with hover previews, and the full-screen lightbox for takes and media items.
 import { html, useState, useEffect, useRef } from "../lib/h.js";
-import { useHotkeys } from "../lib/keys.js";
+import { useDialogKeys } from "../lib/keymap.js";
 import { fileUrl, fmtDuration, fmtDateTime } from "../lib/format.js";
 import { revealInFolder } from "../lib/actions.js";
 import { Icon } from "./icons.js";
@@ -181,11 +181,11 @@ function Lightbox({ pid, items, start, close }) {
     };
   }, []);
 
-  useHotkeys({
-    escape: { fn: () => close(), allowInInput: true },
-    arrowleft: () => (items.length > 1 ? go(-1) : false),
-    arrowright: () => (items.length > 1 ? go(1) : false),
-    i: () => toggleInfo(),
+  useDialogKeys({
+    "dialog.close": { fn: () => close(), allowInInput: true },
+    "dialog.prev": () => (items.length > 1 ? go(-1) : false),
+    "dialog.next": () => (items.length > 1 ? go(1) : false),
+    "dialog.info": () => toggleInfo(),
   }, { modal: true });
 
   if (!item) return null;

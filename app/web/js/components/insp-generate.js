@@ -8,7 +8,7 @@ import { updateShot, navigate, saveSettings } from "../lib/actions.js";
 import { generate } from "../lib/jobs-actions.js";
 import { keyHint } from "../lib/keymap.js";
 import { randomSeed, round } from "../lib/format.js";
-import { imageTake, videoTake } from "../lib/sequence.js";
+import { imageTake, videoTake, castInText, castLooks } from "../lib/sequence.js";
 import { Icon } from "./icons.js";
 import { Field, Select, Toggle, Segmented, Slider, NumberInput, Section, Chip, Button, IconButton, Badge, Empty, TextArea,
   useDraft } from "./ui.js";
@@ -127,7 +127,7 @@ function ComfyBlock({ kind, route, engine, shot, workflows, hasSource, settings 
     ${!engine.wid && html`<${Note} tone="warn" action=${goEngines("routes")}>路由「${route.name}」還沒有指定 ComfyUI 範本<//>`}
     ${engine.wid && !tpl && html`<${Note} tone="warn">找不到範本「${engine.wid}」，可能已被刪除，請改選其他範本<//>`}
     ${notes.map(([tone, text]) => html`<${Note} key=${text} tone=${tone}>${text}<//>`)}
-    ${tpl && html`<${ParamFields} params=${tpl.params} values=${shot[pfield]}
+    ${tpl && html`<${ParamFields} params=${tpl.params} values=${shot[pfield]} bindings=${tpl.bindings}
       onChange=${(v) => updateShot(shot.id, { [pfield]: v }, { label: "修改生成參數", coalesce: `${shot.id}:${pfield}` })} />`}`;
 }
 
@@ -154,6 +154,26 @@ function ProviderBlock({ kind, route, engine, hasSource }) {
     ${!hasSource && !modes.includes(txt) && html`<${Note} tone="warn">${p.name} 需要${what}才能生成<//>`}`;
 }
 
+// Seconds a provider video job asks for: the model length nearest the chosen one (runners._video_seconds).
+function providerSeconds(shot, prov, hasStart) {
+  const modes = prov.modes || NONE;
+  const mode = (hasStart && modes.includes("i2v")) || !modes.includes("t2v") ? "i2v" : "t2v";
+  const list = (prov.durations || {})[mode] || NONE;
+  const want = shot.videoDuration || shot.duration || 5;
+  return list.length ? list.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a)) : want;
+}
+
+// Spend before sending (CL-01): the unit price typed on the provider's settings, so an estimate, not an invoice.
+function CostNote({ kind, shot, prov, hasSource }) {
+  const costs = useStore((s) => s.costs);
+  const price = (prov.config || {}).price || 0;
+  if (!price) return null;
+  const seconds = kind === "video" ? providerSeconds(shot, prov, hasSource) : 1;
+  const per = kind === "video" ? `（${round(seconds, 1)} 秒）` : "";
+  const month = costs && costs.jobs ? `；本月已累計約 US$${costs.usd.toFixed(2)}（${costs.jobs} 次）` : "";
+  return html`<${Note}>每次預估約 US$${(price * seconds).toFixed(2)}${per}${month}。依「引擎」頁填的單價估算，實際以供應商帳單為準<//>`;
+}
+
 function EngineBlock(props) {
   const { kind, route, engine } = props;
   if (engine.backend === "comfy") return html`<${ComfyBlock} ...${props} />`;
@@ -164,7 +184,7 @@ function EngineBlock(props) {
 
 // What a picture job sends when the shot has no prompt of its own (runners.py _prompts, sequence.compose_prompt).
 function composedImagePrompt(project, shot) {
-  return [shot.prompt, (project.style && project.style.prompt) || ""]
+  return [shot.prompt, castLooks(project, shot.prompt), (project.style && project.style.prompt) || ""]
     .map((p) => (p || "").trim().replace(/^[,，]+|[,，]+$/g, ""))
     .filter(Boolean)
     .join("\n");
@@ -181,12 +201,12 @@ function ImagePrompt({ project, shot }) {
     flush();
   };
   const hint = text.trim()
-    ? "生圖時照框內文字原樣送出；改了鏡頭描述或全片風格後，按「重組」更新"
-    : "留空時用鏡頭描述加全片風格組成，送出後會把實際送出的文字寫進來";
+    ? "生圖時照框內文字原樣送出；改了鏡頭描述、人物外觀或全片風格後，按「重組」更新"
+    : "留空時用鏡頭描述、寫到的人物外觀加全片風格組成，送出後會把實際送出的文字寫進來";
   return html`<${Field} label="生圖提示詞" hint=${hint}
       after=${html`<span class="char-count mono" title="字數">${text.length}</span>
         <${Button} size="sm" kind="ghost" icon="refresh" disabled=${!auto || auto === text}
-          title="依鏡頭描述和全片風格重新組成" onClick=${rebuild}>重組<//>`}>
+          title="依鏡頭描述、人物外觀和全片風格重新組成" onClick=${rebuild}>重組<//>`}>
     <${TextArea} value=${text} onChange=${setText} onBlur=${flush} rows=${3} autosize maxLength=${8000}
       placeholder=${auto || "還沒有鏡頭描述，可以直接在這裡寫生圖提示詞"} />
   <//>`;
@@ -202,17 +222,25 @@ function ExtraRefs({ project, shot, item, ratio }) {
     if (id && !taken.includes(id)) updateShot(shot.id, { extraRefs: [...extras, id] }, { label: "新增參考圖" });
   };
   const drop = (id) => updateShot(shot.id, { extraRefs: extras.filter((x) => x !== id) }, { label: "移除參考圖" });
+  // The order is what the prompt's "第一張圖、第二張圖" refers to (IM-01); moving into first place swaps the main picture.
+  const order = [shot.ref, ...extras];
+  const move = (i, step) => {
+    const ids = [...order];
+    [ids[i], ids[i + step]] = [ids[i + step], ids[i]];
+    updateShot(shot.id, { ref: ids[0], extraRefs: ids.slice(1) }, { label: "調整參考圖順序" });
+  };
   return html`<div class="ref-extras">
-    <div class="ref-extra">
-      <${Thumb} pid=${project.id} path=${item.thumb || item.file} ratio=${ratio} />
-      <span class="ref-cell-label">第 1 張</span>
-    </div>
-    ${extras.map((id, i) => {
-      const x = find(id);
+    ${order.map((id, i) => {
+      const x = i === 0 ? item : find(id);
       return x && html`<div class="ref-extra" key=${id}>
         <${Thumb} pid=${project.id} path=${x.thumb || x.file} ratio=${ratio} />
-        <span class="ref-cell-label">第 ${i + 2} 張</span>
-        <${IconButton} icon="x" size=${13} class="ref-extra-x" title="移除這張參考圖" onClick=${() => drop(id)} />
+        <div class="ref-order">
+          <${IconButton} icon="chevron-left" size=${13} title="往前移" disabled=${i === 0} onClick=${() => move(i, -1)} />
+          <span class="ref-cell-label" title=${`第 ${i + 1} 張`}>${i + 1}</span>
+          <${IconButton} icon="chevron-right" size=${13} title="往後移" disabled=${i === order.length - 1}
+            onClick=${() => move(i, 1)} />
+        </div>
+        ${i > 0 && html`<${IconButton} icon="x" size=${13} class="ref-extra-x" title="移除這張參考圖" onClick=${() => drop(id)} />`}
       </div>`;
     })}
     ${extras.length < MAX_REFS - 1 && html`<button type="button" class="ref-empty ref-extra-add" style=${`aspect-ratio: ${ratio}`}
@@ -238,10 +266,16 @@ function RefField({ project, shot, tpl }) {
   };
   // Removing the first picture moves the next one up, so the extra pictures are not left orphaned.
   const remove = () => updateShot(shot.id, { ref: extras[0] || null, extraRefs: extras.slice(1) }, { label: "移除參考圖" });
+  // The look pictures of the cast the shot names (SB-11), offered while the shot has no reference of its own.
+  const castRefs = castInText(project, shot.prompt).filter((m) => m.lookRef && (project.takes[m.lookRef] || project.media[m.lookRef]));
+  const useCast = () => {
+    const ids = [...new Set(castRefs.map((m) => m.lookRef))].slice(0, MAX_REFS);
+    updateShot(shot.id, { ref: ids[0], extraRefs: ids.slice(1) }, { label: "套用人物參考圖" });
+  };
   if (shot.ref && !item) {
     return html`<${Field} label="參考圖"><${Note} tone="warn" action=${{ label: "移除", fn: remove }}>參考圖已被刪除<//><//>`;
   }
-  const hint = multi ? `最多 ${MAX_REFS} 張；提示詞用「第一張圖的人物、第二張圖的場景」指名`
+  const hint = multi ? `最多 ${MAX_REFS} 張，用箭頭調整順序；提示詞用「第一張圖的人物、第二張圖的場景」指名`
     : strength ? "生圖時參考這張圖的構圖與色調；強度越高越接近原圖"
     : "這個範本整張重畫，要保留或修改什麼請寫進提示詞";
   return html`<${Field} label=${multi ? `參考圖（${item ? 1 + extras.length : 0}/${MAX_REFS}）` : "參考圖"} hint=${hint}>
@@ -261,7 +295,10 @@ function RefField({ project, shot, tpl }) {
       </div>`}`
     : html`<button type="button" class="ref-empty" onClick=${pick}>
         <${Icon} name="image" size=${18} /><span>選擇參考圖</span>
-      </button>`}
+      </button>
+      ${castRefs.length > 0 && html`<${Button} size="sm" kind="ghost" icon="users" class="ref-cast"
+        title="用人物表裡設定的外觀參考圖當這個鏡頭的參考圖" onClick=${useCast}>
+        用人物參考圖（${castRefs.map((m) => m.name.trim()).join("、")}）<//>`}`}
   <//>`;
 }
 
@@ -377,7 +414,7 @@ function ToolsSection({ project, shot, index, img, vid }) {
         <${Button} icon="zoom-in" disabled=${!img || !upTpl} title=${noImage || (upTpl ? "送出放大工作" : "找不到放大範本")}
           onClick=${() => generate("upscale", [shot.id], { payload: { workflow: upWid, params: upParams } })}>放大<//>
       </div>
-      ${upTpl && html`<${ParamFields} params=${upTpl.params} values=${upParams} onChange=${setUpParams} />`}
+      ${upTpl && html`<${ParamFields} params=${upTpl.params} values=${upParams} bindings=${upTpl.bindings} onChange=${setUpParams} />`}
     </div>
     <div class="tool">
       <div class="tool-head"><${Icon} name="film" size=${15} /><b>影片放大</b><span>用 Video2X 把鏡頭影片放大到 1080P，結果存成新版本</span></div>
@@ -407,6 +444,7 @@ function ToolsSection({ project, shot, index, img, vid }) {
 function GenDock({ shot, busy, image, video, useImage }) {
   const [count, setCount] = usePref("vc.gen.count", 1, (v) => [1, 2, 3, 4].includes(v));
   const [chain, setChain] = usePref("vc.gen.chain", false, (v) => typeof v === "boolean");
+  const [upscaleFirst, setUpscaleFirst] = usePref("vc.gen.chainUpscale", false, (v) => typeof v === "boolean");
   const { upscale, method } = useStore((s) => {
     const v2x = (s.settings && s.settings.video2x) || {};
     return { upscale: !!v2x.enabled, method: v2x.method || "anime4k" };
@@ -422,6 +460,8 @@ function GenDock({ shot, busy, image, video, useImage }) {
       ${busy.length > 0 && html`<${Badge} tone="accent">${busy.length} 個工作進行中<//>`}
     </div>
     <${Toggle} checked=${chain} onChange=${setChain} label="生圖完成後接著生影片" disabled=${offVideo} />
+    ${chain && !offVideo && html`<${Toggle} checked=${upscaleFirst} onChange=${setUpscaleFirst} label="生影片前先放大圖片"
+      hint="用 ComfyUI 的放大範本（引擎頁可換），放大後的圖片成為鏡頭圖片再生影片；需要 ComfyUI 連線" />`}
     <${Toggle} checked=${upscale} onChange=${(enabled) => saveSettings({ video2x: { enabled } })}
       label="生影片後用 Video2X 放大到 1080P" hint="限 ComfyUI 生成的影片，放大完才放上時間軸"
       disabled=${video.backend !== "comfy"} />
@@ -432,7 +472,8 @@ function GenDock({ shot, busy, image, video, useImage }) {
     </div>`}
     <div class="row gen-actions">
       <${Button} kind="primary" icon="sparkles" class="grow" disabled=${offImage} title=${offImage ? "這條路由沒有開啟生圖" : `生成圖片${keyHint("board.image")}`}
-        onClick=${() => generate("image", [shot.id], { count, payload: chain && !offVideo ? { chainVideo: true } : {} })}>生圖${times}<//>
+        onClick=${() => generate("image", [shot.id], {
+          count, payload: chain && !offVideo ? { chainVideo: true, chainUpscale: upscaleFirst } : {} })}>生圖${times}<//>
       <${Button} icon="film" class="grow" disabled=${offVideo} title=${offVideo ? "這條路由沒有開啟生影片" : `生成影片${keyHint("board.video")}`}
         onClick=${() => generate("video", [shot.id], { count, payload: useImage ? {} : { useImage: false } })}>生影片${times}<//>
     </div>
@@ -465,6 +506,7 @@ export function GenerateTab({ project, shot, index, busy }) {
     <//>
     <${Section} title="生圖設定" icon="image" actions=${html`<${Badge}>${BACKEND_LABEL[image.backend]}<//>`}>
       <${EngineBlock} kind="image" engine=${image} hasSource=${hasRef} ...${common} />
+      ${image.backend === "provider" && image.prov && html`<${CostNote} kind="image" shot=${shot} prov=${image.prov} />`}
       ${image.backend !== "none" && html`<${ImagePrompt} project=${project} shot=${shot} />`}
       ${image.backend !== "none" && html`<${RefField} project=${project} shot=${shot}
         tpl=${image.backend === "comfy" ? image.tpl : null} />`}
@@ -474,6 +516,8 @@ export function GenerateTab({ project, shot, index, busy }) {
       ${video.backend !== "none" && html`<${VideoSource} project=${project} shot=${shot} img=${img}
         useImage=${useImage} />`}
       ${video.backend === "provider" && video.prov && html`<${VideoDuration} shot=${shot} prov=${video.prov} hasStart=${hasStart} />`}
+      ${video.backend === "provider" && video.prov && html`<${CostNote} kind="video" shot=${shot} prov=${video.prov}
+        hasSource=${hasStart} />`}
       ${video.backend === "comfy" && video.tpl && html`<${ComfyVideoDuration} shot=${shot} tpl=${video.tpl} fps=${project.settings.fps} />`}
     <//>
     <${SeedSection} shot=${shot} />

@@ -28,8 +28,10 @@ function Result({ result, model, onPick }) {
     </div>`;
   }
   const models = result.models || NONE;
-  return html`<div class=${`note ${result.modelFound || !models.length ? "note-ok" : "note-warn"}`} role="status">
-    <${Icon} name=${result.modelFound || !models.length ? "check-circle" : "alert"} size=${15} />
+  // The test asks the model for a one-word reply; listing models alone does not prove the key or name works.
+  const replied = result.replied !== false;
+  return html`<div class=${`note ${replied ? "note-ok" : "note-danger"}`} role="status">
+    <${Icon} name=${replied ? "check-circle" : "x-circle"} size=${15} />
     <span class="note-text">${result.message}</span>
   </div>
   ${models.length > 0 && html`<${Field} label=${`服務提供的模型（${models.length}）`} hint="點一下套用，記得再按儲存">

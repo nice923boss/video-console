@@ -8,9 +8,10 @@ One detection result per provider, kept in data/model-catalog.json:
                             "known": {id: status},    # statuses learned for specific ids
                             "complete": bool,         # True: an id that is not listed is gone
                             "message": str,           # optional remark for the settings page
-                            "durations": {id: [length as the vendor spells it]}}}}  # video fields only
-Statuses: ok, deprecated, incompatible, missing (absent from a complete list), unlisted (fal lookup found
-nothing: retired, a typo or a private app) and unknown (never checked).
+                            "durations": {id: [length as the vendor spells it]},  # video fields only
+                            "ratios": {id: ["16:9", ...]}}}}  # fal video fields, models with a ratio list
+Statuses: ok, deprecated, incompatible, missing (absent from a complete list), unlisted (a fal or Replicate
+lookup found nothing: retired, a typo or a private app) and unknown (never checked).
 """
 from __future__ import annotations
 
@@ -126,6 +127,13 @@ def model_durations(entry: dict | None, key: str, model: str) -> list | None:
     return list(lengths) if isinstance(lengths, list) else None
 
 
+def model_ratios(entry: dict | None, key: str, model: str) -> list[str]:
+    """Detected aspect ratios of `model`; [] when they were never detected."""
+    field = ((entry or {}).get("fields") or {}).get(key) or {}
+    ratios = (field.get("ratios") or {}).get((model or "").strip().strip("/"))
+    return [r for r in ratios if isinstance(r, str)] if isinstance(ratios, list) else []
+
+
 def _field(options: list[dict], current: str, *, known: dict | None = None, complete: bool,
            message: str = "") -> dict:
     out = {"options": options, "suggested": pick_newest(current, options), "for": current, "known": known or {},
@@ -172,13 +180,9 @@ def _fal_option(model: dict) -> dict:
     return option
 
 
-def _fal_durations(model: dict) -> list | None:
-    """Lengths the endpoint's `duration` takes, as fal spells them ("5", 8 or "8s"). [] when it has no such
-    parameter (Wan counts frames instead); None when the schema is missing or the parameter is open-ended."""
-    schema = _fal_input(model)
-    if schema is None:
-        return None
-    spec = (schema.get("properties") or {}).get("duration")
+def _lengths(spec: Any) -> list | None:
+    """Lengths a `duration` parameter takes, as the vendor spells them ("5", 8 or "8s"). [] when there is no
+    such parameter (Wan counts frames instead); None when the parameter is open-ended."""
     if spec is None:
         return []
     if not isinstance(spec, dict):
@@ -190,6 +194,19 @@ def _fal_durations(model: dict) -> list | None:
     if spec.get("type") == "integer" and isinstance(low, int) and isinstance(high, int) and 0 < low <= high <= low + 60:
         return list(range(low, high + 1))
     return None
+
+
+def _fal_durations(model: dict) -> list | None:
+    """Lengths of the endpoint's `duration` (see _lengths); None when the schema is missing."""
+    schema = _fal_input(model)
+    return None if schema is None else _lengths((schema.get("properties") or {}).get("duration"))
+
+
+def _fal_ratios(model: dict) -> list[str]:
+    """The "16:9" style values of the endpoint's `aspect_ratio` enum; [] when it has none."""
+    spec = ((_fal_input(model) or {}).get("properties") or {}).get("aspect_ratio")
+    enum = spec.get("enum") if isinstance(spec, dict) else None
+    return [v for v in enum if isinstance(v, str) and re.fullmatch(r"\d+:\d+", v)] if isinstance(enum, list) else []
 
 
 def _fal_lookup(ctx: Context, ids: list[str]) -> dict[str, dict]:
@@ -231,15 +248,19 @@ def detect_fal(ctx: Context, wants: dict[str, FalWant], extra: set[str]) -> dict
     for key, want in wants.items():
         seen: dict[str, dict] = {}
         lengths: dict[str, list] = {}
+        ratios: dict[str, list] = {}
         for (category, _q), models in results.items():
             for m in models:
                 if (category == want.category and isinstance(m, dict) and m.get("endpoint_id")
                         and (m.get("metadata") or {}).get("status", "active") == "active" and _fal_fits(m, want, extra)):
                     seen[m["endpoint_id"]] = _fal_option(m)
                     lengths[m["endpoint_id"]] = _fal_durations(m)
+                    ratios[m["endpoint_id"]] = _fal_ratios(m)
         if want.current in found:
             lengths[want.current] = _fal_durations(found[want.current])
+            ratios[want.current] = _fal_ratios(found[want.current])
         lengths = {k: v for k, v in lengths.items() if v is not None}
+        ratios = {k: v for k, v in ratios.items() if v}
         options = sorted(seen.values(), key=lambda o: o["date"], reverse=True)
         known: dict[str, str] = {}
         if want.current:
@@ -250,7 +271,139 @@ def detect_fal(ctx: Context, wants: dict[str, FalWant], extra: set[str]) -> dict
                                    else "ok" if _fal_input(m) is None or _fal_fits(m, want, extra)
                                    else "incompatible")
         field = _field(options, want.current, known=known, complete=False)
-        out[key] = {**field, "durations": lengths} if "video" in want.category else field
+        out[key] = {**field, "durations": lengths, "ratios": ratios} if "video" in want.category else field
+    return out
+
+
+# ------------------------------------------------------------------ Replicate
+class ReplicateWant(NamedTuple):
+    collections: tuple[str, ...]  # Replicate collections whose models suit the field, e.g. "text-to-image"
+    sends: frozenset[str]  # inputs the app will send
+    current: str  # the model saved in the settings
+    image_field: str  # the input the reference picture goes in ("" sends none)
+
+
+REPLICATE_NAME = re.compile(r"^[\w.-]+/[\w.-]+(:[0-9a-f]{64})?$")
+_COLLECTION_HINTS = {"image-to-video": "圖轉影片", "text-to-video": "文字轉影片"}
+
+
+def _replicate_props(model: dict) -> tuple[dict, set[str]] | None:
+    """Input parameters of the model's latest version, with Cog's enums resolved (Cog writes an enum as
+    allOf: [{"$ref": ...}]), and the required ones. None when Replicate left the schema out, as lists do."""
+    schemas = ((((model.get("latest_version") or {}).get("openapi_schema") or {}).get("components") or {})
+               .get("schemas") or {})
+    schema = schemas.get("Input")
+    if not isinstance(schema, dict):
+        return None
+    props = {}
+    for name, spec in (schema.get("properties") or {}).items():
+        refs = spec.get("allOf") if isinstance(spec, dict) else None
+        ref = refs[0] if isinstance(refs, list) and refs and isinstance(refs[0], dict) else {}
+        target = schemas.get(str(ref.get("$ref") or "").rsplit("/", 1)[-1])
+        props[name] = {**target, **spec} if isinstance(target, dict) else spec
+    return props, set(schema.get("required") or [])
+
+
+def _replicate_fits(found: tuple[dict, set[str]], want: ReplicateWant, extra: set[str]) -> bool:
+    props, required = found
+    return "prompt" in props and required <= (want.sends | extra)
+
+
+def _name_version(model_id: str) -> tuple[int, ...]:
+    """'lightricks/ltx-2.5-fast' -> (2, 5), 'kwaivgi/kling-v2.1' -> (2, 1); Replicate lists carry no release
+    date, only the date of each model's latest push."""
+    found = re.search(r"(?:^|[-_v])(\d+(?:\.\d+)*)", model_id.rsplit("/", 1)[-1])
+    return tuple(int(x) for x in found.group(1).split(".")) if found else ()
+
+
+def _replicate_get(url: str, auth: dict) -> dict | None:
+    """None when Replicate answers 404 (an unknown model or collection)."""
+    try:
+        data = net.request("GET", url, headers=auth, timeout=30).json()
+    except net.HttpError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    return data if isinstance(data, dict) else {}
+
+
+def detect_replicate(ctx: Context, base: str, wants: dict[str, ReplicateWant], extra: set[str]) -> dict[str, dict]:
+    """Per field: the models of Replicate's hand-picked collections for it, plus the saved model's status, its
+    video lengths and a remark when its picture input has another name. The collections are a small part of
+    Replicate, so the list is never complete."""
+    auth = {"Authorization": f"Bearer {ctx.require_secret('api_key', 'Replicate API Token')}"}
+    slugs = sorted({s for w in wants.values() for s in w.collections})
+    saved = sorted({w.current for w in wants.values() if REPLICATE_NAME.match(w.current)})
+
+    def lookup(model: str) -> dict | None:
+        name, _, version = model.partition(":")
+        if not version:
+            return _replicate_get(f"{base}/models/{name}", auth)
+        found = _replicate_get(f"{base}/models/{name}/versions/{version}", auth)
+        return None if found is None else {"latest_version": found}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        pages = {s: pool.submit(_replicate_get, f"{base}/collections/{s}", auth) for s in slugs}
+        looks = {m: pool.submit(lookup, m) for m in saved}
+        lists = {s: (f.result() or {}).get("models") or [] for s, f in pages.items()}
+        found = {m: f.result() for m, f in looks.items()}
+
+    out: dict[str, dict] = {}
+    for key, want in wants.items():
+        seen: dict[str, dict] = {}
+        tags: dict[str, list[str]] = {}
+        lengths: dict[str, list | None] = {}
+        pictures: set[str] = set()  # models known to take the picture where the settings send it
+        for slug in want.collections:
+            for m in lists.get(slug) or []:
+                if not isinstance(m, dict) or not m.get("owner") or not m.get("name"):
+                    continue
+                spec = _replicate_props(m)
+                if spec is not None and not _replicate_fits(spec, want, extra):
+                    continue
+                mid = f"{m['owner']}/{m['name']}"
+                seen.setdefault(mid, {"value": mid, "label": mid,
+                                      "date": str((m.get("latest_version") or {}).get("created_at") or "")[:10]})
+                tags.setdefault(mid, []).extend([_COLLECTION_HINTS[slug]] if slug in _COLLECTION_HINTS else [])
+                if spec is not None:
+                    lengths[mid] = _lengths(spec[0].get("duration"))
+                    if not want.image_field or want.image_field in spec[0]:
+                        pictures.add(mid)
+        for mid, option in seen.items():
+            hint = "、".join(tags[mid]) if len(want.collections) > 1 else ""
+            secs = lengths.get(mid)
+            hint = "；".join(x for x in (hint, "秒數 " + "、".join(str(v) for v in secs) if secs else "") if x)
+            if hint:
+                option["hint"] = hint
+        known: dict[str, str] = {}
+        message = ""
+        if want.current in found:
+            model = found[want.current]
+            spec = None if model is None else _replicate_props(model)
+            known[want.current] = ("unlisted" if model is None else "ok" if spec is None or _replicate_fits(spec, want, extra)
+                                   else "incompatible")
+            if spec is not None:
+                lengths[want.current] = _lengths(spec[0].get("duration"))
+                if want.image_field and want.image_field not in spec[0]:
+                    files = [n for n, s in spec[0].items() if isinstance(s, dict) and s.get("format") == "uri"]
+                    message = (f"{want.current} 沒有「{want.image_field}」參數，"
+                               + (f"它的圖片參數是 {'、'.join(files)}，請改設定裡的圖片欄位名稱" if files
+                                  else "看起來不收圖片"))
+        options = sorted(seen.values(), key=lambda o: o["date"], reverse=True)
+        field = _field(options, want.current, known=known, complete=False, message=message)
+        # Push dates say little about which model is newer: pick by the version in the name, only among models
+        # whose schema shows the picture input (an untouched default may be switched to the suggestion), and
+        # never an older version than the saved one while that one still works.
+        ready = [o for o in options if o["value"] in pictures]
+        suggested = pick_newest(want.current, sorted(ready, key=lambda o: (_name_version(o["value"]), o["date"]),
+                                                     reverse=True))
+        if suggested and known.get(want.current) not in UNUSABLE and \
+                _name_version(suggested) < _name_version(want.current.partition(":")[0]):
+            suggested = None
+        field = {**field, "suggested": suggested}
+        if any("video" in s for s in want.collections):
+            field = {**field, "durations": {k: v for k, v in lengths.items() if v is not None}}
+        out[key] = field
     return out
 
 

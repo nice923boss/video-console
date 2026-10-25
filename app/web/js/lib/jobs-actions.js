@@ -5,9 +5,15 @@ import { getState, setState } from "./store.js";
 import { KIND_LABEL, kindOfName } from "./format.js";
 import { toast, updateToast, dismissToast, toastError } from "../components/toast.js";
 import { confirmDialog } from "../components/overlay.js";
-import { importProjectZip, ops } from "./actions.js";
+import { importProjectZip, ops, LINK_PREF } from "./actions.js";
+import { readPref } from "./prefs.js";
+import { pickImportGain, dbToGain } from "../dialogs/import-gain.js";
+import { watchPick } from "../dialogs/pick-take.js";
 
 const enc = encodeURIComponent;
+// With the timeline's link toggle off, a take that changes its shot's length leaves the other tracks put.
+const linkOff = () => !readPref(LINK_PREF, true, (v) => typeof v === "boolean");
+const withLink = (payload) => (linkOff() ? { ...payload, link: false } : payload);
 
 function upsertJobs(list) {
   setState((s) => {
@@ -38,7 +44,7 @@ export async function submitJob(kind, shotId, payload = {}, { quiet = false } = 
   const { pid } = getState();
   if (!pid) return null;
   try {
-    const { job } = await api.post("/api/jobs", { kind, pid, shotId, payload });
+    const { job } = await api.post("/api/jobs", { kind, pid, shotId, payload: withLink(payload) });
     upsertJobs([job]);
     keepImagePrompts([job]);
     if (!quiet) toast(`已加入佇列：${job.title}`, { duration: 2200 });
@@ -52,7 +58,7 @@ export async function submitJob(kind, shotId, payload = {}, { quiet = false } = 
 export async function submitBatch(list) {
   if (!list.length) return null;
   try {
-    const res = await api.post("/api/jobs/batch", { jobs: list });
+    const res = await api.post("/api/jobs/batch", { jobs: list.map((j) => ({ ...j, payload: withLink(j.payload || {}) })) });
     upsertJobs(res.jobs);
     keepImagePrompts(res.jobs);
     const errors = res.errors || [];
@@ -70,6 +76,7 @@ export async function submitBatch(list) {
 
 // kind: image | video | upscale | upscalevideo | kenburns | lastframe. Extra copies of the same shot get a seed
 // offset, which only matters when the shot's seed is locked (otherwise every job rolls its own).
+// Several pictures of a single shot end with an offer to pick one (IM-08).
 export function generate(kind, shotIds, { count = 1, payload = {} } = {}) {
   const { pid } = getState();
   const list = [];
@@ -79,12 +86,16 @@ export function generate(kind, shotIds, { count = 1, payload = {} } = {}) {
     }
   }
   if (list.length === 1) return submitJob(kind, shotIds[0], list[0].payload);
-  return submitBatch(list);
+  const sent = submitBatch(list);
+  if (kind === "image" && count > 1 && shotIds.length === 1) {
+    sent.then((res) => res && watchPick(pid, shotIds[0], res.jobs.map((j) => j.id)));
+  }
+  return sent;
 }
 
-async function jobCall(jid, verb, failTitle) {
+async function jobCall(jid, verb, failTitle, body = {}) {
   try {
-    const job = await api.post(`/api/jobs/${enc(jid)}/${verb}`);
+    const job = await api.post(`/api/jobs/${enc(jid)}/${verb}`, body);
     if (job && job.id) upsertJobs([job]);
     return job;
   } catch (err) {
@@ -94,8 +105,10 @@ async function jobCall(jid, verb, failTitle) {
 }
 
 export const cancelJob = (jid) => jobCall(jid, "cancel", "無法取消工作");
-export const retryJob = (jid) => jobCall(jid, "retry", "無法重試工作");
+export const retryJob = (jid, newSeed = false) => jobCall(jid, "retry", "無法重試工作", { newSeed });
 export const moveJobTop = (jid) => jobCall(jid, "top", "無法調整順序");
+// before: the waiting job it goes ahead of, or null for last (QU-02).
+export const moveJob = (jid, before) => jobCall(jid, "move", "無法調整順序", { before });
 
 export async function removeJob(jid) {
   try {
@@ -113,6 +126,18 @@ export async function pauseQueue(paused) {
     toast(paused ? "佇列已暫停，執行中的工作會跑完" : "佇列已繼續", { duration: 2200 });
   } catch (err) {
     toastError(err);
+  }
+}
+
+// Night run (QU-06): start and stop are epoch seconds or null; both null drops the schedule.
+export async function scheduleQueue(start, stop) {
+  try {
+    const state = await api.post("/api/jobs/schedule", { start, stop });
+    if (state) setState({ queue: state });
+    return state;
+  } catch (err) {
+    toastError(err, "無法排程佇列");
+    return null;
   }
 }
 
@@ -144,23 +169,34 @@ export async function cancelAll(pid = null) {
 // Upload files one after another; each becomes an ingest job on the server.
 // target: "library" (media library) or "shot" (a new take on `shot`). track: also add audio to the
 // soundtrack at `start` seconds, on `audioTrack` ("voice" or a music track) when given and free there.
+// Sound files first ask for their volume (+6 / 0 / -10 dB); canceling that skips only the sound files.
 export async function uploadFiles(files, { target = "library", shot = null, track = false, start = null, layer = null, audioTrack = null } = {}) {
   const { pid } = getState();
   if (!pid) return [];
-  const list = [...files].filter((f) => {
+  const isSound = (f) => kindOfName(f.name) === "audio";
+  let list = [...files].filter((f) => {
     if (kindOfName(f.name)) return true;
     if (/\.zip$/i.test(f.name)) importProjectZip(f);
     else toast(`不支援的檔案類型：${f.name}`, { level: "warn" });
     return false;
   });
+  const sounds = list.filter(isSound).length;
+  let gain = null;
+  if (sounds) {
+    const db = await pickImportGain(sounds);
+    if (db == null) list = list.filter((f) => !isSound(f));
+    else gain = dbToGain(db);
+  }
   if (!list.length) return [];
   const id = toast(`正在上傳 ${list.length} 個檔案…`, { duration: 0, progress: 0 });
   const jobs = [];
   for (let i = 0; i < list.length; i += 1) {
     const file = list[i];
-    const audio = kindOfName(file.name) === "audio";
+    const audio = isSound(file);
     const params = new URLSearchParams({ name: file.name, target: audio ? "library" : target });
+    if (audio && gain != null) params.set("gain", String(gain));
     if (shot && !audio) params.set("shot", shot);
+    if (shot && !audio && linkOff()) params.set("link", "0");
     if (layer && !audio) params.set("layer", layer);
     if (track || audio) params.set("track", track ? "1" : "0");
     if (track && audio && audioTrack) params.set("audioTrack", audioTrack);
@@ -181,6 +217,28 @@ export async function uploadFiles(files, { target = "library", shot = null, trac
     dismissToast(id);
   }
   return jobs;
+}
+
+// Relink (LB-09): `file` replaces a library item's file under the same id, so everything using it follows.
+export async function relinkFile(media, file) {
+  const { pid } = getState();
+  if (!pid) return null;
+  if (kindOfName(file.name) !== media.kind) {
+    toast(`請選同類型的檔案：「${media.name}」是${{ image: "圖片", video: "影片", audio: "聲音" }[media.kind]}`, { level: "warn" });
+    return null;
+  }
+  const id = toast(`正在上傳 ${file.name}`, { duration: 0, progress: 0 });
+  const params = new URLSearchParams({ name: file.name, target: "relink", media: media.id });
+  try {
+    const res = await upload(`/api/projects/${enc(pid)}/upload?${params}`, file, (p) => updateToast(id, { progress: p }));
+    upsertJobs([res.job]);
+    updateToast(id, { message: `已上傳，正在把「${media.name}」連到 ${file.name}`, level: "success", progress: null, duration: 3000 });
+    return res.job;
+  } catch (err) {
+    dismissToast(id);
+    toastError(err, "重新連結失敗");
+    return null;
+  }
 }
 
 export function activeJobsFor(jobs, pid, shotId) {

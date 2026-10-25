@@ -65,7 +65,7 @@ def audio_length(project: dict, item: dict) -> float:
     media = audio_media(project, item) or {}
     full = float(media.get("duration") or 0.0)
     t_out = full if item.get("out") is None else float(item["out"])
-    return max(0.1, t_out - float(item.get("in") or 0.0))
+    return max(0.1, (t_out - float(item.get("in") or 0.0)) / float(item.get("speed") or 1.0))
 
 
 def track_busy(project: dict, key: str, start: float, length: float) -> bool:
@@ -173,7 +173,22 @@ def _local(g: dict, t: float) -> float:
 
 
 # ---------------------------------------------------------------- split and trim
-def split_ops(g: dict, t: float, local: float) -> list[dict]:
+def _tail_versions(project: dict, shot: dict, tail_id: str) -> tuple[list[dict], dict]:
+    """Copies of the shot's versions for the tail of a cut (same files, ids of its own), so each half switches
+    and regenerates on its own; a copy keeps its pairing (a reversed copy's parent) and the active picks follow."""
+    takes = project.get("takes") or {}
+    own = {k: x for k, x in takes.items() if x.get("shot") == shot["id"]}
+    for key in ("activeVideo", "activeImage"):
+        if shot.get(key) in takes:
+            own.setdefault(shot[key], takes[shot[key]])  # a half cut before versions were copied
+    ids = {k: new_id("t") for k in own}
+    ops = [{"op": "take.add", "take": {**x, "id": ids[k], "shot": tail_id,
+                                        **({"parent": ids[x["parent"]]} if x.get("parent") in ids else {})}}
+           for k, x in own.items()]
+    return ops, {key: ids[shot[key]] for key in ("activeVideo", "activeImage") if shot.get(key) in ids}
+
+
+def split_ops(g: dict, t: float, local: float, project: dict) -> list[dict]:
     """The ops that cut a target in two, local seconds into it (t on the timeline)."""
     item, kind = g["item"], g["type"]
     if kind == "shot":
@@ -183,8 +198,10 @@ def split_ops(g: dict, t: float, local: float) -> list[dict]:
         video = clip["source"] == "video"
         head = {"trimOut": at} if video else {"duration": round(local, 2)}
         tail = {"trimIn": at, "trimOut": item.get("trimOut")} if video else {"duration": round(clip["length"] - local, 2)}
+        sid = new_id("s")
+        copies, active = _tail_versions(project, item, sid)
         return [{"op": "shot.update", "id": item["id"], "patch": {**head, "transition": {**trans, "type": "cut"}}},
-                {"op": "shot.add", "shot": {**item, **tail, "id": new_id("s")}, "index": clip["index"] + 1}]
+                *copies, {"op": "shot.add", "shot": {**item, **tail, **active, "id": sid}, "index": clip["index"] + 1}]
     head_keys, tail_keys = split_keys(item, local)
     t = r3(t)
     if kind == "overlay":
@@ -194,7 +211,7 @@ def split_ops(g: dict, t: float, local: float) -> list[dict]:
         return [{"op": "overlay.update", "id": item["id"], "patch": {"length": r3(local), **key_patch(item, head_keys)}},
                 {"op": "overlay.add", "item": rest}]
     if kind == "audio":
-        cut = r3(float(item.get("in") or 0) + local)
+        cut = r3(float(item.get("in") or 0) + local * float(item.get("speed") or 1))
         return [{"op": "audio.update", "id": item["id"], "patch": {"out": cut, "fadeOut": 0, **key_patch(item, head_keys)}},
                 {"op": "audio.add", "item": {**item, "id": new_id("a"), "track": audio_track(item), "start": t, "in": cut,
                                              "fadeIn": 0, **key_patch(item, tail_keys)}}]
@@ -208,8 +225,8 @@ def split_ops(g: dict, t: float, local: float) -> list[dict]:
 
 def split(project: dict, t: float, kind: str = "shot", item_id: str | None = None) -> dict:
     g = _target(project, _clips(project), kind, item_id, t)
-    ops = split_ops(g, t, _local(g, t))
-    tail = ops[1].get("shot") or ops[1]["item"]
+    ops = split_ops(g, t, _local(g, t), project)
+    tail = ops[-1].get("shot") or ops[-1]["item"]
     return {"ops": ops, "label": SPLIT_LABEL[kind], "id": tail["id"]}
 
 
@@ -226,7 +243,7 @@ def split_all(project: dict, t: float) -> dict:
     for g in targets:
         local = t - g["start"]
         if local >= g["min"] and g["length"] - local >= g["min"]:
-            ops += split_ops(g, t, local)
+            ops += split_ops(g, t, local, project)
     if not ops:
         raise AppError("這個時間點沒有可以分割的片段")
     return {"ops": ops, "label": "分割所有軌道"}
@@ -252,7 +269,7 @@ def trim(project: dict, t: float, side: str, kind: str = "shot", item_id: str | 
         patch = ({"start": t, "in": t_in, "length": r3(g["length"] - local), **key_patch(item, shift_keys(item, local))}
                  if left else {"length": r3(local)})
     elif kind == "audio":
-        cut = r3(float(item.get("in") or 0) + local)
+        cut = r3(float(item.get("in") or 0) + local * float(item.get("speed") or 1))
         patch = {"start": t, "in": cut, **key_patch(item, shift_keys(item, local))} if left else {"out": cut}
     elif kind == "adjust":
         patch = ({"start": t, "length": r3(g["length"] - local), **key_patch(item, shift_keys(item, local))}
@@ -268,22 +285,51 @@ def freeze(project: dict, t: float) -> dict:
     clip = _clip_at(_clips(project), t)
     if not clip or clip["source"] != "video":
         raise AppError("這個時間點要是影片鏡頭才能定格")
-    if clip["shot"].get("audioDetached"):
-        raise AppError("已分離原聲的鏡頭要先還原原聲，才能定格")
     local = t - clip["start"]
     at = r3(min(clip["out"] - 0.04, clip["in"] + local * clip["speed"]))
     sid = new_id("s")
     still = {"op": "shot.add", "shot": {"id": sid, "name": "定格", "duration": FREEZE_LEN}, "index": clip["index"] + 1}
     if local < EDGE:
-        ops = [{**still, "index": clip["index"]}]
+        ops, place = [{**still, "index": clip["index"]}], clip["start"]
     elif clip["length"] - local < EDGE:
-        ops = [still]
+        ops, place = [still], clip["start"] + clip["length"]
     else:
         g = {"type": "shot", "item": clip["shot"], "clip": clip}
-        ops = [*split_ops(g, t, local), still]
+        ops, place = [*split_ops(g, t, local, project), still], t
+    ops += _detached_sound_ops(project, clip, place)
     job = {"kind": "lastframe", "shotId": clip["shot"]["id"],
            "payload": {"source": clip["take"]["id"], "target": "shot", "targetShot": sid, "at": at}}
     return {"ops": ops, "label": "定格", "job": job, "id": sid}
+
+
+def _detached_sound_ops(project: dict, clip: dict, place: float) -> list[dict]:
+    """Keep the shot's detached sound under its picture when a still goes in at `place`, whatever the link
+    toggle: a clip across `place` is cut there and its tail moves past the still, later ones move by its length."""
+    ops: list[dict] = []
+    for item in _footage_sound(project, clip["shot"]["id"], _file_of(project, clip["take"]["id"])):
+        start = float(item.get("start") or 0.0)
+        local = place - start
+        if local >= MIN_ITEM and audio_length(project, item) - local >= MIN_ITEM:
+            head, tail = split_ops({"type": "audio", "item": item}, place, local, project)
+            ops += [head, {**tail, "item": {**tail["item"], "start": r3(place + FREEZE_LEN)}}]
+        elif local < MIN_ITEM:
+            ops.append({"op": "audio.update", "id": item["id"], "patch": {"start": r3(start + FREEZE_LEN)}})
+    return ops
+
+
+def _file_of(project: dict, take_id: str | None) -> str | None:
+    """The footage a version shows; a reversed copy counts as the footage it was made from."""
+    takes = project.get("takes") or {}
+    take = takes.get(take_id) or {}
+    if _is_reverse(take):
+        take = takes.get(take.get("parent")) or take
+    return take.get("file")
+
+
+def _footage_sound(project: dict, shot_id: str, file: str | None) -> list[dict]:
+    """The detached sound of a shot and of the shots cut from the same footage."""
+    return [a for a in project.get("audio") or []
+            if a.get("shotId") and (a["shotId"] == shot_id or (file and _file_of(project, a.get("takeId")) == file))]
 
 
 def detach(project: dict, shot_id: str | None = None, t: float | None = None) -> dict:
@@ -298,26 +344,28 @@ def detach(project: dict, shot_id: str | None = None, t: float | None = None) ->
         raise AppError("這個鏡頭的原聲已經分離了")
     if clip["source"] != "video" or not clip["take"].get("hasAudio"):
         raise AppError("這個鏡頭沒有聲音")
-    if clip["speed"] != 1:
-        raise AppError("變速鏡頭不能分離音訊，先把速度改回 1x")
     aid = new_id("a")
+    # A sped shot's sound keeps its speed (the shot's speed is locked while its sound is detached).
     item = {"id": aid, "takeId": clip["take"]["id"], "shotId": shot["id"], "start": r3(clip["start"]),
-            "in": r3(clip["in"]), "out": r3(clip["out"]), "name": f"{shot.get('name') or '鏡頭'} 原聲"}
+            "in": r3(clip["in"]), "out": r3(clip["out"]), "name": f"{shot.get('name') or '鏡頭'} 原聲",
+            **({"speed": clip["speed"]} if clip["speed"] != 1 else {})}
     return {"ops": [{"op": "audio.add", "item": item}, {"op": "shot.update", "id": shot["id"], "patch": {"audioDetached": True}}],
             "label": "分離原聲", "id": aid}
 
 
 def restore(project: dict, item_id: str) -> dict:
-    """Undo a detach from the shot or its audio clip; shots cut from the same footage restore together."""
+    """Undo a detach from the shot or its audio clip; shots cut from the same footage restore together (each half
+    has its own copy of the version, so they are matched by file)."""
     audio = project.get("audio") or []
     hit = next((a for a in audio if a["id"] == item_id and a.get("shotId")), None)
     shot = next((s for s in project["shots"] if s["id"] == item_id and s.get("audioDetached")), None)
     shot_id = hit["shotId"] if hit else shot["id"] if shot else None
     if not shot_id:
         raise AppError("這不是已分離原聲的鏡頭或它的原聲片段")
-    takes = {a.get("takeId") for a in audio if a.get("shotId") == shot_id}
-    items = [a for a in audio if a.get("shotId") and (a["shotId"] == shot_id or a.get("takeId") in takes)]
-    shots = [s for s in project["shots"] if s.get("audioDetached") and (s["id"] == shot_id or s.get("activeVideo") in takes)]
+    files = {_file_of(project, a.get("takeId")) for a in audio if a.get("shotId") == shot_id} - {None}
+    items = [a for a in audio if a.get("shotId") and (a["shotId"] == shot_id or _file_of(project, a.get("takeId")) in files)]
+    shots = [s for s in project["shots"]
+             if s.get("audioDetached") and (s["id"] == shot_id or _file_of(project, s.get("activeVideo")) in files)]
     return {"ops": [*({"op": "audio.delete", "id": a["id"]} for a in items),
                     *({"op": "shot.update", "id": s["id"], "patch": {"audioDetached": False}} for s in shots)],
             "label": "還原原聲"}
@@ -334,8 +382,6 @@ def reverse(project: dict, shot_id: str | None = None, t: float | None = None) -
     take = shot and video_take(project, shot)
     if not take:
         raise AppError("倒放只能用在影片鏡頭")
-    if shot.get("audioDetached"):
-        raise AppError("已分離原聲的鏡頭要先還原原聲，才能倒放")
     takes = project.get("takes") or {}
     other = (takes.get(take.get("parent")) if _is_reverse(take) else
              next((x for x in takes.values() if x.get("parent") == take["id"] and _is_reverse(x)

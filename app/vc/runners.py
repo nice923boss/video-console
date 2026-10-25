@@ -10,24 +10,25 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from . import notext, providers, video2x
+from . import cloud_cache, conform, costs, notext, providers, video2x
 from .comfy import workflows as wf
 from .comfy.manager import ComfyManager
+from .costs import CostLedger
 from .jobs import JobControl
 from .llm import LLMClient
 from .localjobs import LOCAL_KINDS, LocalJobs, number
 from .media import Media
-from .ops import MAX_REFS, MAX_SEED, snap16
+from .opfields import MAX_REFS, MAX_SEED, snap16
 from .providers import catalog
 from .providers.base import duration_seconds, pick_duration
 from .providers.catalog import ModelCatalog
 from .secrets import SecretStore
-from .sequence import compose_prompt
+from .sequence import cast_looks, compose_prompt
 from .settings import SettingsStore
 from .store import ProjectStore
 from .stt import SttClient, SttJobs
-from .takes import (TAKE_DIR, commit_takes, find_item, find_shot, item_path, new_take, reference_image,
-                    shot_label, stage_file)
+from .takes import (TAKE_DIR, commit_takes, find_item, find_shot, item_path, linked, new_take,
+                    reference_image, shot_label, stage_file)
 from .util import AppError, clamp, kind_of, new_id, random_seed
 from .voice import Audio8Voice, VoAI, VoiceJobs
 
@@ -98,7 +99,8 @@ class Runners:
     """The executor handed to JobManager: generation jobs here, ffmpeg-only jobs in LocalJobs."""
 
     def __init__(self, *, store: ProjectStore, settings: SettingsStore, secrets: SecretStore, comfy: ComfyManager,
-                 workflows: wf.WorkflowStore, media: Callable[[], Media], catalog: ModelCatalog):
+                 workflows: wf.WorkflowStore, media: Callable[[], Media], catalog: ModelCatalog,
+                 costs: CostLedger):
         self._store = store
         self._settings = settings
         self._secrets = secrets
@@ -106,6 +108,7 @@ class Runners:
         self._workflows = workflows
         self._media = media
         self._catalog = catalog
+        self._costs = costs
         self._local = LocalJobs(store, settings, media)
         self._voice = VoiceJobs(store, Audio8Voice(settings), media, VoAI(secrets))
         self._stt = SttJobs(store, SttClient(settings), media)
@@ -127,6 +130,11 @@ class Runners:
         if kind in ("image", "video"):
             return self._prepare_gen(kind, project, shot_id, payload)
         raise AppError(f"不支援的工作類型：{kind}")
+
+    def admit(self, prepared: dict) -> None:
+        p = prepared["payload"]
+        if p.get("backend") == "comfy" and p.get("workflow"):
+            self._check_template_now(self._workflows.get(str(p["workflow"])), str(p.get("server") or "auto"))
 
     def execute(self, ctl: JobControl) -> dict:
         if ctl.kind in LOCAL_KINDS:
@@ -194,6 +202,7 @@ class Runners:
             raise AppError("這個生成方式只能用文字生成，請先填寫鏡頭描述")
         lengths = plan.pop("lengths", None)
         uses_denoise = plan.pop("usesDenoise", True)
+        price = plan.pop("price", 0.0)
         if lengths:
             duration = self._video_seconds(shot, payload, duration, lengths, plan["provider"], notes)
         if plan.get("frames"):
@@ -235,6 +244,11 @@ class Runners:
         }
         if kind == "image":
             job_payload["chainVideo"] = bool(payload.get("chainVideo"))
+            job_payload["chainUpscale"] = bool(payload.get("chainVideo") and payload.get("chainUpscale"))
+        cost = costs.estimate(kind, price, duration)
+        if cost:
+            job_payload["cost"] = cost
+            notes.append(costs.estimate_note(cost))
         upscale = self._settings.section("video2x") or {}
         if kind == "video" and backend == "comfy" and upscale.get("enabled"):
             video2x.require()
@@ -258,16 +272,18 @@ class Runners:
 
     @staticmethod
     def _prompts(kind: str, project: dict, shot: dict, payload: dict, defaults: dict) -> tuple[str, str]:
-        """Shot text plus the project style; a video prompt also carries the motion and camera notes."""
+        """Shot text, the looks of the cast it names and the project style; a video prompt also carries the
+        motion and camera notes."""
         style = project.get("style") or {}
         base = _text(payload.get("prompt"), 8000) or shot.get("prompt") or ""
+        looks = cast_looks(project, base)
         if kind == "image":
             # The shot's own picture prompt is the whole text, style included, so it goes out unchanged
             own = "" if payload.get("prompt") else (shot.get("imagePrompt") or "").strip()
-            prompt = own or compose_prompt(base, style.get("prompt") or "")
+            prompt = own or compose_prompt(base, looks, style.get("prompt") or "")
         else:
             motion = _text(payload.get("motion"), 4000) or shot.get("motion") or ""
-            prompt = compose_prompt(base, motion, shot.get("camera") or "", style.get("prompt") or "")
+            prompt = compose_prompt(base, motion, shot.get("camera") or "", looks, style.get("prompt") or "")
         negative = (_text(payload.get("negative"), 4000)
                     or compose_prompt(shot.get("negative") or "", style.get("negative") or "")
                     or defaults.get("negative") or "")
@@ -319,6 +335,30 @@ class Runners:
             return bool(wid) and bool(self._workflows.get(wid).get("allowText"))
         except AppError:  # a missing template is reported by _plan_comfy
             return False
+
+    def _check_template_now(self, tpl: dict, server: str) -> None:
+        """Refuse a template that no online ComfyUI can run when it is sent, not after its wait in line (LG-11).
+
+        A failed check is redone with a fresh node list, so a model added a minute ago counts. With no ComfyUI
+        online nothing can be checked here; the job waits and is checked again when it starts.
+        """
+        ids = [server] if server != "auto" else [s["id"] for s in self._comfy.servers() if s.get("enabled", True)]
+        failed = None
+        for sid in ids:
+            if not self._comfy.is_online(sid):
+                continue
+            try:
+                check = self._comfy.check_template(sid, tpl)
+                if not check["ok"]:
+                    check = self._comfy.check_template(sid, tpl, force=True)
+            except AppError as exc:
+                log.info("Could not check %s on ComfyUI %s: %s", tpl["id"], sid, exc.message)
+                continue
+            if check["ok"]:
+                return
+            failed = failed or check
+        if failed:
+            raise AppError(f"ComfyUI 還不能執行「{tpl['name']}」：{wf.describe_missing(failed)}", 409)
 
     def _plan_comfy(self, kind: str, project: dict, shot: dict, payload: dict, route: dict, item: dict | None,
                     duration: float, notes: list[str]) -> tuple[dict, dict | None]:
@@ -429,6 +469,7 @@ class Runners:
             "params": {},
             "fps": round(float(project["settings"]["fps"])),
             "frames": 0,
+            "price": config["price"],  # taken out again by _prepare_gen
         }
         if kind == "video":
             plan["lengths"] = prov.durations(config, mode, entry)  # taken out again by _prepare_gen
@@ -470,6 +511,8 @@ class Runners:
                 "prompt": prompt, "negative": negative, "seed": seed, "seedLocked": True,
                 "width": int(item.get("width") or 0), "height": int(item.get("height") or 0), "duration": 0.0,
                 "image": item["id"], "denoise": None,
+                # Picture, upscale, then video (IM-04): the video job uses the route of the first picture
+                "chainVideo": bool(payload.get("chainVideo")), "chainRoute": payload.get("route"),
             },
         }
 
@@ -515,7 +558,7 @@ class Runners:
             source=source, prompt=item.get("prompt") or "", negative=item.get("negative") or "",
             seed=item.get("seed"), params={**(item.get("params") or {}), "upscaler": p["method"]},
         )
-        commit_takes(self._store, ctl.pid, [take], "activeVideo")
+        commit_takes(self._store, ctl.pid, [take], "activeVideo", link=linked(ctl))
         return {"takeIds": [tid], "message": "影片放大完成"}
 
     def _video2x_clip(self, ctl: JobControl, media: Media, src: Path, dst: Path, size: tuple[int, int],
@@ -536,10 +579,19 @@ class Runners:
         p = ctl.payload
         tpl = self._workflows.get(p["workflow"])
         remote = ctl.remote_data or {}
+        method = (p["upscale1080"] if p["upscale1080"] in video2x.METHODS else "anime4k") if p.get("upscale1080") else ""
+        # With an upscale to follow, ComfyUI's progress fills only the bar's first part (PF-06).
+        share = video2x.PROGRESS_SHARE[method] if method else 0.0
+        on_progress = (lambda frac, message=None: ctl.progress(frac * (1 - share), message)) if share else ctl.progress
+        # Stopped while the graph was going out: send it only if ComfyUI never got it (LG-03).
+        if remote.get("type") == "comfy" and remote.get("sent") is False \
+                and not self._comfy.received(str(remote["server"]), str(remote["promptId"])):
+            ctl.note("程式重新啟動時這個任務還沒送到 ComfyUI，已重新送出")
+            remote = {}
         if remote.get("type") == "comfy":
             sid = str(remote["server"])
             results = self._comfy.resume(sid, str(remote["promptId"]), dst_dir=work, outputs=remote.get("outputs"),
-                                         on_progress=ctl.progress, on_preview=ctl.preview, cancelled=ctl.cancelled)
+                                         on_progress=on_progress, on_preview=ctl.preview, cancelled=ctl.cancelled)
         else:
             sid = self._comfy.pick_server(p.get("server") or "auto", tpl)
             check = self._comfy.check_template(sid, tpl)
@@ -550,10 +602,10 @@ class Runners:
             graph = wf.build_graph(tpl, self._graph_values(ctl, sid))
             outputs = tpl["outputs"] or None
             results = self._comfy.run(
-                sid, graph, dst_dir=work, outputs=outputs, on_progress=ctl.progress, on_preview=ctl.preview,
+                sid, graph, dst_dir=work, outputs=outputs, on_progress=on_progress, on_preview=ctl.preview,
                 cancelled=ctl.cancelled,
-                on_submitted=lambda prompt_id: ctl.remote(
-                    {"type": "comfy", "server": sid, "promptId": prompt_id, "outputs": outputs}),
+                on_submitted=lambda prompt_id, sent: ctl.remote(
+                    {"type": "comfy", "server": sid, "promptId": prompt_id, "outputs": outputs, "sent": sent}),
             )
         want = "video" if ctl.kind == "video" else "image"
         files = [r["path"] for r in results if r["kind"] == want]
@@ -561,8 +613,7 @@ class Runners:
             raise AppError(f"ComfyUI 沒有產生{'影片' if want == 'video' else '圖片'}，請確認範本的輸出節點", 502)
         source = {"backend": "comfy", "server": sid, "workflow": tpl["id"], "workflowName": tpl["name"],
                   "route": p.get("route")}
-        if p.get("upscale1080"):
-            method = p["upscale1080"] if p["upscale1080"] in video2x.METHODS else "anime4k"
+        if method:
             files = self._upscale_videos(ctl, files, source, method)
         return self._commit(ctl, files, source)
 
@@ -609,11 +660,14 @@ class Runners:
         return values
 
     def _upscale_videos(self, ctl: JobControl, files: list[Path], source: dict, method: str) -> list[Path]:
-        """Video2X brings each clip up to 1080P before it becomes a take; a failed upscale keeps the original clip."""
+        """Video2X brings each clip up to 1080P before it becomes a take; a failed upscale keeps the original clip.
+        The clips share the bar's last part (video2x.PROGRESS_SHARE), each moving with its frames done."""
         media = self._media()
         label = video2x.METHODS[method]
+        start = (1 - video2x.PROGRESS_SHARE[method]) * 0.97  # after ComfyUI's "fetching the output" step
+        span = (0.99 - start) / max(1, len(files))
         out: list[Path] = []
-        for path in files:
+        for i, path in enumerate(files):
             ctl.check()
             try:
                 info = media.probe(path)
@@ -622,7 +676,7 @@ class Runners:
                     out.append(path)
                     continue
                 dst = self._video2x_clip(ctl, media, path, path.with_name(f"{path.stem}-1080p.mp4"), size, method,
-                                         0.95, 0.04)
+                                         start + span * i, span)
             except AppError as exc:
                 if exc.status == 499:
                     raise
@@ -638,6 +692,7 @@ class Runners:
         prov = providers.get(p["provider"])
         owner = prov.secret_owner()
         config = prov.resolve_config((self._settings.section("providers") or {}).get(prov.id))
+        key = cloud_cache.request_key(prov.id, config, p)
         ctx = providers.Context(
             prov.id, config, lambda key: self._secrets.get(f"provider.{owner}.{key}"), dst_dir=work,
             on_progress=ctl.progress, cancelled=ctl.cancelled,
@@ -645,6 +700,11 @@ class Runners:
             models=self._catalog.get(prov.id, prov.catalog_source(config)) if prov.model_keys else None,
         )
         remote = ctl.remote_data or {}
+        reused = None if remote.get("type") == "provider" else cloud_cache.find(
+            self._store.get(ctl.pid), self._store.project_dir(ctl.pid), ctl.kind, key, work)
+        if reused:
+            ctl.note(cloud_cache.REUSED_NOTE)
+            return self._commit(ctl, [reused[0]], reused[1])
         try:
             if remote.get("type") == "provider":
                 files = prov.resume(ctx, remote.get("data") or {})
@@ -670,13 +730,17 @@ class Runners:
         finally:
             for text in ctx.notes:
                 ctl.note(text)
+        if p.get("cost"):
+            self._costs.add(prov.id, float(p["cost"]))
         want = "video" if ctl.kind == "video" else "image"
         files = [f for f in files if kind_of(f.name) == want]
         if not files:
             raise AppError(f"{prov.name} 沒有回傳{'影片' if want == 'video' else '圖片'}", 502)
+        if want == "video":
+            files = [conform.to_aspect(self._media(), f, p["width"], p["height"], ctl.note) for f in files]
         model = config.get("modelT2V") if p.get("mode") == "t2v" and config.get("modelT2V") else config.get("model")
         source = {"backend": "provider", "provider": prov.id, "providerName": prov.name, "route": p.get("route"),
-                  "model": str(model or "")}
+                  "model": str(model or ""), "requestKey": key}
         return self._commit(ctl, files, source)
 
     def _reference(self, ctl: JobControl, item_id: str | None = None) -> tuple[bytes, str]:
@@ -715,12 +779,18 @@ class Runners:
         slot = "activeVideo" if ctl.kind == "video" else "activeImage"
         # An unlocked shot remembers the seed of its newest picture, so locking it keeps that look.
         extra = {"seed": p["seed"]} if ctl.kind == "image" and not p.get("seedLocked") else None
-        commit_takes(self._store, ctl.pid, takes, slot, extra)
+        commit_takes(self._store, ctl.pid, takes, slot, extra, link=linked(ctl))
         result: dict[str, Any] = {"takeIds": [t["id"] for t in takes], "message": f"{KIND_LABEL[ctl.kind]}完成"}
-        if ctl.kind == "image" and p.get("chainVideo"):
+        if ctl.kind in ("image", "upscale") and p.get("chainVideo"):
+            upscale_first = ctl.kind == "image" and p.get("chainUpscale")
             try:
-                result["followUp"] = ctl.spawn("video", {"image": takes[0]["id"], "route": p.get("route")},
-                                               ctl.shot_id)["id"]
+                if upscale_first:
+                    follow = {"source": takes[0]["id"], "chainVideo": True, "route": p.get("route"), "link": linked(ctl)}
+                    result["followUp"] = ctl.spawn("upscale", follow, ctl.shot_id)["id"]
+                else:
+                    route = p.get("chainRoute") if ctl.kind == "upscale" else p.get("route")
+                    follow = {"image": takes[0]["id"], "route": route, "link": linked(ctl)}
+                    result["followUp"] = ctl.spawn("video", follow, ctl.shot_id)["id"]
             except AppError as exc:
-                ctl.note(f"接續生成影片失敗：{exc.message}")
+                ctl.note(f"接續{'放大' if upscale_first else '生成影片'}失敗：{exc.message}")
         return result

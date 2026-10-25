@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from vc.export import export_options, frame_rate, plan_export, prepare_clips
-from vc.ops import SETTINGS_FIELDS, apply_ops, blank_shot
+from vc.export import TO_709, export_options, frame_rate, plan_export, prepare_clips
+from vc.opfields import SETTINGS_FIELDS, blank_shot
+from vc.ops import apply_ops
 from vc.presets import ASPECTS
 from vc.settings import DEFAULTS
 from vc.util import AppError
@@ -47,7 +48,7 @@ def test_export_graph_uses_the_project_rate(tmp_path: Path, fps: float, rate: st
     p = make_project(fps)
     clips = prepare_clips(p, tmp_path)
     plan = plan_export(p, tmp_path, clips, export_options(p, {}, None))
-    assert f",fps={rate},format=yuv420p" in plan["graph"]
+    assert f",fps={rate},{TO_709}" in plan["graph"]
     assert f":r={rate}" in " ".join(" ".join(i) for i in plan["inputs"])
 
 

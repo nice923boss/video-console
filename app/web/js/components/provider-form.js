@@ -99,7 +99,7 @@ function FieldInput({ field, value, onChange, detected }) {
     case "number": {
       const int = Number.isInteger(field.default);
       return html`<${NumberInput} value=${value} min=${field.min} max=${field.max} step=${field.step ?? 1}
-        digits=${int ? 0 : 2} onCommit=${(v) => onChange(v == null ? field.default : int ? Math.round(v) : v)} />`;
+        digits=${field.digits ?? (int ? 0 : 2)} onCommit=${(v) => onChange(v == null ? field.default : int ? Math.round(v) : v)} />`;
     }
     case "combo":
       return html`<${ComboInput} field=${field} value=${value ?? ""} onChange=${onChange} detected=${detected} />`;

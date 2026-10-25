@@ -1,13 +1,21 @@
 """Printable HTML storyboard (one card per shot), used by the in-app print view and the project package."""
 from __future__ import annotations
 
+import base64
 import html
+import logging
+import mimetypes
 import re
 import time
+from pathlib import Path
 from typing import Callable
 
 from .sequence import build_sequence, image_take, total_duration, video_take
-from .util import fmt_seconds
+from .util import AppError, fmt_seconds
+
+log = logging.getLogger("vc.storyboard")
+
+MAX_EMBED = 1024 ** 2  # a larger image goes into the page as its thumbnail, so the page stays a few MB
 
 TRANSITION_LABELS = {
     "cut": "直接切換",
@@ -84,6 +92,25 @@ def shot_picture(project: dict, shot: dict) -> str | None:
     if vid and vid.get("thumb"):
         return vid["thumb"]
     return None
+
+
+def picture_data(project: dict, shot: dict, locate: Callable[[str], Path]) -> str | None:
+    """A shot's picture written into the page as a data: URI, so the page saved on its own keeps its pictures.
+    locate maps a project-relative file to disk."""
+    rel = shot_picture(project, shot)
+    if not rel:
+        return None
+    img = image_take(project, shot)
+    try:
+        path = locate(rel)
+        if img and img.get("thumb") and img["thumb"] != rel and path.stat().st_size > MAX_EMBED:
+            path = locate(img["thumb"])
+        data = path.read_bytes()
+    except (OSError, AppError) as exc:
+        log.warning("Storyboard picture of %s left out: %s", shot.get("id"), exc)
+        return None
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
 
 def _row(label: str, text: str) -> str:

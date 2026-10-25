@@ -64,6 +64,27 @@ def test_each_drain_starts_a_new_batch(notifier, mock_http):
     assert calls[1].json()["tags"] == ["white_check_mark"]
 
 
+def test_failures_only_mode_skips_clean_batches_and_lists_failures(notifier, settings, events, mock_http):
+    settings.update({"notify": {"ntfy": {"when": "failed"}}})
+    notifier.on_job(job("image", "done", "生圖：鏡頭 1"), 0)
+    assert mock_http.wait_for_calls(1, timeout=0.5) == []
+    assert len(events("notify")) == 1  # the open window still gets its toast
+
+    notifier.on_job(job("image", "done", "生圖：鏡頭 2"), 2)
+    notifier.on_job(job("video", "failed", "影片：鏡頭 3", error="逾時"), 1)
+    notifier.on_job(job("video", "failed", "影片：鏡頭 4", error="缺少模型"), 0)
+
+    calls = mock_http.wait_for_calls(1)
+    assert calls[0].json()["message"] == "2 個工作失敗\n✗ 影片：鏡頭 3\n✗ 影片：鏡頭 4"
+
+
+def test_transcription_is_announced(notifier, events, mock_http):
+    notifier.on_job(job("transcribe", "done", "語音轉字幕：鏡頭 1", message="已加入 3 句字幕"), 0)
+
+    assert events("notify")[0]["message"] == "已加入 3 句字幕"
+    assert mock_http.wait_for_calls(1)[0].json()["message"] == "完成：語音轉字幕：鏡頭 1"
+
+
 @pytest.mark.parametrize("finished", [
     job("ingest", "done", "匯入：a.png"),     # bookkeeping jobs stay quiet
     job("image", "canceled", "生圖：鏡頭 1"),  # the user stopped it on purpose
@@ -110,7 +131,7 @@ def test_test_push_reports_server_refusal(notifier, mock_http):
     with pytest.raises(AppError) as err:
         notifier.test()
     assert err.value.status == 502
-    assert err.value.message == "ntfy 推播失敗：金鑰無效或未授權（401）：unauthorized"
+    assert err.value.message == "ntfy 推播失敗：金鑰無效或未授權（401）：unauthorized。請檢查金鑰或存取權杖是否正確、是否過期"
 
 
 def test_test_push_needs_a_topic(settings, secrets, bus):

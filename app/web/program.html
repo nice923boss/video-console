@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>節目畫面｜Video Console</title>
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/edit.css">
+<link rel="stylesheet" href="css/grade.css">
+<style>
+  body { display: flex; background: #000; cursor: default; }
+  .program-wait { position: absolute; inset: 0; display: grid; place-items: center; color: #888; text-align: center; }
+  body.is-live .program-wait { display: none; }
+  body.is-idle { cursor: none; }
+</style>
+<script type="module" src="js/program.js"></script>
+</head>
+<body>
+<div class="player is-full">
+  <div class="pl-screen">
+    <div class="pl-stage show-caps" style="--ar:1.77778"><div class="pl-host"></div></div>
+  </div>
+</div>
+<div class="program-wait">等待主視窗的剪輯頁播放器……<br>把這個視窗拖到第二螢幕，雙擊畫面切換全螢幕。</div>
+</body>
+</html>

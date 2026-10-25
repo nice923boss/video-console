@@ -182,8 +182,9 @@ def _action_size(index: int, size: str | None, label: str, action: str, opening:
 
 
 def plan(shot: dict, opening: bool = False) -> dict | None:
-    """{"label", "fast", "flash", "shots": [{"size", "picture", "caption", "role"}]} for a beat written as numbered
-    actions, a storyboard table row or with camera notes, None for a beat the rules in vc.pacing cover instead.
+    """{"label", "fast", "flash", "shots": [{"size", "picture", "caption", "role", "speaker"}]} for a beat
+    written as numbered actions, a storyboard table row or with camera notes, None for a beat the rules in
+    vc.pacing cover instead.
     opening: the beat starts a scene (the caller knows the story's places); a row that opens with 場景： does."""
     label, actions, numbered = _actions(shot["prompt"])
     units = _units(shot.get("lines") or [])
@@ -202,14 +203,16 @@ def plan(shot: dict, opening: bool = False) -> dict | None:
     heard: list[list[dict]] = [[] for _ in actions]
     if "圖卡" in label and actions:  # an information card: the narration runs across its panels in order
         parts = share("，".join(u["words"] for u in units), len(actions))
-        heard = [[{"words": p}] if p else [] for p in parts]
+        voices = "／".join(dict.fromkeys(_voice(u) for u in units if _voice(u)))
+        heard = [[{"words": p, "speaker": voices, "how": ""}] if p else [] for p in parts]
     else:
         for unit, j in zip(units, _align(units, [p for _, p in sized])):
             heard[j].append(unit)
     shots: list[dict] = []
     for i, ((written, picture), said) in enumerate(zip(sized, heard)):
         size, role = _action_size(i, written, label, picture, opening)
-        shots.append({"size": size, "picture": picture, "caption": said[0]["words"] if said else "", "role": role})
+        shots.append({"size": size, "picture": picture, "caption": said[0]["words"] if said else "", "role": role,
+                      "speaker": _voice(said[0]) if said else ""})
         for unit in said[1:]:
             shots.append(_line_shot(unit, picture, shots[-1]["size"], written))
     if not actions:
@@ -226,8 +229,14 @@ def plan(shot: dict, opening: bool = False) -> dict | None:
         after = best if hit >= 2 else len(shots) - 1
         while after + 1 < len(shots) and shots[after + 1]["role"] == "line":  # not between an action and its lines
             after += 1
-        shots.insert(after + 1, {"size": size or "全景", "picture": picture, "caption": "", "role": "camera"})
+        shots.insert(after + 1, {"size": size or "全景", "picture": picture, "caption": "", "role": "camera",
+                                 "speaker": ""})
     return {"label": label, "fast": fast, "flash": "幻想" in label, "shots": shots}
+
+
+def _voice(unit: dict) -> str:
+    """Who says a unit and how, as the speakers note writes it: 小宜(大喊); "" for an unnamed narrator."""
+    return unit["speaker"] + unit["how"]
 
 
 def _line_shot(unit: dict, picture: str, before: str, written: str | None) -> dict:
@@ -235,8 +244,8 @@ def _line_shot(unit: dict, picture: str, before: str, written: str | None) -> di
     action asks for or else at another size than the shot `before` it."""
     if unit["narrator"]:
         size = written or next(s for s in ("全景", "中景", "近景") if s != before)
-        return {"size": size, "picture": picture, "caption": unit["words"], "role": "line"}
+        return {"size": size, "picture": picture, "caption": unit["words"], "role": "line", "speaker": _voice(unit)}
     how = unit["how"].strip("()（） ")
     who = unit["speaker"] + "說話" + (f"，{how}" if how else "")
     return {"size": "特寫" if before == "近景" else "近景", "picture": f"{who}；{picture}" if picture else who,
-            "caption": unit["words"], "role": "line"}
+            "caption": unit["words"], "role": "line", "speaker": _voice(unit)}

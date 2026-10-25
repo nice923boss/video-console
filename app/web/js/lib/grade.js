@@ -100,7 +100,9 @@ const transfer = (input, result, fns) =>
     .map((ch, i) => `<feFunc${ch} type="table" tableValues="${fns[i]}"/>`).join("")}</feComponentTransfer>`;
 
 // The grade as an SVG <filter> element (markup), referenced from CSS as url(#id).
-export function filterMarkup(id, grade) {
+// split (GR-06): grade only the right half of the element, leaving its left half as it was, for a
+// before/after comparison.
+export function filterMarkup(id, grade, split = false) {
   const g = fullGrade(grade);
   const parts = [`<feColorMatrix in="SourceGraphic" type="matrix" values="${matrixValues(colorMatrix(g))}" result="m"/>`];
   parts.push(transfer("m", "c", ["r", "g", "b"].map((ch) => table(channelCurve(g, ch)))));
@@ -130,6 +132,13 @@ export function filterMarkup(id, grade) {
     last = "x";
   }
   // Keep the picture's own transparency (letterbox areas, picture-in-picture edges).
-  parts.push(`<feComposite in="${last}" in2="SourceGraphic" operator="in"/>`);
-  return `<filter id="${id}" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">${parts.join("")}</filter>`;
+  if (!split) {
+    parts.push(`<feComposite in="${last}" in2="SourceGraphic" operator="in"/>`);
+    return `<filter id="${id}" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">${parts.join("")}</filter>`;
+  }
+  // Primitive subregions in bounding-box units: the graded result on the right half, the source on the left.
+  parts.push(`<feComposite in="${last}" in2="SourceGraphic" operator="in" x="0.5" width="0.5" result="after"/>`);
+  parts.push(`<feOffset in="SourceGraphic" x="0" width="0.5" result="before"/>`);
+  parts.push(`<feMerge><feMergeNode in="before"/><feMergeNode in="after"/></feMerge>`);
+  return `<filter id="${id}" x="0" y="0" width="1" height="1" primitiveUnits="objectBoundingBox" color-interpolation-filters="sRGB">${parts.join("")}</filter>`;
 }

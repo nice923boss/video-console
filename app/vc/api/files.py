@@ -7,13 +7,12 @@ import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 from .. import explorer
 from ..export import captions_srt, export_filename, shots_csv
 from ..exportdir import file_ref, find_export, forget_export, project_exports
 from ..server import FileResponse, Request, Response, Router
-from ..storyboard import render_storyboard, shot_picture
+from ..storyboard import picture_data, render_storyboard
 from ..stt import srt_ops, srt_text
 from ..util import AppError, kind_of, new_id
 from .system import open_folder
@@ -83,7 +82,8 @@ def register(router: Router, app: App) -> None:
         req.save_body(dst, MAX_UPLOAD)
         payload = {"upload": rel, "name": name, "target": q.get("target") or "library",
                    "track": q.get("track") in TRUE, "start": q.get("start"),
-                   "audioTrack": q.get("audioTrack") or None, "layer": q.get("layer") or None}
+                   "audioTrack": q.get("audioTrack") or None, "layer": q.get("layer") or None, "gain": q.get("gain"),
+                   "link": q.get("link") != "0", "media": q.get("media") or None}
         try:
             job = app.jobs.submit("ingest", pid, q.get("shot") or None, payload)
         except BaseException:
@@ -119,8 +119,7 @@ def register(router: Router, app: App) -> None:
         project = store.get(pid)
 
         def picture_url(shot: dict) -> str | None:
-            rel = shot_picture(project, shot)
-            return f"/api/projects/{pid}/file?path={quote(rel)}" if rel else None
+            return picture_data(project, shot, lambda rel: store.resolve_file(pid, rel))
 
         return Response(render_storyboard(project, picture_url), content_type="text/html; charset=utf-8")
 
@@ -135,14 +134,22 @@ def register(router: Router, app: App) -> None:
 
     @router.route("POST", "/api/projects/{pid}/captions.srt")
     def captions_import(req: Request) -> dict:
-        """An .srt file's subtitles at their own times, as one undo step; replace=1 removes the old ones first."""
+        """An .srt file's subtitles, as one undo step: at their own times plus offset= seconds; replace=1 removes
+        the old ones first, and voices=delete|keep|regen says what happens to their voice-overs (srt_ops)."""
         pid = req.params["pid"]
-        ops = srt_ops(store.get(pid), srt_text(req.body(MAX_SRT)), req.query.get("replace") in TRUE)
-        added = sum(op["op"] == "caption.add" for op in ops)
+        try:
+            offset = max(0.0, float(req.query.get("offset") or 0))
+        except ValueError:
+            raise AppError("偏移秒數格式不正確") from None
+        voices = req.query.get("voices") or "delete"
+        if voices not in ("delete", "keep", "regen"):
+            raise AppError("配音處理方式不正確")
+        ops = srt_ops(store.get(pid), srt_text(req.body(MAX_SRT)), req.query.get("replace") in TRUE, offset, voices)
+        added = [op["item"] for op in ops if op["op"] == "caption.add"]
         if not added:
             raise AppError("檔案裡沒有可匯入的字幕，請確認是 SRT 格式")
         result = store.apply(pid, ops, label="匯入 SRT")
-        return {"rev": result["rev"], "added": added}
+        return {"rev": result["rev"], "added": len(added), "voiced": [c["id"] for c in added if c.get("speaker")]}
 
     @router.route("GET", "/api/projects/{pid}/shots.csv")
     def shot_list(req: Request) -> Response:

@@ -46,6 +46,14 @@ _TRANSLATE = (
     "they are, and add nothing."
 )
 _REPLY_RULE = "Reply with the prompt text only: no preamble, no quotes, no markdown."
+_CONDENSE = (
+    "You shorten video subtitles so viewers can read them in time. The user sends a JSON array of objects with "
+    '"id", "text" and "max" (the most characters the subtitle may have, not counting spaces and punctuation). '
+    "Rewrite each text to at most its max characters: keep the meaning, names and numbers, drop filler words. "
+    "Use the same language as the text; Traditional Chinese stays Traditional Chinese. Reply with a JSON array "
+    'only, no markdown, of objects with "id" and "text", one for each item you were sent.'
+)
+MAX_CONDENSE = 200
 _SHOTS = (
     "You are a storyboard artist. Split the user's script into shots for a short AI-generated video, in story order, "
     "at most {limit} shots. Reply with a JSON array only, no markdown. Each item is an object with: "
@@ -87,7 +95,8 @@ class LLMClient:
 
     # ---------------------------------------------------------------- public
     def test(self) -> dict[str, Any]:
-        """List the server's models; works before the feature is switched on so the form can be checked."""
+        """List the server's models, then ask the chosen one for a one-word reply: some servers list models
+        without a key but refuse the chat itself. Works before the feature is switched on."""
         cfg = self._config(require_enabled=False)
         try:
             data = request("GET", cfg["baseUrl"] + "/models", headers=self._headers(), timeout=10).json()
@@ -96,13 +105,16 @@ class LLMClient:
         items = data.get("data") if isinstance(data, dict) else None
         models = [str(m["id"]) for m in items or [] if isinstance(m, dict) and m.get("id")]
         found = cfg["model"] in models
-        if not models:
-            message = "連線成功，但服務沒有列出模型，請直接試用"
-        elif found:
-            message = f"連線成功，找到模型「{cfg['model']}」"
-        else:
-            message = f"連線成功，但清單裡沒有「{cfg['model']}」，請從下方清單挑一個"
-        return {"ok": True, "models": models[:200], "modelFound": found, "message": message}
+        try:
+            self.chat("Reply with the single word OK.", "ping", timeout=60, require_enabled=False)
+        except AppError as exc:
+            reason = exc.message.removeprefix("LLM 呼叫失敗：")
+            pick = "。清單裡沒有這個模型，請從下方清單挑一個" if models and not found else ""
+            return {"ok": False, "replied": False, "models": models[:200], "modelFound": found,
+                    "message": f"服務有回應，但模型「{cfg['model']}」沒有回話：{reason}{pick}"}
+        alias = "（服務的模型清單裡沒有這個名稱，可能是別名）" if models and not found else ""
+        return {"ok": True, "replied": True, "models": models[:200], "modelFound": found,
+                "message": f"連線成功，模型「{cfg['model']}」有回應{alias}"}
 
     def enhance(self, text: str, kind: str = "image", target: str = "same") -> str:
         if kind not in _ENHANCE or target not in _LANG:
@@ -126,6 +138,39 @@ class LLMClient:
             raise AppError("LLM 沒有回傳譯文，請換個模型再試", 502)
         return result[:8000]
 
+    def condense_captions(self, items: Any) -> list[dict]:
+        """Shorter wording for subtitles too long to read in time (AI-04). items: id, text, max characters."""
+        wanted: dict[str, dict] = {}
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            cid, text, most = str(item.get("id") or ""), str(item.get("text") or "").strip(), item.get("max")
+            if cid and text and isinstance(most, int) and most > 0:
+                wanted[cid] = {"id": cid, "text": text[:500], "max": most}
+        if not wanted:
+            raise AppError("沒有要濃縮的字幕")
+        if len(wanted) > MAX_CONDENSE:
+            raise AppError(f"一次最多濃縮 {MAX_CONDENSE} 句，請少勾幾句")
+        payload = json.dumps(list(wanted.values()), ensure_ascii=False)
+        if len(payload) > MAX_INPUT:
+            raise AppError(f"一次最多送出 {MAX_INPUT:,} 字，請少勾幾句")
+        try:
+            value = _extract_json(self.chat(_CONDENSE, payload, timeout=300))
+        except AppError as exc:
+            if exc.status != 502 or "JSON" not in exc.message:
+                raise
+            raise AppError("LLM 回傳的內容不是 JSON，請換個模型再試", 502) from None
+        rows = value if isinstance(value, list) else value.get("items") or value.get("captions") or []
+        out: dict[str, dict] = {}
+        for row in rows if isinstance(rows, list) else []:
+            cid = str(row.get("id") or "") if isinstance(row, dict) else ""
+            text = str(row.get("text") or "").strip() if cid in wanted and cid not in out else ""  # keeps 「」 dialogue quotes
+            if text:
+                out[cid] = {"id": cid, "text": text[:500]}
+        if not out:
+            raise AppError("LLM 沒有回傳濃縮後的字幕，請換個模型再試", 502)
+        return list(out.values())
+
     def script_to_shots(self, text: str, detail: bool = False) -> list[dict]:
         """detail: several sizes and angles per story beat, cut to the story's pace (shots carry beat and pace)."""
         text = (text or "").strip()
@@ -144,8 +189,8 @@ class LLMClient:
             raise AppError("LLM 沒有拆出任何鏡頭，請換個模型或改用一般拆解", 502)
         return shots[:MAX_SHOTS]
 
-    def chat(self, system: str, user: str, *, timeout: float = 120) -> str:
-        cfg = self._config()
+    def chat(self, system: str, user: str, *, timeout: float = 120, require_enabled: bool = True) -> str:
+        cfg = self._config(require_enabled)
         body: dict[str, Any] = {
             "model": cfg["model"],
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],

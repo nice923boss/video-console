@@ -495,7 +495,8 @@ def _speech_cell(value: str, fields: dict[str, list[str]]) -> list[list[str]]:
     return out
 
 
-def _parse_table(rows: list[list[str]]) -> list[dict]:
+def _parse_table(rows: list[list[str]]) -> tuple[list[dict], bool]:
+    """The table's shots, and whether it is already a shot list (a 鏡號 column: one row is one shot)."""
     header = [_header_field(c) for c in rows[0]]
     if header.count("prompt") > 1:  # 內容 next to a picture column (影部) names the shot
         header = ["name" if f == "prompt" and re.sub(r"\s", "", c) == "內容" else f for f, c in zip(header, rows[0])]
@@ -534,7 +535,7 @@ def _parse_table(rows: list[list[str]]) -> list[dict]:
         if shot:
             # who says what, line by line, for the detailed breakdown (vc.pacing) to give each its own shot
             shots.append({**shot, "lines": [ln for ln in lines if ln[1]]} if has_header else shot)
-    return shots
+    return shots, has_header and "index" in header
 
 
 # ---------------------------------------------------------------- Word files
@@ -611,8 +612,9 @@ def parse_script(text: Any, mode: str = "auto") -> dict[str, Any]:
     text = text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n").replace("\u3000", " ")
     rows = _table_rows(text) if mode == "auto" else None
     notes: list[str] = []
+    listed = False
     if rows:
-        shots, used = _parse_table(rows), "table"
+        (shots, listed), used = _parse_table(rows), "table"
     else:
         blocks, used, notes = _blocks(text.split("\n"), mode)
         shots = [s for s in (_parse_block(b) for b in blocks if b.strip()) if s]
@@ -621,4 +623,4 @@ def parse_script(text: Any, mode: str = "auto") -> dict[str, Any]:
     if len(shots) > MAX_SHOTS:
         notes.append(f"一次最多匯入 {MAX_SHOTS} 個鏡頭，其餘已略過")
         shots = shots[:MAX_SHOTS]
-    return {"shots": shots, "mode": used, "notes": notes}
+    return {"shots": shots, "mode": used, "notes": notes, "shotList": listed}

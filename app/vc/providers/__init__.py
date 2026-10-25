@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ..util import AppError
-from .base import Context, Poll, Provider, Request
+from .base import Context, Poll, Provider, Request, number
 from .custom import CustomHttp
 from .hosted import FalImage, FalVideo, ReplicateImage, ReplicateVideo
 from .images import GeminiImage, OpenAIImages, StabilityImage
@@ -24,6 +24,12 @@ _ORDER: tuple[Provider, ...] = (
     CustomHttp("custom-video", "video"),
 )
 REGISTRY: dict[str, Provider] = {p.id: p for p in _ORDER}
+
+# Every provider takes an optional unit price, used only for the spend estimate (CL-01, vc/costs.py).
+for _p in _ORDER:
+    _p.fields = (*_p.fields, number(
+        "price", f"{'每秒' if _p.kind == 'video' else '每張'}費用（美元，選填）", 0.0, 0.0, 100.0, 0.001, digits=3,
+        help="填了才會在送出前預估費用並記進本月累計，0 表示不估算；實際金額以供應商帳單為準"))
 
 
 def get(pid: str) -> Provider:

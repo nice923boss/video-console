@@ -450,8 +450,8 @@ class ComfyManager:
                 self._info[sid] = (time.monotonic(), info)
             return info
 
-    def check_template(self, sid: str, template: dict) -> dict:
-        return wf.check_availability(template, self.object_info(sid))
+    def check_template(self, sid: str, template: dict, force: bool = False) -> dict:
+        return wf.check_availability(template, self.object_info(sid, force))
 
     def template_report(self, sid: str, templates: list[dict]) -> dict[str, dict]:
         info = self.object_info(sid)
@@ -530,8 +530,13 @@ class ComfyManager:
 
     def run(self, sid: str, graph: dict, *, dst_dir: Path, outputs: list[str] | None = None,
             on_progress: ProgressFn | None = None, on_preview: PreviewFn | None = None,
-            cancelled: CancelFn | None = None, on_submitted: Callable[[str], None] | None = None) -> list[dict]:
-        """Queue a graph, follow it to the end and download its outputs into dst_dir."""
+            cancelled: CancelFn | None = None,
+            on_submitted: Callable[[str, bool], None] | None = None) -> list[dict]:
+        """Queue a graph, follow it to the end and download its outputs into dst_dir.
+
+        on_submitted(prompt_id, sent) is called once before the graph goes out and once after ComfyUI took it,
+        so a restart in between can ask ComfyUI whether it arrived instead of sending it twice (LG-03).
+        """
         client = self.client(sid)
         hub = self._hub(sid)
         prompt_id = str(uuid.uuid4())
@@ -540,18 +545,25 @@ class ComfyManager:
             hub.ensure(wait=3.0)
             if on_progress:
                 on_progress(0.03, "送出到 ComfyUI")
+            if on_submitted:
+                on_submitted(prompt_id, False)
             real_id = client.submit(graph, hub.client_id, self._extra_data(), prompt_id=prompt_id)
             if real_id != prompt_id:
                 hub.rekey(prompt_id, real_id)
                 prompt_id = real_id
             if on_submitted:
-                on_submitted(prompt_id)
+                on_submitted(prompt_id, True)
             entry = self._wait(client, hub, prompt_id, events, graph, on_progress, on_preview, cancelled)
             if on_progress:
                 on_progress(0.96, "取回輸出檔")
             return self._collect(client, entry, outputs, dst_dir, cancelled)
         finally:
             hub.unlisten(prompt_id)
+
+    def received(self, sid: str, prompt_id: str) -> bool:
+        """Whether ComfyUI has the prompt, finished or still queued."""
+        client = self.client(sid)
+        return bool(client.history(prompt_id)) or queue_state(client.queue(), prompt_id)[0] != "missing"
 
     def resume(self, sid: str, prompt_id: str, *, dst_dir: Path, graph: dict | None = None,
                outputs: list[str] | None = None, on_progress: ProgressFn | None = None,

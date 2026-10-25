@@ -1,17 +1,17 @@
 // Queue view: every job across ComfyUI, cloud providers and local ffmpeg, grouped into running, waiting
 // and finished. Scope to the open project or all projects, filter by state, pause or clear the queue.
-import { html, useState, useEffect, useMemo } from "../lib/h.js";
+import { html, useState, useMemo } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { navigate } from "../lib/actions.js";
-import { pauseQueue, clearFinished, cancelAll } from "../lib/jobs-actions.js";
+import { pauseQueue, clearFinished, cancelAll, moveJob, scheduleQueue } from "../lib/jobs-actions.js";
 import { usePref } from "../lib/prefs.js";
-import { KIND_LABEL } from "../lib/format.js";
-import { Button, Chip, Segmented, Section, Empty, Badge } from "../components/ui.js";
+import { KIND_LABEL, STATUS_LABEL, fmtDate, fmtDateTime } from "../lib/format.js";
+import { Button, Chip, Segmented, Section, Empty, Badge, Toggle } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
-import { openMenu } from "../components/overlay.js";
+import { Modal, openMenu, openModal } from "../components/overlay.js";
 import { toast, toastError } from "../components/toast.js";
-import { JobRow } from "../components/job-row.js";
+import { JobRow, laneLabel } from "../components/job-row.js";
 
 const FINISHED_PAGE = 120;
 const PROBLEM = new Set(["failed", "canceled", "interrupted"]);
@@ -44,14 +44,100 @@ async function clearProblems(pid) {
   }
 }
 
-// Re-render once a second while jobs are active so the elapsed and waiting times keep moving.
-function useTicker(on) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!on) return undefined;
-    const id = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [on]);
+// Job log as CSV (time taken, where it ran, which template or provider), oldest first. The byte-order mark
+// lets Excel read the Chinese text as UTF-8.
+const CSV_HEAD = ["建立時間", "結束時間", "專案", "類型", "工作", "狀態", "執行位置／模型", "用時（秒）", "嘗試次數", "自動重試", "錯誤"];
+const csvCell = (v) => (/[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+
+function exportCsv(list, names, ctx) {
+  const rows = [...list].sort((a, b) => (a.created || 0) - (b.created || 0)).map((j) => [
+    fmtDateTime(j.created), fmtDateTime(j.finished), names.get(j.pid) || "", KIND_LABEL[j.kind] || j.kind, j.title,
+    STATUS_LABEL[j.status] || j.status, laneLabel(j, ctx), j.seconds ?? "", j.attempt || 1, j.autoRetries || 0,
+    j.error || "",
+  ]);
+  const text = [CSV_HEAD, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\ufeff" + text], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `工作記錄-${fmtDateTime(Date.now() / 1000).replace(/[/: ]/g, "")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Waiting jobs can be dragged up or down (QU-02): dropped on a row's upper half the job goes before that
+// row, on the lower half after it. Voice-over lines still start first whatever their place.
+function WaitingList({ list, rowOf }) {
+  const [drag, setDrag] = useState(null);
+  const [mark, setMark] = useState(null);
+  const lowerHalf = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return e.clientY > r.top + r.height / 2;
+  };
+  const over = (e, job) => {
+    if (!drag || drag === job.id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const after = lowerHalf(e);
+    if (mark?.id !== job.id || mark.after !== after) setMark({ id: job.id, after });
+  };
+  const drop = (e, i) => {
+    e.preventDefault();
+    const before = lowerHalf(e) ? list[i + 1]?.id ?? null : list[i].id;
+    if (drag && before !== drag) moveJob(drag, before);
+    setDrag(null);
+    setMark(null);
+  };
+  return html`<div class="job-list">${list.map((j, i) => html`<div key=${j.id} draggable="true" title="拖曳可調整順序"
+    class=${`q-drag ${drag === j.id ? "dragging" : ""} ${mark?.id === j.id ? (mark.after ? "drop-after" : "drop-before") : ""}`}
+    onDragStart=${(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", j.title); setDrag(j.id); }}
+    onDragEnd=${() => { setDrag(null); setMark(null); }}
+    onDragOver=${(e) => over(e, j)} onDrop=${(e) => drop(e, i)}>${rowOf(j)}</div>`)}</div>`;
+}
+
+// Night run (QU-06): the first moment after `from` (epoch seconds) that the clock shows hh:mm.
+function nextAt(hhmm, from) {
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date(from * 1000);
+  d.setHours(h, m, 0, 0);
+  if (d.getTime() / 1000 <= from) d.setDate(d.getDate() + 1);
+  return d.getTime() / 1000;
+}
+
+function whenText(ts) {
+  const midnight = (t) => new Date(t).setHours(0, 0, 0, 0);
+  const days = Math.round((midnight(ts * 1000) - midnight(Date.now())) / 86400000);
+  return `${["今天", "明天", "後天"][days] ?? fmtDate(ts)} ${fmtDateTime(ts).slice(-5)}`;
+}
+
+function ScheduleDialog({ close }) {
+  const [start, setStart] = useState("23:00");
+  const [useStop, setUseStop] = useState(false);
+  const [stop, setStop] = useState("07:00");
+  const startAt = start ? nextAt(start, Date.now() / 1000) : null;
+  const stopAt = useStop && stop && startAt ? nextAt(stop, startAt) : null;
+  return html`<${Modal} title="排程佇列" width=${440} onClose=${() => close(null)}
+      footer=${html`<button type="button" class="btn" onClick=${() => close(null)}>取消</button>
+        <button type="button" class="btn btn-primary" disabled=${!startAt}
+          onClick=${() => close({ start: startAt, stop: stopAt })}>排程</button>`}>
+    <p class="modal-text">佇列先暫停，到開始時間才執行排隊中的工作。設了暫停時間，到時就不再開始新工作，執行中的會跑完。只排這一次。</p>
+    <label class="field">
+      <span class="field-label">開始時間</span>
+      <input class="input" type="time" value=${start} data-autofocus onInput=${(e) => setStart(e.currentTarget.value)} />
+    </label>
+    <${Toggle} checked=${useStop} label="到點自動暫停" onChange=${setUseStop} />
+    ${useStop && html`<label class="field">
+      <span class="field-label">暫停時間</span>
+      <input class="input" type="time" value=${stop} onInput=${(e) => setStop(e.currentTarget.value)} />
+    </label>`}
+    ${startAt && html`<p class="field-hint">${whenText(startAt)} 開始${stopAt ? `，${whenText(stopAt)} 暫停` : ""}</p>`}
+  <//>`;
+}
+
+async function openSchedule() {
+  const v = await openModal((close) => html`<${ScheduleDialog} close=${close} />`);
+  if (v && (await scheduleQueue(v.start, v.stop))) toast(`佇列會在 ${whenText(v.start)} 開始`, { duration: 2600 });
 }
 
 function Stat({ tone, icon, label, value, onClick, active }) {
@@ -63,8 +149,9 @@ function Stat({ tone, icon, label, value, onClick, active }) {
 }
 
 export function QueueView() {
-  const { jobs, queue, pid, project, projects } = useStore((s) => ({
+  const { jobs, queue, pid, project, projects, providers, workflows, comfy } = useStore((s) => ({
     jobs: s.jobs, queue: s.queue, pid: s.pid, project: s.project, projects: s.projects,
+    providers: s.providers, workflows: s.workflows, comfy: s.comfy,
   }));
   const [filter, setFilter] = usePref("vc.queue.filter", "all", validFilter);
   const [scopePref, setScope] = usePref("vc.queue.scope", "project", validScope);
@@ -83,7 +170,6 @@ export function QueueView() {
     }
     return c;
   }, [inScope]);
-  useTicker(counts.running + counts.queued > 0);
 
   const needle = query.trim().toLowerCase();
   const test = (FILTERS.find((f) => f.id === filter) || FILTERS[0]).test;
@@ -96,9 +182,10 @@ export function QueueView() {
   const active = counts.running + counts.queued;
   const ended = counts.done + counts.problem;
 
-  const rowsOf = (list) => list.map((j) => html`<${JobRow} key=${j.id} job=${j}
+  const rowOf = (j) => html`<${JobRow} key=${j.id} job=${j}
     project=${project && project.id === j.pid ? project : null}
-    projectName=${scope === "all" ? names.get(j.pid) || "已刪除的專案" : ""} />`);
+    projectName=${scope === "all" ? names.get(j.pid) || "已刪除的專案" : ""} />`;
+  const rowsOf = (list) => list.map(rowOf);
   const clearMenu = (e) => openMenu(e, [
     { header: scopePid ? "清除這個專案的紀錄" : "清除所有專案的紀錄" },
     { label: "清除已完成", icon: "check-circle", disabled: !counts.done, onClick: () => clearFinished(scopePid, "done") },
@@ -111,7 +198,8 @@ export function QueueView() {
     <header class="q-head">
       <div class="q-title">
         <h2>工作佇列</h2>
-        ${queue.paused ? html`<${Badge} tone="warn">已暫停<//>` : active > 0 && html`<${Badge} tone="accent">執行中<//>`}
+        ${queue.resumeAt ? html`<${Badge} tone="info">已排程<//>`
+          : queue.paused ? html`<${Badge} tone="warn">已暫停<//>` : active > 0 && html`<${Badge} tone="accent">執行中<//>`}
       </div>
       <div class="q-stats">
         <${Stat} tone="accent" icon="activity" label="執行中" value=${counts.running}
@@ -138,14 +226,26 @@ export function QueueView() {
       <${Button} icon=${queue.paused ? "play" : "pause"} kind=${queue.paused ? "primary" : "default"}
         title=${queue.paused ? "讓排隊中的工作繼續執行" : "排隊中的工作先不開始，執行中的會跑完"}
         onClick=${() => pauseQueue(!queue.paused)}>${queue.paused ? "繼續佇列" : "暫停佇列"}<//>
+      <${Button} icon="moon" title="設定時間才開始跑佇列，例如晚上不用電腦時" onClick=${openSchedule}>排程<//>
+      <${Button} icon="download" disabled=${!visible.length} title="把目前列出的工作存成 CSV（用時、執行位置、錯誤），可用 Excel 開啟"
+        onClick=${() => exportCsv(visible, names, { providers, workflows, comfy })}>匯出 CSV<//>
       <${Button} icon="trash" disabled=${!ended} onClick=${clearMenu}>清除紀錄<//>
       <${Button} icon="x" kind="danger-ghost" disabled=${!active} onClick=${() => cancelAll(scopePid)}>全部取消<//>
     </div>
 
-    ${queue.paused && html`<div class="note note-warn q-paused">
+    ${queue.resumeAt ? html`<div class="note note-info q-paused">
+      <${Icon} name="moon" size=${15} />
+      <span class="note-text">已排程：${whenText(queue.resumeAt)} 自動開始${queue.pauseAt ? `，${whenText(queue.pauseAt)} 自動暫停` : ""}。在那之前排隊中的 ${counts.queued} 個工作不會開始。</span>
+      <${Button} size="sm" onClick=${() => scheduleQueue(null, null)}>取消排程<//>
+      <${Button} size="sm" kind="primary" icon="play" onClick=${() => pauseQueue(false)}>立即開始<//>
+    </div>` : queue.paused ? html`<div class="note note-warn q-paused">
       <${Icon} name="pause" size=${15} />
       <span class="note-text">佇列已暫停：排隊中的 ${counts.queued} 個工作不會開始，執行中的工作會跑完。</span>
       <${Button} size="sm" kind="primary" icon="play" onClick=${() => pauseQueue(false)}>繼續<//>
+    </div>` : queue.pauseAt && html`<div class="note note-info q-paused">
+      <${Icon} name="moon" size=${15} />
+      <span class="note-text">佇列會在 ${whenText(queue.pauseAt)} 自動暫停，執行中的工作會跑完。</span>
+      <${Button} size="sm" onClick=${() => scheduleQueue(null, null)}>取消<//>
     </div>`}
 
     <div class="q-scroll">
@@ -162,8 +262,8 @@ export function QueueView() {
               <div class="job-list">${rowsOf(running)}</div>
             <//>`}
             ${waiting.length > 0 && html`<${Section} title=${`排隊中（${waiting.length}）`} icon="clock" class="q-section"
-                actions=${html`<span class="dim q-hint">依執行順序，配音自動排最前，其他可用「移到最前面」插隊</span>`}>
-              <div class="job-list">${rowsOf(waiting)}</div>
+                actions=${html`<span class="dim q-hint">依執行順序，配音自動排最前；其他工作可拖曳調整，或用「移到最前面」插隊</span>`}>
+              <${WaitingList} list=${waiting} rowOf=${rowOf} />
             <//>`}
             ${finished.length > 0 && html`<${Section} title=${`已結束（${finished.length}）`} icon="history" class="q-section">
               <div class="job-list">${rowsOf(finished.slice(0, limit))}</div>

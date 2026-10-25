@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import socket
 import ssl
 import urllib.error
@@ -111,7 +112,54 @@ def describe_status(code: int, body: bytes = b"") -> str:
         429: "請求太頻繁或額度不足（429）",
     }.get(code) or (f"伺服器錯誤（{code}）" if code >= 500 else f"HTTP 錯誤（{code}）")
     detail = upstream_message(body)
-    return f"{base}：{detail}" if detail else base
+    hint = _reason_advice(detail) or _STATUS_ADVICE.get(code) or (_SERVER_ADVICE if code >= 500 else "")
+    return _with_hint(f"{base}：{detail}" if detail else base, hint)
+
+
+# English reasons vendors give, checked before the status code's general advice.
+_REASON_ADVICE = [
+    (re.compile(r"safety|content.?policy|moderat|nsfw|flagged|sensitive (content|word|information)|inappropriate"
+                r"|policy violation", re.I),
+     "內容可能被供應商的安全審查擋下，請修改提示詞或換一張參考圖"),
+    (re.compile(r"api.?key|unauthori[sz]ed|authenticat|invalid token|expired token|credentials", re.I),
+     "請檢查金鑰或存取權杖是否正確、是否過期"),
+    (re.compile(r"insufficient.{0,20}(balance|credit|fund|quota)|balance|quota|\bcredits?\b|billing|payment required", re.I),
+     "帳戶額度或點數不足，請到供應商網站儲值或確認方案"),
+    (re.compile(r"rate.?limit|too many requests|concurren", re.I),
+     "請求太頻繁或同時執行的任務太多，請稍等幾分鐘再試"),
+    (re.compile(r"model.{0,40}(not found|not exist|unsupported|not supported)|(unknown|invalid) model|no such model", re.I),
+     "模型名稱不存在或這組金鑰不能使用，請從模型清單重新挑選"),
+    (re.compile(r"(duration|aspect.?ratio|resolution|seconds).{0,60}(invalid|unsupported|not supported|must|allowed"
+                r"|out of range)|(invalid|unsupported) (duration|aspect.?ratio|resolution)", re.I),
+     "秒數、比例或解析度不在模型支援的範圍內，請改用模型支援的設定"),
+    (re.compile(r"too large|file size", re.I), "檔案太大，請縮小圖片或影片後再試"),
+]
+_STATUS_ADVICE = {
+    400: "請檢查模型名稱與參數設定",
+    401: "請檢查金鑰或存取權杖是否正確、是否過期",
+    402: "帳戶額度或點數不足，請到供應商網站儲值或確認方案",
+    403: "這組金鑰沒有使用這個模型或功能的權限，請到供應商後台確認",
+    404: "請檢查網址或模型名稱是否正確",
+    408: "處理逾時，請稍後再試",
+    413: "檔案太大，請縮小圖片或影片後再試",
+    422: "秒數、比例、解析度或其他參數不被接受，請改用模型支援的設定",
+    429: "請稍等幾分鐘再試，或到供應商網站確認額度",
+}
+_SERVER_ADVICE = "供應商服務暫時異常，請稍後再試"
+
+
+def _reason_advice(text: str) -> str:
+    return next((hint for pattern, hint in _REASON_ADVICE if pattern.search(text)), "")
+
+
+def _with_hint(text: str, hint: str) -> str:
+    return f"{text.rstrip('。.')}。{hint}" if hint else text
+
+
+def advise(message: str) -> str:
+    """Add what to do about a failure reason a vendor reported in English, unless the message already says it."""
+    hint = _reason_advice(message)
+    return message if not hint or hint in message else _with_hint(message, hint)
 
 
 def _read_limited(resp: Any, max_bytes: int) -> bytes:

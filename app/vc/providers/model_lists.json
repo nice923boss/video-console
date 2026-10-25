@@ -1,0 +1,39 @@
+{
+  "version": "2026-10-25",
+  "about": "Model menus of the vendors without a model-list API. Edit, bump version (YYYY-MM-DD) and push to main: the app fetches this file from GitHub on 偵測模型. options: newest first; retired: ids the vendor shut down; replaces: saved id -> id to suggest.",
+  "providers": {
+    "kling": {
+      "model": {
+        "options": ["kling-v2-1", "kling-v2-1-master", "kling-v2-master", "kling-v1-6"],
+        "retired": [],
+        "replaces": {}
+      },
+      "modelT2V": {
+        "options": ["kling-v2-1-master", "kling-v2-master", "kling-v1-6"],
+        "retired": [],
+        "replaces": {}
+      }
+    },
+    "runway": {
+      "model": {
+        "options": ["gen4_turbo", "gen3a_turbo"],
+        "retired": [],
+        "replaces": {}
+      }
+    },
+    "minimax": {
+      "model": {
+        "options": ["MiniMax-Hailuo-02", "I2V-01-Director", "I2V-01", "T2V-01-Director"],
+        "retired": [],
+        "replaces": {}
+      }
+    },
+    "stability-image": {
+      "model": {
+        "options": ["sd3.5-large", "sd3.5-large-turbo", "sd3.5-medium", "sd3.5-flash"],
+        "retired": [],
+        "replaces": {}
+      }
+    }
+  }
+}

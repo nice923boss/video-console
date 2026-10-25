@@ -51,7 +51,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | Previous Marker | Control-; | 跳到上一個標記 | F7 | 無 | 同上 |
 | Raise Volume 1 dB | Control-= | 選取片段音量加 1dB | Ctrl+. | 無 | 只作用在音訊與上方影片；有區域時只調區域內 |
 | Lower Volume 1 dB | Control-- | 選取片段音量減 1dB | Ctrl+, | 無 | 同上 |
-| Detach Audio | Control-Shift-S | 分離或還原鏡頭的原聲 | Ctrl+Shift+S | 無 | 變速中的鏡頭不能分離 |
+| Detach Audio | Control-Shift-S | 分離或還原鏡頭的原聲 | Ctrl+Shift+S | 無 | 變速鏡頭的原聲照速度分離；分離期間不能改速度 |
 
 ## 區域
 

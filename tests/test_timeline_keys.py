@@ -16,7 +16,8 @@ from vc.grade import clean_grade, default_grade
 from vc.keyframes import expr, steps, value_at
 from vc.linked import follow_ops
 from vc.media import Media
-from vc.ops import apply_ops, blank_shot
+from vc.opfields import blank_shot
+from vc.ops import apply_ops
 from vc.sequence import build_sequence
 from vc.stt import caption_ops
 from vc.util import AppError
@@ -92,7 +93,7 @@ def test_keyframe_ops_validate_sort_and_undo() -> None:
     apply_ops(p, back, {})
     assert "keyframes" not in o or not o["keyframes"]
     apply_ops(p, [{"op": "overlay.update", "id": "o_aaaaaaaa", "patch": {"keyframes": [{"t": -1, "w": 5}]}}], {})
-    assert o["keyframes"] == [{"t": 0.0, "w": 1.0}]  # numbers are clamped like the plain fields
+    assert o["keyframes"] == [{"t": 0.0, "w": 4.0}]  # numbers are clamped like the plain fields
     for bad in ([{"t": 1, "grade": {}}], [{"t": "a", "x": 0}], "x", [1]):
         with pytest.raises(AppError):
             apply_ops(p, [{"op": "overlay.update", "id": "o_aaaaaaaa", "patch": {"keyframes": bad}}], {})

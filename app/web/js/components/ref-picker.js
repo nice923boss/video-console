@@ -9,18 +9,18 @@ import { openModal, Modal } from "./overlay.js";
 
 const newest = (a, b) => (b.created || 0) - (a.created || 0);
 
-function RefPicker({ project, shot, taken, close }) {
+function RefPicker({ project, shot, taken, title, close }) {
   const labels = new Map(project.shots.map((s, i) => [s.id, shotLabel(s, i)]));
   const images = Object.values(project.takes).filter((t) => t.kind === "image").sort(newest);
   const groups = [
     ["這個鏡頭的版本", images.filter((t) => t.shot === shot.id)],
-    ["其他鏡頭的圖片", images.filter((t) => t.shot !== shot.id)],
+    [shot.id ? "其他鏡頭的圖片" : "鏡頭圖片", images.filter((t) => t.shot !== shot.id)],
     ["素材庫圖片", Object.values(project.media).filter((m) => m.kind === "image").sort(newest)],
   ].filter(([, list]) => list.length);
   const ratio = `${project.settings.width}/${project.settings.height}`;
   const nameOf = (x) => x.name || x.label || labels.get(x.shot) || "";
 
-  return html`<${Modal} title="選擇參考圖" wide onClose=${() => close(null)}>
+  return html`<${Modal} title=${title} wide onClose=${() => close(null)}>
     ${groups.length ? groups.map(([title, list]) => html`<section key=${title} class="ref-group">
         <h4 class="ref-group-title">${title}<span class="dim">${list.length}</span></h4>
         <div class="ref-grid">
@@ -35,6 +35,6 @@ function RefPicker({ project, shot, taken, close }) {
   <//>`;
 }
 
-export function openRefPicker(project, shot, taken = [shot.ref]) {
-  return openModal((close) => html`<${RefPicker} project=${project} shot=${shot} taken=${taken} close=${close} />`);
+export function openRefPicker(project, shot, taken = [shot.ref], title = "選擇參考圖") {
+  return openModal((close) => html`<${RefPicker} project=${project} shot=${shot} taken=${taken} title=${title} close=${close} />`);
 }

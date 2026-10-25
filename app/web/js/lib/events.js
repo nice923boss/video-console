@@ -4,10 +4,26 @@ import { getState, setState } from "./store.js";
 import { applyTheme } from "./theme.js";
 import { handleNotify } from "./notify.js";
 import { bootstrap, pruneSelection } from "./actions.js";
+import { toast } from "../components/toast.js";
 
 let source = null;
 let reopenTimer = null;
 let stopped = false;
+let pageBuild = null; // the server build this page was loaded from
+
+// A reconnect can reach a newer server that replaced the one this page came from (the launcher or vc_client
+// swaps an outdated copy); the page keeps running its old scripts until it is reloaded.
+function onHello(data) {
+  const build = data && data.build;
+  if (!pageBuild) pageBuild = build;
+  else if (build && build !== pageBuild) {
+    toast("Video Console 已換成新版，重新整理後才會用到新版的畫面與功能。", {
+      id: "new-build", level: "warn", title: "已更新", duration: 0,
+      action: { label: "重新整理", fn: () => location.reload() },
+    });
+  }
+  bootstrap();
+}
 
 function upsert(list, item) {
   const i = list.findIndex((x) => x.id === item.id);
@@ -30,7 +46,7 @@ function onProject(data) {
 }
 
 const HANDLERS = {
-  hello: () => bootstrap(),
+  hello: onHello,
   resync: () => bootstrap(),
   settings: (data) => {
     applyTheme(data);
@@ -46,6 +62,7 @@ const HANDLERS = {
   notify: (data) => data && handleNotify(data),
   deps: (data) => data && setState({ deps: data }),
   system: (data) => data && setState({ system: data }),
+  costs: (data) => data && setState({ costs: data }),
 };
 
 function onMessage(e) {

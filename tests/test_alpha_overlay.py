@@ -11,7 +11,7 @@ import pytest
 
 from vc.export import export_options, plan_export, prepare_clips, render
 from vc.media import Media, parse_probe
-from vc.ops import blank_shot
+from vc.opfields import blank_shot
 from vc.takes import new_media, stage_file
 
 FFMPEG = shutil.which("ffmpeg")

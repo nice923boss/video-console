@@ -1,10 +1,11 @@
 // Add or edit one ComfyUI server: name, id (new servers only), address, enabled, and a connection test
-// that uses the stored access token when the server already has one. The server list is replaced as a
+// that uses the stored access token when the server already has one. A new server can take its token
+// here too; it is sent to the encrypted store right after the server itself is saved. The server list is replaced as a
 // whole on save, the same way the backend stores it.
 import { html, useState } from "../lib/h.js";
 import { getState } from "../lib/store.js";
 import { api } from "../lib/api.js";
-import { saveSettings } from "../lib/actions.js";
+import { saveSettings, setSecret } from "../lib/actions.js";
 import { fmtBytes } from "../lib/format.js";
 import { openModal, Modal } from "../components/overlay.js";
 import { Button, Field, TextInput, Toggle } from "../components/ui.js";
@@ -57,6 +58,7 @@ function ServerDialog({ server, close }) {
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
+  const [token, setToken] = useState("");
 
   const effectiveId = isNew ? (idTouched ? id : suggestId(name || "server", taken)) : server.id;
   const urlClean = url.trim().replace(/\/+$/, "");
@@ -69,7 +71,7 @@ function ServerDialog({ server, close }) {
     setTesting(true);
     setResult(null);
     try {
-      const res = await api.post("/api/comfy/test", { url: urlClean, token: "", sid: isNew ? "" : server.id });
+      const res = await api.post("/api/comfy/test", { url: urlClean, token: isNew ? token.trim() : "", sid: isNew ? "" : server.id });
       setResult(res);
     } catch (err) {
       setResult({ error: true, message: err.message });
@@ -83,8 +85,13 @@ function ServerDialog({ server, close }) {
     const entry = { id: effectiveId, name: name.trim(), url: urlClean, enabled };
     const next = isNew ? [...servers, entry] : servers.map((s) => (s.id === server.id ? entry : s));
     const saved = await saveSettings({ comfy: { servers: next } });
+    if (!saved) {
+      setSaving(false);
+      return;
+    }
+    // On failure setSecret shows its own error; the server is saved, so the token can be set by editing it.
+    if (isNew && token.trim()) await setSecret(`comfy.${entry.id}.token`, token.trim());
     setSaving(false);
-    if (!saved) return;
     toast(isNew ? `已新增「${entry.name}」，正在檢查連線` : `已儲存「${entry.name}」`, { level: "success" });
     close(entry);
   };
@@ -112,8 +119,12 @@ function ServerDialog({ server, close }) {
       hint="停用的伺服器不會被檢查，也不會接到生成工作" />
     <${TestNote} result=${result} />
     ${isNew
-      ? html`<p class="dim comfy-token-hint"><${Icon} name="key" size=${13} />
-          伺服器有開啟登入驗證時，新增後再回到這裡設定存取權杖。</p>`
+      ? html`<${Field} label="存取權杖（選填）"
+          hint="ComfyUI 放在需要登入的反向代理後面時才需要，會以 Authorization: Bearer 標頭送出，並以 Windows 帳號加密保存。">
+          <input class="input mono is-masked" type="text" value=${token} placeholder="貼上權杖" autocomplete="off"
+            autocapitalize="off" spellcheck=${false} data-lpignore="true" data-1p-ignore="true" aria-label="存取權杖"
+            onInput=${(e) => { setToken(e.currentTarget.value); setResult(null); }} />
+        <//>`
       : html`<${SecretField} name=${`comfy.${server.id}.token`} label="存取權杖（選填）" placeholder="貼上權杖"
           help="ComfyUI 放在需要登入的反向代理後面時才需要，會以 Authorization: Bearer 標頭送出。" />`}
   <//>`;

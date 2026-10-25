@@ -159,6 +159,37 @@ def test_reveal_opens_projects_and_export_folders(app: App, client: Client, out_
     assert out_dir.is_dir() and (app.paths.data / "exports").is_dir()
 
 
+def test_deleting_a_project_can_take_its_shared_exports(app: App, client: Client, out_dir: Path) -> None:
+    keep = client.json("POST", "/api/projects", {"name": "保留"})["project"]
+    gone = client.json("POST", "/api/projects", {"name": "刪除"})["project"]
+    out_dir.mkdir()
+    files = {}
+    for p in (keep, gone):
+        pdir = app.store.project_dir(p["id"])
+        files[p["id"]] = shared, own = out_dir / f"{p['name']}.mp4", pdir / "exports" / "舊.mp4"
+        own.parent.mkdir(parents=True, exist_ok=True)
+        for f in (shared, own):
+            f.write_bytes(b"x")
+        record_export(pdir, shared)
+
+    assert client.json("DELETE", f"/api/projects/{keep['id']}") == {"removedExports": 0, "exportsInUse": 0}
+    assert all(f.exists() for f in files[keep["id"]][:1])  # the shared file stays without ?exports=1
+    assert client.json("DELETE", f"/api/projects/{gone['id']}?exports=1") == {"removedExports": 1, "exportsInUse": 0}
+    assert not files[gone["id"]][0].exists()
+    trashed = client.json("GET", "/api/trash")
+    assert len(trashed) == 2  # the project's own exports/ went to the trash with it
+
+
+def test_pick_folder_returns_the_choice(client: Client, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple] = []
+    answers = iter(["D:\\影片輸出", None])
+    monkeypatch.setattr(system_api.folderpick, "pick", lambda start, title: calls.append((start, title)) or next(answers))
+    assert client.json("POST", "/api/system/pick-folder", {"start": "D:\\舊", "title": "選擇匯出資料夾"}) == \
+        {"path": "D:\\影片輸出"}
+    assert client.json("POST", "/api/system/pick-folder", {}) == {"path": None}  # canceled
+    assert calls == [(Path("D:\\舊"), "選擇匯出資料夾"), (None, "選擇資料夾")]
+
+
 def test_sweep_removes_only_our_partial_files_from_the_shared_folder(app: App, out_dir: Path) -> None:
     out_dir.mkdir()
     ours, theirs, kept = out_dir / ".film.mp4.part", out_dir / "notes.part", out_dir / "film.mp4"

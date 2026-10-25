@@ -17,6 +17,9 @@ log = logging.getLogger("vc.workflows")
 
 KINDS = ("image", "video", "upscale")
 MODES = ("t2i", "i2i", "i2v", "t2v", "upscale")
+MODES_BY_KIND = {"image": ("t2i", "i2i"), "video": ("t2v", "i2v"), "upscale": ("upscale",)}
+KIND_NAMES = {"image": "生圖", "video": "影片", "upscale": "放大"}
+MODE_NAMES = {"t2i": "文字生圖", "i2i": "參考圖生圖", "i2v": "圖轉影片", "t2v": "文字生影片", "upscale": "放大"}
 FRAME_RULES = ("any", "4n+1", "8n+1")
 PARAM_TYPES = ("int", "float", "select", "bool", "string")
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
@@ -173,6 +176,9 @@ def validate_template(data: Any) -> dict:
     mode = data.get("mode", "t2i")
     if kind not in KINDS or mode not in MODES:
         raise AppError("範本類型設定不正確")
+    if mode not in MODES_BY_KIND[kind]:
+        allowed = "、".join(MODE_NAMES[m] for m in MODES_BY_KIND[kind])
+        raise AppError(f"{KIND_NAMES[kind]}範本的用途只能是{allowed}，目前是{MODE_NAMES[mode]}")
     rule = data.get("frameRule", "any")
     if rule not in FRAME_RULES:
         raise AppError("影格規則只能是 any、4n+1、8n+1")

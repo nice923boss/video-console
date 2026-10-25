@@ -5,7 +5,7 @@
 import { setState } from "./store.js";
 import { newId, round } from "./format.js";
 
-// Mirrors DEFAULT_CAPTION_STYLE in vc/ops.py: the look captions had before styles existed.
+// Mirrors DEFAULT_CAPTION_STYLE in vc/opfields.py: the look captions had before styles existed.
 export const DEFAULT_STYLE = {
   name: "預設", font: "Microsoft JhengHei", size: 52, color: "#ffffff", opacity: 1, bold: true,
   italic: false, spacing: 0, outline: true, outlineColor: "#000000", outlineWidth: 4,
@@ -99,12 +99,46 @@ export function textCss(s) {
 const ALIGN_SELF = { left: "flex-start", center: "center", right: "flex-end" };
 const SHIFT_X = { left: "0%", center: "-50%", right: "-100%" };
 
+// How wide a dragged caption may run, as wrap_width in vc/captions.py: the room between its anchor and the
+// frame edge it grows toward (at least three font sizes), never more than the frame less the side margins.
+function roomCss(s, x) {
+  const room = s.align === "left" ? `calc(${round((1 - x) * 100, 3)}cqw - ${u(s.marginH)})`
+    : s.align === "right" ? `calc(${round(x * 100, 3)}cqw - ${u(s.marginH)})`
+      : `calc(${round(Math.min(x, 1 - x) * 200, 3)}cqw - ${u(s.marginH * 2)})`;
+  return `max(${u(s.size * 3)},min(calc(100cqw - ${u(s.marginH * 2)}),${room}))`;
+}
+
 // The caption block: in its row (inside a zone) or pinned at a dragged anchor.
 export function blockCss(s, point) {
-  const common = `text-align:${s.align};max-width:calc(100cqw - ${u(s.marginH * 2)})`;
-  if (!point) return `${common};align-self:${ALIGN_SELF[s.align]};margin:0 ${u(s.marginH)}`;
-  return `${common};position:absolute;width:max-content;left:${round(point.x * 100, 3)}%;top:${round(point.y * 100, 3)}%;`
-    + `transform:translate(${SHIFT_X[s.align]},-50%)`;
+  if (!point) {
+    return `text-align:${s.align};max-width:calc(100cqw - ${u(s.marginH * 2)});align-self:${ALIGN_SELF[s.align]};`
+      + `margin:0 ${u(s.marginH)}`;
+  }
+  return `text-align:${s.align};max-width:${roomCss(s, point.x)};position:absolute;width:max-content;`
+    + `left:${round(point.x * 100, 3)}%;top:${round(point.y * 100, 3)}%;transform:translate(${SHIFT_X[s.align]},-50%)`;
+}
+
+// How far each dragged caption moves down (pixels on a 1080-high frame; negative is up) so two shown at once do
+// not cover each other (CP-08): the same steps as stack_dragged in vc/captions.py, which the export uses. In order
+// of start (list order for a tie), a caption that would cover one placed before it moves up in the lower half of
+// the frame and down in the upper half until it is clear.
+// boxes: {key, start, end, left, right, top, bottom} in frame pixels.
+export function stackDragged(boxes) {
+  const placed = [];
+  const shifts = new Map();
+  for (const b of [...boxes].sort((p, q) => p.start - q.start)) {
+    const up = b.top + b.bottom >= 1080;
+    let dy = 0;
+    for (;;) {
+      const hit = placed.find((p) => p.start < b.end && b.start < p.end && p.left < b.right && b.left < p.right
+        && p.top < b.bottom + dy && b.top + dy < p.bottom);
+      if (!hit) break;
+      dy = up ? hit.top - b.bottom : hit.bottom - b.top;
+    }
+    placed.push({ ...b, top: b.top + dy, bottom: b.bottom + dy });
+    shifts.set(b.key, dy);
+  }
+  return shifts;
 }
 
 // A row's distance from the frame edge (the middle row ignores it, as in ASS).
@@ -153,10 +187,19 @@ export function editStyleOps(styleId, patch, legacy) {
   return materialize(legacy, patch);
 }
 
+// A name already in the project gets the next free number ("標題" becomes "標題 2"), so no two styles look alike.
+function uniqueName(project, name) {
+  const taken = new Set((project.captionStyles || []).map((s) => s.name));
+  if (!taken.has(name)) return name;
+  let n = 2;
+  while (taken.has(`${name.slice(0, 36)} ${n}`)) n += 1;
+  return `${name.slice(0, 36)} ${n}`;
+}
+
 export function addStyleOps(project, base, name) {
   const id = newId("cs");
   const { id: _drop, ...fields } = base || DEFAULT_STYLE;
-  const list = [{ op: "captionStyle.add", item: { ...fields, name, id } }];
+  const list = [{ op: "captionStyle.add", item: { ...fields, name: uniqueName(project, name), id } }];
   // The first style becomes the default, so it takes over from the built-in look right away.
   if (!defaultStyleId(project)) list.push({ op: "project.update", patch: { settings: { captionStyle: id } } });
   return { id, list };

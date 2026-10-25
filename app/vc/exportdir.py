@@ -76,6 +76,24 @@ def project_exports(project_dir: Path) -> list[Path]:
     return [f for f in found.values() if f.is_file()]
 
 
+def remove_shared_exports(project_dir: Path) -> tuple[int, int]:
+    """Delete the files the project wrote to the shared folder (the ones in its own exports/ go wherever the
+    project goes). Returns how many were deleted and how many were left because they are in use."""
+    deleted = left = 0
+    own = project_dir / "exports"
+    for f in project_exports(project_dir):
+        if f.parent == own:
+            continue
+        try:
+            f.unlink()
+        except OSError:
+            left += 1
+            continue
+        forget_export(project_dir, f)
+        deleted += 1
+    return deleted, left
+
+
 def find_export(project_dir: Path, ref: str) -> Path | None:
     """The project's file that a file name or an API path (exports/<name> or a full path) points at."""
     for f in project_exports(project_dir):

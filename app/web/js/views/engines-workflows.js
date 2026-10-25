@@ -73,7 +73,7 @@ async function deleteTemplate(wf, users) {
     return;
   }
   const ok = await confirmDialog({ title: `刪除範本「${wf.name}」`, danger: true, confirmLabel: "刪除",
-    message: "範本檔會從資料夾移除，已經生成的圖片與影片不受影響。指定這個範本的鏡頭會在送出時提示找不到範本。" });
+    message: "範本檔會從資料夾移除，已經生成的圖片與影片不受影響。指定這個範本的鏡頭會在分鏡卡片標示「找不到範本」，送出生成時也會擋下。" });
   if (!ok) return;
   try {
     await api.del(`/api/workflows/${enc(wf.id)}`);

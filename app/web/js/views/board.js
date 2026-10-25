@@ -3,9 +3,9 @@
 // the focused shot in the inspector on the right.
 import { html, useMemo, useRef, useState, useEffect } from "../lib/h.js";
 import { useStore, setState, getState } from "../lib/store.js";
-import { addShot, updateShots, deleteShots, duplicateShots, moveShot, focusShot, navigate } from "../lib/actions.js";
+import { addShot, updateShots, deleteShots, duplicateShots, moveShot, moveShots, focusShot, navigate } from "../lib/actions.js";
 import { generate, uploadFiles, activeJobsFor } from "../lib/jobs-actions.js";
-import { buildSequence, sequenceDuration, shotCover, imageTake, videoTake } from "../lib/sequence.js";
+import { buildSequence, sequenceDuration, shotCover, imageTake, videoTake, shotCaptions } from "../lib/sequence.js";
 import { fmtDuration, fmtSeconds, shotLabel, shotName } from "../lib/format.js";
 import { useKeymap, keyHint, keyLabel } from "../lib/keymap.js";
 import { usePref } from "../lib/prefs.js";
@@ -16,6 +16,7 @@ import { openMenu, promptDialog } from "../components/overlay.js";
 import { toast } from "../components/toast.js";
 import { Inspector } from "../components/inspector.js";
 import { openScriptImport } from "../dialogs/script-import.js";
+import { printBoard } from "./board-print.js";
 
 const DRAG_TYPE = "application/x-vc-shot";
 const DENSITIES = [
@@ -31,6 +32,7 @@ const FILTERS = [
   { id: "off", label: "不在序列", icon: "eye-off", test: (x) => x.shot.inSequence === false },
 ];
 const NO_JOBS = [];
+const NO_IDS = [];
 
 const hasType = (e, type) => !!e.dataTransfer && [...e.dataTransfer.types].includes(type);
 
@@ -40,6 +42,13 @@ function dropIndex(shots, id, targetId, side) {
   const j = shots.findIndex((x) => x.id === targetId);
   if (i < 0 || j < 0) return -1;
   return side === "before" ? (i < j ? j - 1 : j) : (i <= j ? j : j + 1);
+}
+
+// The shots a card drag carries: every selected shot when the dragged card is one of two or more selected
+// (SB-08), else just that card.
+function dragGroup(id) {
+  const { selected } = getState();
+  return selected.length > 1 && selected.includes(id) ? selected : [id];
 }
 
 function previewTake(project, shot) {
@@ -63,17 +72,26 @@ function openShotPreview(pid, project, rows, id) {
   openLightbox(pid, items, start);
 }
 
-async function moveShotTo(shot, index, count) {
+async function moveShotTo(shot, index, count, ids = [shot.id]) {
+  const max = count - ids.length + 1;
   const text = await promptDialog({
-    title: `移動「${shotLabel(shot, index)}」`,
-    label: `移到第幾個（1 到 ${count}）`,
-    value: String(index + 1),
+    title: ids.length > 1 ? `移動 ${ids.length} 個鏡頭` : `移動「${shotLabel(shot, index)}」`,
+    label: ids.length > 1 ? `第一個移到第幾個（1 到 ${max}，其餘依序接在後面）` : `移到第幾個（1 到 ${max}）`,
+    value: String(Math.min(index + 1, max)),
     confirmLabel: "移動",
-    validate: (v) => (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= count ? "" : `請輸入 1 到 ${count} 的整數`),
+    validate: (v) => (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= max ? "" : `請輸入 1 到 ${max} 的整數`),
   });
   if (text == null) return;
   const to = Number(text) - 1;
-  if (to !== index) moveShot(shot.id, to);
+  if (ids.length > 1) moveShots(ids, to);
+  else if (to !== index) moveShot(shot.id, to);
+}
+
+// True when the picked shots already sit together at the front (or back) of the story.
+function atEdge(project, ids, side) {
+  const order = project.shots.map((x) => x.id);
+  const edge = side === "front" ? order.slice(0, ids.length) : order.slice(order.length - ids.length);
+  return ids.every((id) => edge.includes(id));
 }
 
 function shotMenu(e, ctx, row) {
@@ -98,9 +116,12 @@ function shotMenu(e, ctx, row) {
     single && { label: "在後面插入空白鏡頭", icon: "plus", onClick: () => addShot({ index: index + 1 }) },
     { label: single ? "複製鏡頭" : `複製 ${ids.length} 個鏡頭`, icon: "copy", hint: keyLabel("board.duplicate"),
       onClick: () => duplicateShots(ids) },
-    single && { label: "移到最前面", icon: "to-top", disabled: index === 0, onClick: () => moveShot(shot.id, 0) },
-    single && { label: "移到最後面", icon: "arrow-right", disabled: index === last, onClick: () => moveShot(shot.id, last) },
-    single && { label: "移到第幾個…", icon: "hash", disabled: last === 0, onClick: () => moveShotTo(shot, index, last + 1) },
+    { label: "移到最前面", icon: "to-top", disabled: atEdge(project, ids, "front"),
+      onClick: () => (single ? moveShot(shot.id, 0) : moveShots(ids, 0)) },
+    { label: "移到最後面", icon: "arrow-right", disabled: atEdge(project, ids, "back"),
+      onClick: () => (single ? moveShot(shot.id, last) : moveShots(ids, last + 1 - ids.length)) },
+    { label: "移到第幾個…", icon: "hash", disabled: last + 1 === ids.length,
+      onClick: () => moveShotTo(shot, project.shots.findIndex((x) => ids.includes(x.id)), last + 1, ids) },
     { label: allOff ? "放入輸出序列" : "移出輸出序列", icon: allOff ? "eye" : "eye-off",
       onClick: () => updateShots(ids, { inSequence: allOff }, allOff ? "放入序列" : "移出序列") },
     { divider: true },
@@ -119,8 +140,11 @@ function CardStatus({ busy }) {
 }
 
 function ShotCard({ row, ctx, drop, handlers }) {
-  const { project, pid, routeColors, ratio } = ctx;
-  const { shot, index, image, video, busy, length, selected, focused, caption } = row;
+  const { project, pid, routeColors, ratio, templates } = ctx;
+  const { shot, index, image, video, busy, length, selected, focused, captions } = row;
+  const lines = captions.map((c) => (c.text || "").trim()).filter(Boolean);
+  // A template picked on the shot that has since been deleted; generating would be refused.
+  const lost = templates ? [shot.imageWorkflow, shot.videoWorkflow].filter((w) => w && !templates.has(w)) : NO_IDS;
   const cover = shotCover(project, shot);
   const running = busy.find((j) => j.status === "running" && j.previewRev);
   const off = shot.inSequence === false;
@@ -162,8 +186,12 @@ function ShotCard({ row, ctx, drop, handlers }) {
           onDblClick=${(e) => e.stopPropagation()} />
       </div>
       <p class=${`sc-prompt ${shot.prompt ? "" : "dim"}`}>${shot.prompt || "尚未填寫畫面描述"}</p>
-      ${caption && (caption.text || "").trim() && html`<p class="sc-caption" title=${`字幕：${caption.text}`}>
-        <${Icon} name="captions" size=${12} /><span>${caption.text}</span></p>`}
+      ${lines.length > 0 && html`<p class="sc-caption" title=${`字幕：${lines.join("\n")}`}>
+        <${Icon} name="captions" size=${12} /><span>${lines.join("／")}</span></p>`}
+      ${lost.length > 0 && html`<div class="sc-meta">
+        <${Badge} tone="danger" title=${`找不到範本「${lost.join("」「")}」，可能已被刪除，請在鏡頭的生成設定改選其他範本`}>
+          <${Icon} name="alert" size=${11} />找不到範本<//>
+      </div>`}
       ${(shot.camera || shot.motion) && html`<div class="sc-meta">
         ${shot.camera && html`<${Badge} tone="blue"><${Icon} name="camera" size=${11} />${shot.camera}<//>`}
         ${shot.motion && html`<span class="dim" title=${shot.motion}><${Icon} name="move" size=${11} />${shot.motion}</span>`}
@@ -172,7 +200,7 @@ function ShotCard({ row, ctx, drop, handlers }) {
   </div>`;
 }
 
-function Toolbar({ project, stats, filter, setFilter, density, setDensity, total }) {
+function Toolbar({ project, stats, filter, setFilter, density, setDensity, total, onPrint }) {
   return html`<div class="board-toolbar">
     <div class="bt-title">
       <h2 title=${project.name}>${project.name}</h2>
@@ -189,6 +217,7 @@ function Toolbar({ project, stats, filter, setFilter, density, setDensity, total
       options=${DENSITIES.map((d) => ({ ...d, label: "" }))} />
     <${Button} icon="settings" title="在右側面板設定風格、畫面尺寸與影格率"
       onClick=${() => setState({ selected: [], focus: null })}>專案設定<//>
+    <${Button} icon="printer" title="列印目前篩選出的鏡頭，附空白審稿意見欄；列印對話框可選「另存為 PDF」" onClick=${onPrint}>列印<//>
     <${Button} icon="book" onClick=${openScriptImport}>匯入劇本<//>
     <${Button} kind="primary" icon="plus" title=${`插在目前鏡頭之後${keyHint("board.add")}`} onClick=${() => addShot()}>新增鏡頭<//>
   </div>`;
@@ -211,8 +240,9 @@ function SelectionBar({ project, ids, clear }) {
 }
 
 export function BoardView() {
-  const { project, pid, jobs, selected, focus, settings } = useStore((s) => ({
+  const { project, pid, jobs, selected, focus, settings, workflows } = useStore((s) => ({
     project: s.project, pid: s.pid, jobs: s.jobs, selected: s.selected, focus: s.focus, settings: s.settings,
+    workflows: s.workflows,
   }));
   const [filter, setFilter] = useState("all");
   const [density, setDensity] = usePref("vc.board.density", "md", (v) => DENSITIES.some((d) => d.value === v));
@@ -227,7 +257,6 @@ export function BoardView() {
   const rows = useMemo(() => {
     if (!project) return [];
     const lengths = new Map(clips.map((c) => [c.shot.id, c.length]));
-    const captions = new Map((project.captions || []).filter((c) => c.shot).map((c) => [c.shot, c]));
     return project.shots.map((shot, index) => ({
       shot,
       index,
@@ -237,7 +266,7 @@ export function BoardView() {
       length: lengths.get(shot.id) || shot.duration || 0,
       selected: selected.includes(shot.id),
       focused: focus === shot.id,
-      caption: captions.get(shot.id) || null,
+      captions: shotCaptions(project, shot.id),
     }));
   }, [project, clips, jobs, pid, selected, focus]);
   const stats = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.id, rows.filter(f.test).length])), [rows]);
@@ -258,7 +287,9 @@ export function BoardView() {
   const routeColors = useMemo(() => Object.fromEntries(((settings && settings.routes) || []).map((r) => [r.id, r.color])),
     [settings]);
   const ratio = project ? `${project.settings.width}/${project.settings.height}` : "16/9";
-  const ctx = { project, pid, selected, rows: visible, routeColors, ratio };
+  // Before the template list arrives nothing is flagged (the built-in templates are always in it).
+  const templates = useMemo(() => (workflows && workflows.length ? new Set(workflows.map((w) => w.id)) : null), [workflows]);
+  const ctx = { project, pid, selected, rows: visible, routeColors, ratio, templates };
 
   const selectAll = () => setState({ selected: visible.map((r) => r.shot.id), focus: focus || (visible[0] && visible[0].shot.id) });
   const clearSelection = () => setState((s) => ({ selected: s.focus ? [s.focus] : [] }));
@@ -347,6 +378,11 @@ export function BoardView() {
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = "move";
+        const group = dragRef.current ? dragGroup(dragRef.current) : [];
+        if (group.length > 1 && group.includes(row.shot.id)) { // a card of the dragged group is no place to drop it
+          if (drop) setDrop(null);
+          return;
+        }
         const r = e.currentTarget.getBoundingClientRect();
         const side = e.clientX < r.left + r.width / 2 ? "before" : "after";
         if (!drop || drop.id !== row.shot.id || drop.side !== side) setDrop({ id: row.shot.id, side });
@@ -370,7 +406,14 @@ export function BoardView() {
       const dragged = e.dataTransfer.getData(DRAG_TYPE) || dragRef.current;
       dragRef.current = null;
       if (dragged) {
-        if (dragged === row.shot.id || !side || side === "files") return;
+        const group = dragGroup(dragged);
+        if (group.includes(row.shot.id) || !side || side === "files") return;
+        if (group.length > 1) {
+          const rest = project.shots.filter((x) => !group.includes(x.id));
+          const j = rest.findIndex((x) => x.id === row.shot.id);
+          moveShots(group, side === "before" ? j : j + 1);
+          return;
+        }
         const at = dropIndex(project.shots, dragged, row.shot.id, side);
         const from = project.shots.findIndex((x) => x.id === dragged);
         if (at >= 0 && at !== from) moveShot(dragged, at);
@@ -435,7 +478,7 @@ export function BoardView() {
   return html`<div class="view view-board">
     <section class="board-main">
       <${Toolbar} project=${project} stats=${stats} filter=${filter} setFilter=${setFilter}
-        density=${density} setDensity=${setDensity} total=${total} />
+        density=${density} setDensity=${setDensity} total=${total} onPrint=${() => printBoard(project, pid, visible, total)} />
       ${selected.length > 1 && html`<${SelectionBar} project=${project} ids=${selected} clear=${clearSelection} />`}
       <div class=${`board-scroll ${gridDrop ? "drop-files" : ""}`} onDragOver=${gridDragOver}
           onDragLeave=${(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setGridDrop(false); }} onDrop=${gridDrop_}

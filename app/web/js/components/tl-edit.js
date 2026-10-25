@@ -5,7 +5,7 @@
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { newId, round } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioMedia, audioTrack } from "../lib/sequence.js";
+import { clipIndexAt, audioLength, audioSpeed, audioMedia, audioTrack } from "../lib/sequence.js";
 import { splitKeys, shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { toast } from "./toast.js";
 
@@ -80,8 +80,24 @@ function resolve(project, clips, sel) {
   return { ...target, t: round(t, 3), local };
 }
 
+// The tail gets copies of the shot's versions (same files, ids of its own), so each half switches and
+// regenerates on its own. A copy keeps its pairing (a reversed copy's parent) and the active picks follow.
+function tailVersions(project, shot, tailId) {
+  const takes = (project && project.takes) || {};
+  const own = Object.values(takes).filter((t) => t.shot === shot.id);
+  for (const key of ["activeVideo", "activeImage"]) {
+    const t = takes[shot[key]];
+    if (t && !own.includes(t)) own.push(t); // a half cut before versions were copied
+  }
+  const ids = Object.fromEntries(own.map((t) => [t.id, newId("t")]));
+  const list = own.map((t) => ({ op: "take.add", take: { ...t, id: ids[t.id], shot: tailId, ...(ids[t.parent] ? { parent: ids[t.parent] } : {}) } }));
+  const patch = {};
+  for (const key of ["activeVideo", "activeImage"]) if (ids[shot[key]]) patch[key] = ids[shot[key]];
+  return { list, patch };
+}
+
 // The ops that cut a resolved target in two at the playhead.
-export function splitOps(g) {
+export function splitOps(g, project) {
   const { item, t, local } = g;
   if (g.type === "shot") {
     const { clip } = g;
@@ -90,9 +106,12 @@ export function splitOps(g) {
     const at = round(clip.in + local * (clip.speed || 1), 3);
     const head = clip.source === "video" ? { trimOut: at } : { duration: round(local, 2) };
     const tail = clip.source === "video" ? { trimIn: at, trimOut: shot.trimOut ?? null } : { duration: round(clip.length - local, 2) };
+    const id = newId("s");
+    const copies = tailVersions(project, shot, id);
     return [
       { op: "shot.update", id: shot.id, patch: { ...head, transition: { ...trans, type: "cut" } } },
-      { op: "shot.add", shot: { ...shot, ...tail, id: newId("s") }, index: clip.index + 1 },
+      ...copies.list,
+      { op: "shot.add", shot: { ...shot, ...tail, ...copies.patch, id }, index: clip.index + 1 },
     ];
   }
   const [head, tail] = splitKeys(item || {}, local);
@@ -103,7 +122,7 @@ export function splitOps(g) {
       { op: "overlay.add", item: rest }];
   }
   if (g.type === "audio") {
-    const cut = round(Number(item.in || 0) + local, 3);
+    const cut = round(Number(item.in || 0) + local * audioSpeed(item), 3);
     return [
       { op: "audio.update", id: item.id, patch: { out: cut, fadeOut: 0, ...keyPatch(item, head) } },
       // The second half stays on the same track instead of opening one of its own.
@@ -126,7 +145,7 @@ const SPLIT_LABEL = { shot: "分割鏡頭", overlay: "分割片段", audio: "分
 
 export function splitAtPlayhead(project, clips, sel) {
   const g = resolve(project, clips, sel);
-  if (g) ops(splitOps(g), { label: SPLIT_LABEL[g.type] });
+  if (g) ops(splitOps(g, project), { label: SPLIT_LABEL[g.type] });
 }
 
 // Cut every clip on every track that the playhead crosses, as one undo step. Clips too close to an
@@ -153,7 +172,7 @@ export function splitAllAtPlayhead(project, clips) {
   const list = [];
   for (const g of targets) {
     const local = t - g.start;
-    if (local >= g.min && g.length - local >= g.min) list.push(...splitOps({ ...g, t: round(t, 3), local }));
+    if (local >= g.min && g.length - local >= g.min) list.push(...splitOps({ ...g, t: round(t, 3), local }, project));
   }
   if (!list.length) {
     toast("播放頭位置沒有可以分割的片段", { level: "warn" });
@@ -187,7 +206,7 @@ export function trimAtPlayhead(project, clips, sel, side) {
     patch = left ? { start: t, in: tIn, length: round(g.length - local, 3), ...keyPatch(item, shiftKeys(item, local)) }
       : { length: round(local, 3) };
   } else if (g.type === "audio") {
-    const cut = round(Number(item.in || 0) + local, 3);
+    const cut = round(Number(item.in || 0) + local * audioSpeed(item), 3);
     patch = left ? { start: t, in: cut, ...keyPatch(item, shiftKeys(item, local)) } : { out: cut };
   } else if (g.type === "adjust") {
     patch = left ? { start: t, length: round(g.length - local, 3), ...keyPatch(item, shiftKeys(item, local)) }

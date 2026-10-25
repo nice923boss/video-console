@@ -1,13 +1,13 @@
 // Right-hand panel of the edit view. A selected soundtrack item, caption, picture-in-picture clip or
 // adjustment layer gets its own property panel; anything else falls back to the shot inspector.
-import { html } from "../lib/h.js";
+import { html, useMemo } from "../lib/h.js";
 import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round, shotLabel } from "../lib/format.js";
-import { audioLength, audioMedia, overlayHeight, fitFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { audioLength, audioMedia, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
-import { VOICE_STATES, voiceState, voiceClip, generateVoices } from "../lib/voice.js";
+import { VOICE_STATES, voiceState, voiceClip, voiceEnd, generateVoices } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openCaptionStyleDialog } from "../dialogs/caption-style-dialog.js";
 import {
@@ -19,6 +19,11 @@ import { Inspector } from "./inspector.js";
 import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe } from "./tl-commands.js";
+import { clipKeysHint, keyHint, undoKeyText } from "../lib/keymap.js";
+import { multiAudio } from "./tl-tracks.js";
+import { CHOICES as GAIN_CHOICES, dbToGain } from "../dialogs/import-gain.js";
+import { DEFAULT_CHROMA } from "../lib/chroma.js";
+import { parseGlossary, glossaryHits, fixHits, hitText } from "../lib/glossary.js";
 
 const MAX_TIME = 36000;
 const MIN_LEN = 0.1;
@@ -45,7 +50,7 @@ function Head({ icon, title, sub }) {
       <span class="insp-sub">${sub}</span>
     </div>
     <div class="insp-nav">
-      <${IconButton} icon="x" size=${16} title="回到鏡頭屬性（Esc）" onClick=${closePanel} />
+      <${IconButton} icon="x" size=${16} title=${`回到鏡頭屬性${keyHint("edit.deselect")}`} onClick=${closePanel} />
     </div>
   </header>`;
 }
@@ -73,7 +78,7 @@ function AudioPanel({ project, item }) {
 
   return html`<div class="insp-shot">
     <${Head} icon=${item.muted ? "volume-x" : "music"} title=${name}
-      sub=${html`開始 ${fmtSeconds(start, 2)}<i></i>長 ${fmtSeconds(len, 2)}${item.muted ? html`<i></i><span class="warn-text">靜音</span>` : ""}`} />
+      sub=${html`開始 ${fmtSeconds(start, 2)}<i></i>長 ${fmtSeconds(len, 2)}${item.speed && item.speed !== 1 ? html`<i></i>${item.speed}x` : ""}${item.muted ? html`<i></i><span class="warn-text">靜音</span>` : ""}`} />
     <div class="insp-scroll">
       ${!media && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
         <span class="note-text">找不到這條音軌的音訊檔，可能已從素材庫刪除。匯出時會略過它。</span></div>`}
@@ -114,6 +119,9 @@ function AudioPanel({ project, item }) {
       </div>
       <${Toggle} checked=${!!item.muted} label="靜音" hint="保留在時間軸上，但預覽與匯出都不播放"
         onChange=${(muted) => updateAudio(item.id, { muted }, muted ? "音軌靜音" : "取消靜音")} />
+      ${!item.captionId && html`<${Toggle} checked=${!!item.fixed} label="固定在時間軸"
+        hint="開啟連動時，移動、刪除或修剪鏡頭也不會帶動這條音軌，適合跟著節拍剪的配樂"
+        onChange=${(fixed) => updateAudio(item.id, { fixed }, fixed ? "固定音軌" : "取消固定音軌")} />`}
       <${KeyList} item=${item} start=${start} length=${len} local=${local}
         update=${(patch, label) => updateAudio(item.id, patch, label)}
         onAdd=${() => addKeyframe(project, null, { type: "audio", id: item.id })} />
@@ -128,7 +136,7 @@ function AudioPanel({ project, item }) {
       </div>
     </div>
     <div class="insp-foot">
-      <span class="insp-hint dim">Delete 移除，Esc 回到鏡頭屬性</span>
+      <span class="insp-hint dim">${clipKeysHint("移除")}</span>
       <span class="grow"></span>
       <${Button} kind="danger" icon="trash" onClick=${remove}>移除音軌<//>
     </div>
@@ -160,9 +168,10 @@ function OverlayPanel({ project, item }) {
   const mx = 0.03;
   const my = (0.03 * fw) / fh;
   const place = ({ x, y, w: size }) =>
-    set({ x: round(clamp(x, -1, 1), 4), y: round(clamp(y, -1, 1), 4), ...(size ? { w: size } : {}) }, "片段位置");
+    set({ x: round(clamp(x, -4, 4), 4), y: round(clamp(y, -4, 4), 4), ...(size ? { w: size } : {}) }, "片段位置");
   const spots = [
     { label: "滿版", ...fitFrame(media, fw, fh) },
+    { label: "填滿", ...fillFrame(media, fw, fh) },
     { label: "左上", x: mx, y: my },
     { label: "右上", x: 1 - w - mx, y: my },
     { label: "置中", x: (1 - w) / 2, y: (1 - h) / 2 },
@@ -198,29 +207,30 @@ function OverlayPanel({ project, item }) {
           onCommit=${(v) => update(full > 0 ? { in: v, length: round(Math.min(len, full - v), 3) } : { in: v }, "修改片段入點")} />
       <//>`}
       <${Field} label="位置" hint=${keyed ? "這個片段有關鍵幀：下面顯示播放頭位置的值，有關鍵幀的項目會改寫播放頭位置的關鍵幀"
-        : "以畫面左上角為起點；也可以直接套用滿版或角落位置"}>
+        : "以畫面左上角為起點；滿版顯示整張素材，填滿蓋滿畫面並裁掉超出的部分"}>
         <div class="row">
           ${spots.map((s) => html`<${Button} size="sm" kind="ghost" onClick=${() => place(s)}>${s.label}<//>`)}
         </div>
       <//>
       <div class="row-2">
         <${Field} label="水平">
-          <${Slider} value=${at("x", 0)} min=${-1} max=${1} step=${0.005} format=${pct}
+          <${Slider} value=${at("x", 0)} min=${Math.min(-1, at("x", 0))} max=${Math.max(1, at("x", 0))} step=${0.005} format=${pct}
             onCommit=${(v) => set({ x: round(v, 4) }, "片段位置")} />
         <//>
         <${Field} label="垂直">
-          <${Slider} value=${at("y", 0)} min=${-1} max=${1} step=${0.005} format=${pct}
+          <${Slider} value=${at("y", 0)} min=${Math.min(-1, at("y", 0))} max=${Math.max(1, at("y", 0))} step=${0.005} format=${pct}
             onCommit=${(v) => set({ y: round(v, 4) }, "片段位置")} />
         <//>
       </div>
-      <${Field} label="大小" hint="畫面寬度的百分比，高度依素材比例">
-        <${Slider} value=${w} min=${0.05} max=${1} step=${0.01} format=${pct}
+      <${Field} label="大小" hint="畫面寬度的百分比，高度依素材比例；超過 100% 時超出畫面的部分會被裁掉">
+        <${Slider} value=${w} min=${0.05} max=${Math.max(2, w)} step=${0.01} format=${pct}
           onCommit=${(v) => set({ w: round(v, 4) }, "片段大小")} />
       <//>
       <${Field} label="不透明度">
         <${Slider} value=${at("opacity", 1)} min=${0} max=${1} step=${0.01} format=${pct}
           onCommit=${(v) => set({ opacity: round(v, 2) }, "片段不透明度")} />
       <//>
+      <${ChromaField} chroma=${item.chroma} update=${update} />
       ${video && media.hasAudio && html`<${Field} label="音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
         <${Slider} value=${at("volume", 1)} min=${0} max=${4} step=${0.05} format=${pct}
           onCommit=${(v) => set({ volume: round(v, 2) }, "片段音量")} />
@@ -238,11 +248,42 @@ function OverlayPanel({ project, item }) {
       </div>
     </div>
     <div class="insp-foot">
-      <span class="insp-hint dim">Delete 移除，Esc 回到鏡頭屬性</span>
+      <span class="insp-hint dim">${clipKeysHint("移除")}</span>
       <span class="grow"></span>
       <${Button} kind="danger" icon="trash" onClick=${remove}>移除片段<//>
     </div>
   </div>`;
+}
+
+// Colour key (GR-09): pixels near the chosen colour turn transparent, for a clip shot on a green or blue screen.
+function ChromaField({ chroma, update }) {
+  const c = { ...DEFAULT_CHROMA, ...chroma };
+  const save = (patch, label) => update({ chroma: { ...c, ...patch } }, label);
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  return html`<${Field} label="去背（綠幕）" hint="把接近指定顏色的部分變透明；預覽是近似效果，邊緣以匯出為準">
+      <${Toggle} checked=${c.on} label=${c.on ? "已開啟" : "關閉"} onChange=${(on) => save({ on }, on ? "開啟去背" : "關閉去背")} />
+    <//>
+    ${c.on && html`<${Field} label="去背顏色" hint="點色塊挑選要去掉的顏色，綠幕用綠色，藍幕用藍色">
+      <div class="row">
+        <label class="route-color" style=${`--route:${c.color}`} title="去背顏色">
+          <input type="color" value=${c.color} onChange=${(e) => save({ color: e.currentTarget.value }, "去背顏色")} />
+        </label>
+        <span class="mono dim">${c.color}</span>
+        <span class="grow"></span>
+        <${Button} size="sm" kind="ghost" onClick=${() => save({ color: "#00ff00" }, "去背顏色")}>綠幕<//>
+        <${Button} size="sm" kind="ghost" onClick=${() => save({ color: "#0000ff" }, "去背顏色")}>藍幕<//>
+      </div>
+    <//>
+    <div class="row-2">
+      <${Field} label="容許範圍" hint="越大去掉越多相近的顏色">
+        <${Slider} value=${c.similarity} min=${0.01} max=${0.6} step=${0.01} format=${pct}
+          onCommit=${(v) => save({ similarity: round(v, 2) }, "去背容許範圍")} />
+      <//>
+      <${Field} label="邊緣柔化" hint="0 是硬邊，越大邊緣越柔">
+        <${Slider} value=${c.blend} min=${0} max=${0.5} step=${0.01} format=${pct}
+          onCommit=${(v) => save({ blend: round(v, 2) }, "去背邊緣柔化")} />
+      <//>
+    </div>`}`;
 }
 
 function VoiceField({ project, cap }) {
@@ -253,6 +294,7 @@ function VoiceField({ project, cap }) {
   const clip = voiceClip(project, cap.id);
   const clipLen = clip ? audioLength(clip, (project.media || {})[clip.mediaId]) : 0;
   const over = clipLen - (cap.end - cap.start);
+  const fitEnd = clip ? voiceEnd(project, cap, clipLen) : cap.end;
   const options = [{ value: null, label: "未指定" }, ...cast.map((m) => ({ value: m.id, label: m.name || "未命名" }))];
   const canRun = ["none", "stale", "ready"].includes(state);
   return html`<${Field} label="人物與配音" hint="配音放在這句字幕的開始時間；字幕或人物改了之後可以重新生成">
@@ -270,6 +312,12 @@ function VoiceField({ project, cap }) {
       <${Button} size="sm" icon="mic" disabled=${!canRun} onClick=${() => generateVoices([cap.id])}>
         ${state === "ready" || state === "stale" ? "重新生成" : "生成配音"}<//>
     </div>
+    ${over > 0.05 && html`<div class="voice-row">
+      <${Button} size="sm" kind="ghost" icon="arrow-right" disabled=${fitEnd <= cap.end + 1e-3}
+        title=${fitEnd <= cap.end + 1e-3 ? "下一句字幕緊接在後，字幕無法再延長"
+          : `字幕結尾延長到 ${fmtSeconds(fitEnd, 2)}${fitEnd < cap.start + clipLen - 1e-3 ? "（到下一句字幕開頭為止）" : ""}`}
+        onClick=${() => updateCaption(cap.id, { end: fitEnd }, "字幕對齊配音長度")}>對齊配音長度<//>
+    </div>`}
   <//>`;
 }
 
@@ -281,13 +329,9 @@ function ShotField({ project, cap }) {
     { value: null, label: "不綁定" },
     ...shots.map((s, i) => ({ value: s.id, label: `${shotLabel(s, i)}${under && under.shot.id === s.id ? "（字幕開頭所在）" : ""}` })),
   ];
-  const bind = (shot) => {
-    const others = shot ? (project.captions || []).filter((c) => c.shot === shot && c.id !== cap.id) : [];
-    ops([{ op: "caption.update", id: cap.id, patch: { shot } },
-      ...others.map((c) => ({ op: "caption.update", id: c.id, patch: { shot: null } }))],
+  const bind = (shot) => ops([{ op: "caption.update", id: cap.id, patch: { shot } }],
     { label: shot ? "綁定鏡頭" : "解除綁定鏡頭" });
-  };
-  return html`<${Field} label="對應鏡頭" hint="綁定後分鏡卡會顯示這句字幕，兩邊改文字會同步；時間與長度不受影響，一個鏡頭只對應一句">
+  return html`<${Field} label="對應鏡頭" hint="綁定後分鏡卡會顯示這句字幕，兩邊改文字會同步；時間與長度不受影響，一個鏡頭可以綁定多句">
     <${Select} value=${cap.shot || null} options=${options} title="這句字幕顯示在哪個分鏡" onChange=${bind} />
   <//>`;
 }
@@ -343,6 +387,9 @@ function PositionField({ project, cap }) {
 function CaptionPanel({ project, cap }) {
   const len = cap.end - cap.start;
   const text = (cap.text || "").trim();
+  const glossaryText = useStore((s) => s.settings && s.settings.glossary);
+  const glossary = useMemo(() => parseGlossary(glossaryText), [glossaryText]);
+  const typos = glossary.length ? glossaryHits(cap.text, glossary) : [];
   const remove = () => {
     closePanel();
     ops([{ op: "caption.delete", id: cap.id }], { label: "刪除字幕" });
@@ -355,6 +402,10 @@ function CaptionPanel({ project, cap }) {
         <${DraftText} multiline rows=${3} value=${cap.text || ""} maxlength="500"
           onCommit=${(v) => updateCaption(cap.id, { text: v }, "修改字幕", `caption-text:${cap.id}`)} />
       <//>
+      ${typos.length > 0 && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
+        <span class="note-text">可能的錯字（比對設定的字幕用語詞庫）：${hitText(typos)}</span>
+        <${Button} size="sm" onClick=${() => updateCaption(cap.id, { text: fixHits(cap.text, typos) }, "改正字幕錯字")}>全部改正<//>
+      </div>`}
       <${VoiceField} project=${project} cap=${cap} />
       <${ShotField} project=${project} cap=${cap} />
       <div class="row-2">
@@ -377,15 +428,47 @@ function CaptionPanel({ project, cap }) {
       </div>
     </div>
     <div class="insp-foot">
-      <span class="insp-hint dim">Delete 刪除，Esc 回到鏡頭屬性</span>
+      <span class="insp-hint dim">${clipKeysHint("刪除")}</span>
       <span class="grow"></span>
       <${Button} kind="danger" icon="trash" onClick=${remove}>刪除字幕<//>
     </div>
   </div>`;
 }
 
+// Audio clips Ctrl+clicked together on the timeline: one volume for all of them, with the same choices as
+// the import dialog. The level is absolute (+6dB is the file's own level raised 6 dB), so a clip's volume
+// keyframes would fight it and are dropped; one Ctrl+Z undoes the lot.
+function AudioBatchPanel({ project, items }) {
+  const keyed = items.filter((a) => hasKeys(a, "volume")).length;
+  const volumeOff = (a) => (a.keyframes || []).map(({ volume, ...k }) => k).filter((k) => Object.keys(k).some((f) => f !== "t"));
+  const apply = (db) => ops(items.map((a) => ({
+    op: "audio.update", id: a.id,
+    patch: { volume: Math.min(4, dbToGain(db)), ...(hasKeys(a, "volume") ? { keyframes: volumeOff(a) } : {}) },
+  })), { label: `${items.length} 段音訊改成 ${db > 0 ? "+" : ""}${db}dB` });
+  return html`<div class="insp-shot">
+    <${Head} icon="music" title=${`已選 ${items.length} 段音訊`} sub="Ctrl+點擊時間軸上的音訊片段加選或取消" />
+    <div class="insp-scroll">
+      <${Field} label="音量" hint="以原始檔音量為準，選項與匯入時相同；之後仍可逐段調整">
+        <div class="gain-choices">
+          ${GAIN_CHOICES.map(([db, label, hint]) => html`<${Button} key=${db} onClick=${() => apply(db)}>
+            <b>${label}</b><span class="gain-hint">${hint}</span>
+          <//>`)}
+        </div>
+      <//>
+      ${keyed > 0 && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
+        <span class="note-text">其中 ${keyed} 段有音量關鍵幀，套用後會清除音量關鍵幀（${undoKeyText()}可還原）。</span></div>`}
+      <ul class="batch-list">${items.map((a) => html`<li key=${a.id}>${a.name || (audioMedia(project, a) || {}).name || "音訊"}<span class="dim">
+        ${Math.round(Number(valueAt(a, "volume", 0, 1)) * 100)}%${hasKeys(a, "volume") ? "（有關鍵幀）" : ""}</span></li>`)}</ul>
+      <${Button} size="sm" onClick=${() => setState({ audioSel: null })}>取消多選<//>
+    </div>
+  </div>`;
+}
+
 export function EditProps({ project, sel }) {
+  const together = useStore(multiAudio);
   if (sel && sel.type === "audio") {
+    const items = together ? (project.audio || []).filter((a) => together.includes(a.id)) : [];
+    if (items.length > 1) return html`<aside class="inspector" aria-label="多段音訊"><${AudioBatchPanel} project=${project} items=${items} /></aside>`;
     const item = (project.audio || []).find((a) => a.id === sel.id);
     if (item) return html`<aside class="inspector" aria-label="音軌屬性"><${AudioPanel} project=${project} item=${item} /></aside>`;
   }

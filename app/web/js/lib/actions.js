@@ -3,17 +3,24 @@
 import { api, upload } from "./api.js";
 import { getState, setState } from "./store.js";
 import { applyTheme } from "./theme.js";
-import { newId, shotLabel } from "./format.js";
+import { newId, shotLabel, fmtBytes } from "./format.js";
 import { toast, updateToast, dismissToast, toastError } from "../components/toast.js";
 import { confirmDialog } from "../components/overlay.js";
 import { readPref } from "./prefs.js";
 import { watchRefuses } from "./watch.js";
+import { openDefaultUpdates } from "../dialogs/default-updates.js";
+import { maybeOpenTour } from "../dialogs/tour.js";
+import { announceRelease } from "./release.js";
+import { undoKeyText } from "./keymap.js";
 
 const EMPTY_UNDO = { undo: 0, redo: 0, undoLabel: "", redoLabel: "" };
 // With linking on (the timeline's link toggle), shot edits carry the items on the other tracks along.
 export const LINK_PREF = "vc.timeline.link";
 const SHOT_OPS = new Set(["shot.add", "shot.delete", "shot.move", "shot.update"]);
 const linking = (list) => readPref(LINK_PREF, true, (v) => typeof v === "boolean") && list.some((o) => SHOT_OPS.has(o.op));
+// A shot taken out of the sequence holds the items that lay on it (vc/linked.py). With linking off, shot
+// edits still go as "linked" without the shift while any shot holds some, so one put back gets them again.
+const holding = (list) => list.some((o) => SHOT_OPS.has(o.op)) && ((getState().project || {}).shots || []).some((x) => x.parked);
 const enc = encodeURIComponent;
 let bootedOnce = false;
 
@@ -44,7 +51,7 @@ export async function bootstrap() {
     instance: data.instance, version: data.version, settings: data.settings,
     secrets: data.secrets || {}, projects: data.projects || [], jobs: data.jobs || [], queue: data.queue,
     comfy: data.comfy || [], workflows: data.workflows || [], providers: data.providers || [],
-    presets: data.presets || {}, system: data.system || {},
+    presets: data.presets || {}, system: data.system || {}, costs: data.costs || null,
   });
   const first = !bootedOnce;
   bootedOnce = true;
@@ -64,6 +71,9 @@ export async function bootstrap() {
     toast("目前的專案已不存在，已回到專案列表", { level: "warn" });
   }
   setState({ boot: "ready", bootError: null });
+  if (first && data.defaultUpdates && data.defaultUpdates.length) openDefaultUpdates(data.defaultUpdates);
+  else if (first) maybeOpenTour(s.projects.length > 0);
+  if (first) announceRelease();
 }
 
 export async function loadProject(pid) {
@@ -168,17 +178,25 @@ async function restoreDeleted(pid) {
 }
 
 export async function deleteProject(pid, name) {
+  // Files in the shared export folder are listed by full path; those in the project's own exports/ go to the
+  // trash with it.
+  const shared = await api.get(`/api/projects/${enc(pid)}/exports`)
+    .then((list) => list.filter((e) => !e.path.startsWith("exports/")), () => []);
+  const size = shared.reduce((sum, e) => sum + e.size, 0);
   const ok = await confirmDialog({
     title: `刪除「${name}」？`,
     message: "專案會移到垃圾桶，可以從專案頁的垃圾桶還原。",
+    check: shared.length ? `一併刪除匯出資料夾裡這個專案的 ${shared.length} 個輸出檔（${fmtBytes(size)}，刪了無法還原）` : "",
     confirmLabel: "移到垃圾桶",
     danger: true,
   });
   if (!ok) return false;
   try {
-    await api.del(`/api/projects/${enc(pid)}`);
+    const res = await api.del(`/api/projects/${enc(pid)}${ok.checked ? "?exports=1" : ""}`);
     if (getState().pid === pid) closeProject();
-    toast(`已將「${name}」移到垃圾桶`, { action: { label: "復原", fn: () => restoreDeleted(pid) } });
+    const files = res && res.removedExports ? `，並刪除 ${res.removedExports} 個匯出檔` : "";
+    const busy = res && res.exportsInUse ? `（${res.exportsInUse} 個檔案使用中，沒有刪除）` : "";
+    toast(`已將「${name}」移到垃圾桶${files}${busy}`, { action: { label: "復原", fn: () => restoreDeleted(pid) } });
     return true;
   } catch (err) {
     toastError(err, "無法刪除專案");
@@ -194,11 +212,13 @@ function ensureRev(pid, rev) {
   }, 1500);
 }
 
-export async function ops(list, { label = "", coalesce = null, undoable = true, batch = null } = {}) {
+// link: true sends the shot edits linked whatever the timeline toggle says (ripple delete); false never shifts
+// or holds other items (a lift leaves an empty shot of the same length); null follows the toggle.
+export async function ops(list, { label = "", coalesce = null, undoable = true, batch = null, link = null } = {}) {
   const { pid } = getState();
   if (!pid || !list.length || watchRefuses()) return null;
   try {
-    const sent = linking(list) ? [{ op: "linked", ops: list }] : list;
+    const sent = link || (link === null && linking(list)) ? [{ op: "linked", ops: list }] : holding(list) ? [{ op: "linked", ops: list, shift: false }] : list;
     const res = await api.post(`/api/projects/${enc(pid)}/ops`, { ops: sent, label, coalesce, undoable, batch });
     if (res && res.changed) ensureRev(pid, res.rev);
     return res;
@@ -256,15 +276,17 @@ export function updateShots(ids, patch, label = "批次修改鏡頭") {
   return ops(ids.map((id) => ({ op: "shot.update", id, patch })), { label });
 }
 
-export async function deleteShots(ids) {
+// ripple: the other tracks close up too, as with linking on.
+export async function deleteShots(ids, { ripple = false } = {}) {
   const s = getState();
   if (!s.project || !ids.length) return;
   const shots = s.project.shots;
   if ((s.settings.ui || {}).confirmDelete !== false) {
     const i = shots.findIndex((x) => x.id === ids[0]);
+    const held = shots.some((x) => ids.includes(x.id) && x.parked);
     const ok = await confirmDialog({
       title: ids.length > 1 ? `刪除 ${ids.length} 個鏡頭？` : `刪除「${shotLabel(shots[i], i)}」？`,
-      message: `${linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕會一起刪除，" : ""}已生成的版本會留在專案裡，按 Ctrl+Z 可以復原。`,
+      message: `${ripple || linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕會一起刪除，" : ""}${held ? "移出序列時收起的字幕與音訊也會一起刪除，" : ""}已生成的版本會留在專案裡，${undoKeyText()}可以復原。`,
       confirmLabel: "刪除",
       danger: true,
     });
@@ -275,6 +297,7 @@ export async function deleteShots(ids) {
   const next = remaining[Math.min(Math.max(first, 0), remaining.length - 1)];
   const res = await ops(ids.map((id) => ({ op: "shot.delete", id })), {
     label: ids.length > 1 ? `刪除 ${ids.length} 個鏡頭` : "刪除鏡頭",
+    link: ripple || null,
   });
   if (res) setState({ selected: next ? [next.id] : [], focus: next ? next.id : null });
 }
@@ -287,7 +310,8 @@ export async function duplicateShots(ids) {
   const copies = [];
   // Insert from the back so earlier indexes stay valid while the server applies the list in order.
   const list = [...picked].reverse().map(({ shot, i }) => {
-    const copy = { ...shot, id: newId("s"), name: shot.name ? `${shot.name} 副本` : "" };
+    const { parked, ...rest } = shot; // what the original holds stays with it
+    const copy = { ...rest, id: newId("s"), name: shot.name ? `${shot.name} 副本` : "" };
     copies.unshift(copy.id);
     return { op: "shot.add", shot: copy, index: i + 1 };
   });
@@ -297,6 +321,25 @@ export async function duplicateShots(ids) {
 
 export function moveShot(id, index) {
   return ops([{ op: "shot.move", id, index }], { label: "調整鏡頭順序" });
+}
+
+// Move several shots as one block, kept in story order, so the first of them lands at `index`.
+// One shot.move per shot that is out of place, all in one undo step.
+export function moveShots(ids, index) {
+  const shots = (getState().project || {}).shots || [];
+  const block = shots.filter((x) => ids.includes(x.id));
+  const rest = shots.filter((x) => !ids.includes(x.id));
+  const at = Math.max(0, Math.min(rest.length, index));
+  const want = [...rest.slice(0, at), ...block, ...rest.slice(at)].map((x) => x.id);
+  const now = shots.map((x) => x.id);
+  const list = [];
+  want.forEach((id, i) => {
+    if (now[i] === id) return;
+    now.splice(now.indexOf(id), 1);
+    now.splice(i, 0, id);
+    list.push({ op: "shot.move", id, index: i });
+  });
+  return list.length ? ops(list, { label: `移動 ${block.length} 個鏡頭` }) : Promise.resolve(null);
 }
 
 // ---------------------------------------------------------------- navigation
@@ -370,6 +413,17 @@ export async function revealInFolder(path = "") {
     await api.post(`/api/projects/${enc(pid)}/reveal`, path ? { path } : {});
   } catch (err) {
     toastError(err, "無法開啟資料夾");
+  }
+}
+
+// The Windows select-folder dialog, opened by the server; resolves to the folder picked, or null when canceled.
+export async function pickSystemFolder(start, title) {
+  try {
+    const res = await api.post("/api/system/pick-folder", { start, title });
+    return (res && res.path) || null;
+  } catch (err) {
+    toastError(err, "無法開啟選擇資料夾視窗");
+    return null;
   }
 }
 

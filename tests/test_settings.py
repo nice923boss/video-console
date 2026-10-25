@@ -62,7 +62,8 @@ def test_values_are_tidied_on_save(settings):
                 "enabled": "yes"},
     })
 
-    assert saved["notify"]["ntfy"] == {"enabled": True, "topic": "vc-alerts_01", "server": "https://ntfy.example.com"}
+    assert saved["notify"]["ntfy"] == {"enabled": True, "topic": "vc-alerts_01", "server": "https://ntfy.example.com",
+                                       "when": "all"}
     llm = saved["llm"]
     assert (llm["baseUrl"], llm["temperature"], llm["enabled"]) == ("http://127.0.0.1:1234/v1", 1.5, True)
     assert llm["model"] == ("m " + "x" * 200)[:120]
@@ -82,8 +83,31 @@ def test_history_limits_are_clamped(settings, given, kept):
     assert settings.update({"history": given})["history"] == kept
 
 
+@pytest.mark.parametrize("given, kept", [("failed", "failed"), ("sometimes", "all"), (None, "all")])
+def test_push_condition_falls_back_to_every_batch(settings, given, kept):
+    assert settings.update({"notify": {"ntfy": {"when": given}}})["notify"]["ntfy"]["when"] == kept
+
+
+@pytest.mark.parametrize("given, kept", [(1.3, 1.3), (1.15, 1.15), (2, 1), ("1.3", 1), (True, 1)])
+def test_text_scale_keeps_only_the_offered_sizes(settings, given, kept):
+    assert settings.update({"ui": {"textScale": given}})["ui"]["textScale"] == kept
+
+
 def test_shot_duration_default_is_clamped(settings):
     assert settings.update({"defaults": {"shotDuration": 0}})["defaults"]["shotDuration"] == 0.2
+
+
+def test_label_colors_keep_only_well_formed_entries(settings):
+    colors = settings.update({"ui": {"labelColors": [
+        {"value": "#AABBCC", "label": "  待重拍  "},
+        {"value": "#aabbcc", "label": "重複"},
+        {"value": "red", "label": "不是色碼"},
+        {"value": "#123456"},
+        *({"value": f"#0000{i:02x}", "label": str(i)} for i in range(20)),
+    ]}})["ui"]["labelColors"]
+
+    assert colors[:2] == [{"value": "#aabbcc", "label": "待重拍"}, {"value": "#123456", "label": "#123456"}]
+    assert len(colors) == 12
 
 
 def test_returned_snapshot_is_a_copy(settings):

@@ -10,25 +10,33 @@ import { clock, setTime, onClock } from "../lib/clock.js";
 import { ops, undo, deleteShots, LINK_PREF } from "../lib/actions.js";
 import { setWatch, watchRefuses } from "../lib/watch.js";
 import { uploadFiles } from "../lib/jobs-actions.js";
+import { rippleOps } from "../lib/ripple.js";
+import { copyItem, pasteItem } from "./tl-clipboard.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
-import { sequenceDuration, audioLength, audioMedia, audioTrack, VOICE_TRACK, musicTracks, mergeTracks } from "../lib/sequence.js";
-import { generateMissing } from "../lib/voice.js";
+import { sequenceDuration, audioLength, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, musicTracks, mergeTracks } from "../lib/sequence.js";
+import { generateMissing, generateVoices } from "../lib/voice.js";
+import { decodeText, TEXT_ENCODINGS, encodingLabel, linesLabel } from "../lib/textfile.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
+import { copyChapters } from "../lib/chapters.js";
 import { upload } from "../lib/api.js";
+import { MEDIA_MIME, placeMedia } from "../lib/media-actions.js";
 import { toast, toastError } from "./toast.js";
 import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
 import {
   MARKER_COLORS, KEYABLE, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
-  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, copyItem, pasteItem, notYet,
+  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet,
 } from "./tl-commands.js";
-import { openMenu, openModal, Modal } from "./overlay.js";
-import { Button, IconButton } from "./ui.js";
+import { openMenu, openModal, Modal, promptDialog } from "./overlay.js";
+import { Button, IconButton, Field, Select, Segmented, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
+import { TrackMeter } from "./audio-meter.js";
 import {
-  VideoTrack, CaptionTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H,
+  VideoTrack, CaptionTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H, multiAudio,
   CAPTION_H, AUDIO_H, PIP_H, ADD_H,
 } from "./tl-tracks.js";
 import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
+import { Minimap } from "./tl-minimap.js";
+import { useViewWindow, inView } from "./tl-view.js";
 
 const LABEL_W = 176;
 const RULER_H = 26;
@@ -66,6 +74,16 @@ function deleteSelection(sel) {
   else if (sel.type === "overlay") ops([{ op: "overlay.delete", id: sel.id }], { label: "移除片段" });
   else if (sel.type === "adjust") ops([{ op: "adjust.delete", id: sel.id }], { label: "刪除調整圖層" });
   else return false;
+  return true;
+}
+
+// Shift+Delete: what comes after the clip on its track moves back to close the gap.
+function rippleDelete(project, sel) {
+  if (!sel) return false;
+  if (sel.type === "shot") return deleteShots([sel.id], { ripple: true }), true;
+  const list = rippleOps(project, sel);
+  if (!list) return false;
+  ops(list, { label: "漣漪刪除" });
   return true;
 }
 
@@ -110,11 +128,24 @@ const WATCH_KEYS = new Set(["edit.deselect", "edit.copy", "edit.markerNext", "ed
 
 const markerHex = (color) => (MARKER_COLORS.find((c) => c.value === color) || MARKER_COLORS[0]).hex;
 
-// Right-click on a marker: its colour, or delete it.
+async function nameMarker(m) {
+  const next = await promptDialog({
+    title: "命名標記", label: "名稱", value: m.name || "", placeholder: "例如：開場、產品介紹",
+    hint: "複製 YouTube 章節時當作章節標題", confirmLabel: "儲存", validate: () => "",
+  });
+  if (next != null && next.trim() !== (m.name || "")) {
+    ops([{ op: "marker.update", id: m.id, patch: { name: next.trim().slice(0, 80) } }], { label: "命名標記" });
+  }
+}
+
+// Right-click on a marker: its name, colour, the chapter list, or delete it.
 function markerMenu(e, m) {
   e.stopPropagation();
   openMenu(e, [
-    { header: `標記 ${fmtTime(m.start)}` },
+    { header: `標記 ${fmtTime(m.start)}${m.name ? `「${m.name}」` : ""}` },
+    { label: "命名…", icon: "pencil", onClick: () => nameMarker(m) },
+    { label: "複製 YouTube 章節", icon: "copy", onClick: () => copyChapters(getState().project) },
+    { divider: true },
     ...MARKER_COLORS.map((c) => ({ label: c.label, swatch: c.hex, checked: m.color === c.value,
       onClick: () => m.color !== c.value && ops([{ op: "marker.update", id: m.id, patch: { color: c.value } }], { label: "修改標記顏色" }) })),
     { divider: true },
@@ -122,7 +153,16 @@ function markerMenu(e, m) {
   ]);
 }
 
+function overMenu(e, t) {
+  e.stopPropagation();
+  openMenu(e, [
+    { header: `爆音 ${fmtTime(t)}` },
+    { label: "清除所有爆音標記", icon: "trash", onClick: () => setState({ clipMarks: null }) },
+  ]);
+}
+
 function Ruler({ width, pps, onScrub, markers, range }) {
+  const overs = useStore((s) => (s.clipMarks && s.clipMarks.pid === s.pid ? s.clipMarks.times : null));
   let step = STEPS.find((s) => s * pps >= MAJOR_PX) || STEPS[STEPS.length - 1];
   const span = width / pps;
   while (span / step > MAX_TICKS) step *= 2;
@@ -141,8 +181,11 @@ function Ruler({ width, pps, onScrub, markers, range }) {
     onPointerDown=${onScrub} title="拖曳移動播放頭">${ticks}
     ${range && html`<i class="tl-range-bar" style=${`left:${range.in * pps}px;width:${(range.out - range.in) * pps}px`}></i>`}
     ${markers.map((m) => html`<i key=${m.id} class="tl-marker" style=${`left:${m.start * pps}px;--mk:${markerHex(m.color)}`}
-      title=${`標記 ${fmtTime(m.start)}：點一下跳到這裡，右鍵換顏色或刪除`} onPointerDown=${(e) => jump(e, m)}
+      title=${`標記 ${fmtTime(m.start)}${m.name ? `「${m.name}」` : ""}：點一下跳到這裡，右鍵命名、換顏色或刪除`} onPointerDown=${(e) => jump(e, m)}
       onContextMenu=${(e) => markerMenu(e, m)}></i>`)}
+    ${overs && overs.map((t) => html`<i key=${`over${t}`} class="tl-over" style=${`left:${t * pps}px`}
+      title=${`爆音 ${fmtTime(t)}：播放時超過 0dB。點一下跳到這裡，右鍵清除`} onPointerDown=${(e) => jump(e, { start: t })}
+      onContextMenu=${(e) => overMenu(e, t)}></i>`)}
   </div>`;
 }
 
@@ -177,21 +220,73 @@ function mergeAudioTracks(project) {
   });
 }
 
-// An .srt's subtitles at the times it gives; with captions already there, ask whether they stay.
-async function importSrt(project, file) {
+const SRT_VOICES = [
+  { value: "delete", label: "刪除配音", hint: "舊字幕的配音和生成的音檔一起刪掉" },
+  { value: "keep", label: "保留配音", hint: "配音留在配音軌上變成一般音訊，不再跟著字幕改" },
+  { value: "regen", label: "重新配音", hint: "新字幕沿用時間重疊最多的舊字幕的說話者，匯入後重新生成配音" },
+];
+
+function SrtImportBody({ project, file, buf, first, close }) {
   const count = (project.captions || []).length;
-  const mode = !count ? "add" : await openModal((close) => html`<${Modal} title="匯入 SRT" width=${460} onClose=${() => close(null)}
-      footer=${html`
-        <button type="button" class="btn" onClick=${() => close(null)}>取消</button>
-        <button type="button" class="btn" onClick=${() => close("add")}>保留並加入</button>
-        <button type="button" class="btn btn-primary" onClick=${() => close("replace")}>取代現有字幕</button>`}>
-      <p class="modal-text">專案已有 ${count} 則字幕。「取代現有字幕」會先刪掉它們再匯入「${file.name}」；「保留並加入」兩邊都留著。
-        匯入是一個步驟，按復原${keyHint("app.undo")}可整批取消。</p>
-    </${Modal}>`);
-  if (!mode) return;
+  const voiced = (project.audio || []).filter((a) => a.captionId).length;
+  const at = round(clock.time, 3);
+  const [decoded, setDecoded] = useState(first);
+  const [mode, setMode] = useState("add");
+  const [fromPlayhead, setFromPlayhead] = useState(false);
+  const [voices, setVoices] = useState("delete");
+  const replace = mode === "replace";
+  const go = () => close({ decoded, replace, offset: fromPlayhead ? at : 0, voices: replace ? voices : "delete" });
+  return html`<${Modal} title="匯入 SRT" width=${500} onClose=${() => close(null)}
+    footer=${html`<${Button} onClick=${() => close(null)}>取消<//><${Button} kind="primary" onClick=${go}>匯入<//>`}>
+    <${Field} label="檔案編碼" error=${decoded.badLines.length ? `${linesLabel(decoded.badLines)}有無法辨識的字元，請換一種編碼` : ""}
+      hint=${`「${file.name}」目前用 ${encodingLabel(decoded.encoding)} 讀取`}>
+      <${Select} value=${decoded.encoding} options=${TEXT_ENCODINGS.filter((o) => o.value !== "auto")}
+        onChange=${(enc) => setDecoded(decodeText(buf, enc))} />
+    <//>
+    ${count > 0 && html`<${Field} label=${`專案已有 ${count} 則字幕`}
+      hint=${replace ? "先刪掉現有字幕再匯入" : "兩邊都留著，時間重疊的字幕會疊成兩行"}>
+      <${Segmented} value=${mode} onChange=${setMode} size="sm"
+        options=${[{ value: "add", label: "保留並加入" }, { value: "replace", label: "取代現有字幕" }]} />
+    <//>`}
+    ${replace && voiced > 0 && html`<${Field} label=${`現有字幕綁定的配音（${voiced} 段）`}
+      hint=${SRT_VOICES.find((v) => v.value === voices).hint}>
+      <${Segmented} value=${voices} onChange=${setVoices} size="sm" options=${SRT_VOICES} />
+    <//>`}
+    ${at > 0.1 && html`<${Toggle} checked=${fromPlayhead} onChange=${setFromPlayhead} label=${`從播放頭 ${fmtTime(at)} 開始`}
+      hint=${fromPlayhead ? "SRT 的 0 秒對齊播放頭，適合插入一段局部字幕" : "照 SRT 裡寫的時間放"} />`}
+    <p class="modal-text dim">匯入是一個步驟，按復原${keyHint("app.undo")}可整批取消。</p>
+  <//>`;
+}
+
+// An .srt's subtitles at the times it gives (or from the playhead). Asks first when there is something to decide:
+// captions already there, the playhead away from 0, or characters the detected encoding could not read.
+async function importSrt(project, file) {
+  let buf;
   try {
-    const res = await upload(`/api/projects/${encodeURIComponent(project.id)}/captions.srt${mode === "replace" ? "?replace=1" : ""}`, file);
-    toast(`已匯入 ${res.added} 則字幕`, { level: "success" });
+    buf = await file.arrayBuffer();
+  } catch (err) {
+    toastError(err, "無法讀取檔案");
+    return;
+  }
+  const first = decodeText(buf);
+  const ask = (project.captions || []).length > 0 || clock.time > 0.1 || first.badLines.length > 0;
+  const choice = ask
+    ? await openModal((close) => html`<${SrtImportBody} project=${project} file=${file} buf=${buf} first=${first} close=${close} />`)
+    : { decoded: first, replace: false, offset: 0, voices: "delete" };
+  if (!choice) return;
+  const query = new URLSearchParams({ voices: choice.voices });
+  if (choice.replace) query.set("replace", "1");
+  if (choice.offset) query.set("offset", String(choice.offset));
+  try {
+    // sent as UTF-8 whatever the file was, so the server never has to guess the encoding again
+    const body = new Blob([choice.decoded.text], { type: "text/plain" });
+    const res = await upload(`/api/projects/${encodeURIComponent(project.id)}/captions.srt?${query}`, body);
+    const bad = choice.decoded.badLines;
+    toast(`已匯入 ${res.added} 則字幕${bad.length ? `，${linesLabel(bad)}有無法辨識的字元` : ""}`, { level: bad.length ? "warn" : "success" });
+    if (choice.voices === "regen") {
+      if (res.voiced.length) generateVoices(res.voiced);
+      else toast("沒有新字幕和原本有說話者的字幕時間重疊，沒有重新配音", { level: "warn" });
+    }
   } catch (err) {
     toastError(err, "無法匯入 SRT");
   }
@@ -209,9 +304,11 @@ function contentSpan(project, clips) {
 }
 
 export function Timeline({ project, clips, hotkeys = true }) {
-  const { editSel, focus, editRange, editTool, watch } = useStore((s) => ({
-    editSel: s.editSel, focus: s.focus, editRange: s.editRange, editTool: s.editTool, watch: s.watch,
+  const { editSel, focus, editRange, editTool, watch, audioSel, solo } = useStore((s) => ({
+    editSel: s.editSel, focus: s.focus, editRange: s.editRange, editTool: s.editTool, watch: s.watch, audioSel: multiAudio(s),
+    solo: s.solo && s.solo.pid === s.pid ? s.solo.keys : null,
   }));
+  const audioOn = (id) => (audioSel ? audioSel.includes(id) : !!editSel && editSel.type === "audio" && editSel.id === id);
   const [pps, setPps] = usePref("vc.timeline.pps", PPS_DEFAULT, validPps);
   const [scale, setScale] = usePref("vc.timeline.scale", 1, validScale);
   const [snapOn, setSnapOn] = usePref("vc.timeline.snap", true, isBool);
@@ -220,6 +317,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const [drop, setDrop] = useState(null);
   const [adjGhost, setAdjGhost] = useState(null);
   const [audioDrag, setAudioDrag] = useState(false);
+  const [pipGap, setPipGap] = useState(null); // {at, length}: an upper clip dragged into the picture lane
   const scrollRef = useRef(null);
   const headRef = useRef(null);
   const fileRef = useRef(null);
@@ -267,6 +365,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
 
   const span = contentSpan(project, clips);
   const contentW = Math.ceil(Math.max(viewW, span * pps + viewW * 0.6));
+  const win = useViewWindow(scrollRef, viewW, pps, anchorRef);
 
   // Keep the playhead in place while zooming when it is on screen, otherwise the left edge.
   const zoomTo = (raw, anchor = null) => {
@@ -349,9 +448,10 @@ export function Timeline({ project, clips, hotkeys = true }) {
   };
   const keys = {
     "edit.delete": () => deleteSelection(selRef.current),
+    "edit.rippleDelete": () => rippleDelete(dataRef.current.project, selRef.current),
     "edit.deselect": () => (selRef.current ? setState({ editSel: null }) : false),
     "edit.copy": on(copyItem),
-    "edit.paste": () => pasteItem(dataRef.current.project),
+    "edit.paste": () => pasteItem(dataRef.current.project, dataRef.current.clips),
     "edit.split": on(splitAtPlayhead),
     "edit.splitAll": on(splitAllAtPlayhead),
     "edit.trimStart": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "start"),
@@ -427,6 +527,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
   };
 
   const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+  const hasMedia = (e) => e.dataTransfer && [...e.dataTransfer.types].includes(MEDIA_MIME);
   const dropTime = (e) => {
     const sc = scrollRef.current;
     return Math.max(0, (e.clientX - sc.getBoundingClientRect().left - LABEL_W + sc.scrollLeft) / pps);
@@ -436,7 +537,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     return row ? row.dataset.drop : "";
   };
   const onDragOver = (e) => {
-    if (!hasFiles(e)) return;
+    if (!hasFiles(e) && !hasMedia(e)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = watch ? "none" : "copy";
     if (watch) return;
@@ -449,10 +550,11 @@ export function Timeline({ project, clips, hotkeys = true }) {
   };
   // Sound always goes on the soundtrack: on the voice rows or the music track it is dropped on, anywhere
   // else (or on the new-track row) each file on a track of its own. Pictures and clips dropped on the
-  // picture lane become new shots in between, on an upper track they go on that track, on the new-track
-  // row each gets a new track; anywhere else they only go to the library.
+  // picture lane (or on any row that is not a picture track) become new shots in between at the drop time,
+  // on an upper track they go on that track, on the new-track row each gets a new track. Cards dragged from
+  // the media bin follow the same rules without uploading anything.
   const onDrop = (e) => {
-    if (!hasFiles(e)) return;
+    if (!hasFiles(e) && !hasMedia(e)) return;
     e.preventDefault();
     e.stopPropagation();
     setDrop(null);
@@ -460,21 +562,29 @@ export function Timeline({ project, clips, hotkeys = true }) {
     const t = dropTime(e);
     const start = round(t, 2);
     const row = dropRow(e);
+    const sound = row.startsWith("audio:") && row !== "audio:new" ? row.slice(6) : null;
+    if (hasMedia(e)) {
+      let ids = [];
+      try {
+        ids = JSON.parse(e.dataTransfer.getData(MEDIA_MIME) || "[]");
+      } catch {
+        return;
+      }
+      const list = ids.map((id) => project.media[id]).filter(Boolean);
+      const layer = row === "new-layer" ? "new" : row.startsWith("layer:") ? row.slice(6) : null;
+      placeMedia(project, list, { index: shotIndexAt(project, clips, t).index, start, layer, track: sound });
+      return;
+    }
     const files = [...e.dataTransfer.files];
     const srt = files.filter(isSrt);
     if (srt.length) importSrt(project, srt[0]);
     const visual = files.filter(isVisual);
     const rest = files.filter((f) => !isVisual(f) && !isSrt(f));
-    const sound = row.startsWith("audio:") && row !== "audio:new" ? row.slice(6) : null;
     if (rest.length) uploadFiles(rest, { track: true, start, audioTrack: sound });
     if (!visual.length) return;
-    if (row === "video") insertShots(visual, shotIndexAt(project, clips, t).index);
-    else if (row === "new-layer") addLayersWith(visual, start);
+    if (row === "new-layer") addLayersWith(visual, start);
     else if (row.startsWith("layer:")) uploadFiles(visual, { layer: row.slice(6), start });
-    else {
-      uploadFiles(visual, { track: true, start });
-      toast("圖片與影片已加入素材庫；拖到「畫面」軌可穿插成新鏡頭，拖到上層畫面軌可疊在上面", { level: "info" });
-    }
+    else insertShots(visual, shotIndexAt(project, clips, t).index);
   };
   const pickAudio = (e) => {
     const files = [...e.currentTarget.files];
@@ -488,8 +598,9 @@ export function Timeline({ project, clips, hotkeys = true }) {
   };
 
   const ctx = {
-    pid: project.id, pps, scale, ar: project.settings.width / project.settings.height, snapper,
-    insertAt: (t) => shotIndexAt(project, clips, t), onAudioDrag: setAudioDrag,
+    pid: project.id, pps, scale, ar: project.settings.width / project.settings.height, snapper, win,
+    insertAt: (t) => shotIndexAt(project, clips, t), onAudioDrag: setAudioDrag, tool: watch ? "watch" : editTool,
+    onPipGap: (g) => setPipGap((old) => (g && old && g.at === old.at && g.length === old.length ? old : g)),
   };
   const tracks = project.tracks || {};
   const layers = project.layers || [];
@@ -497,18 +608,41 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const adjustments = project.adjustments || [];
   const audio = project.audio || [];
   const voiceRows = packVoiceRows(project, audio.filter((a) => audioTrack(a) === VOICE_TRACK));
-  const music = musicTracks(audio);
+  const music = musicTracks(audio, tracks.musicOrder);
+  // While an upper clip hovers over the picture lane, the shots from the insert point on move back to show the room.
+  const laneClips = pipGap ? clips.map((c) => (c.start >= pipGap.at - 1e-6 ? { ...c, start: c.start + pipGap.length } : c)) : clips;
   const total = sequenceDuration(clips);
+  const nearAudio = (a) => audioOn(a.id) || inView(win, Number(a.start || 0), audioLength(a, audioMedia(project, a)));
   const lane = (cls, body) => html`<div class=${`tl-lane ${cls}`} style=${`width:${contentW}px`} onPointerDown=${onLaneDown}>${body}</div>`;
   const label = (icon, text, extra = null) => html`<div class="tl-label"><${Icon} name=${icon} size=${14} /><span>${text}</span>${extra}</div>`;
   const row = (key, height, body, { drop: target = null, hidden = false, muted = false } = {}) => html`<div key=${key}
     class=${["tl-row", hidden && "is-hidden", muted && "is-muted", target && drop && drop.row === target && "is-drop-target"].filter(Boolean).join(" ")}
     style=${`height:${Math.round(height * scale)}px`} data-drop=${target}>${body}</div>`;
   const setTrack = (key, label) => ops([{ op: "project.update", patch: { tracks: { [key]: !tracks[key] } } }], { label });
+  // Swaps music track i with the one above (d = -1) or below (d = 1); the whole order is saved.
+  const moveTrack = (i, d) => {
+    const keys = music.map((m) => m.key);
+    [keys[i], keys[i + d]] = [keys[i + d], keys[i]];
+    ops([{ op: "project.update", patch: { tracks: { musicOrder: keys } } }], { label: d < 0 ? "音軌上移" : "音軌下移" });
+  };
+  const orderBtns = (i) => music.length > 1 && html`<div class="tl-order">
+    <button type="button" title="這條音軌上移" aria-label="這條音軌上移" disabled=${i === 0} onClick=${() => moveTrack(i, -1)}>
+      <${Icon} name="chevron-up" size=${12} /></button>
+    <button type="button" title="這條音軌下移" aria-label="這條音軌下移" disabled=${i === music.length - 1}
+      onClick=${() => moveTrack(i, 1)}><${Icon} name="chevron-down" size=${12} /></button></div>`;
   const eyeBtn = (hidden, onClick) => html`<${IconButton} icon=${hidden ? "eye-off" : "eye"} size=${14} active=${hidden}
     title=${hidden ? "顯示這條軌道" : "隱藏這條軌道（預覽與輸出都不顯示）"} onClick=${onClick} />`;
   const muteBtn = (muted, onClick, what = "這條軌道") => html`<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
     active=${muted} title=${muted ? "取消靜音" : `${what}靜音`} onClick=${onClick} />`;
+  // Solo (MX-03): only the soloed rows sound in the preview; several can be on. Not saved, not exported.
+  const soloKeys = solo || [];
+  const soloBtn = (track, what = "這條軌道") => {
+    const on = soloKeys.includes(track);
+    const keys = on ? soloKeys.filter((k) => k !== track) : [...soloKeys, track];
+    return html`<${IconButton} icon="headphones" size=${14} class=${on ? "is-solo" : ""}
+      title=${on ? "取消獨奏" : `獨奏：預覽時只聽${what}（可同時獨奏多條，不影響輸出）`}
+      onClick=${() => setState({ solo: keys.length ? { pid: project.id, keys } : null })} />`;
+  };
 
   return html`<div class=${`timeline ${drop ? "is-drop" : ""} ${!watch && editTool === "blade" ? "is-blade" : ""} ${watch ? "is-watch" : ""}`}
     onDragOver=${onDragOver} onDragLeave=${onDragLeave} onDrop=${onDrop}>
@@ -583,8 +717,10 @@ export function Timeline({ project, clips, hotkeys = true }) {
               ${muteBtn(!!layer.muted, () => ops([{ op: "layer.update", id: layer.id, patch: { muted: !layer.muted } }],
                 { label: layer.muted ? "取消靜音" : `${name} 靜音` }))}
               <${IconButton} icon="trash" size=${14} title=${`刪除${name}${items.length ? `與上面的 ${items.length} 段` : ""}`}
-                onClick=${() => removeLayer(layers, layer, items.length)} />`)}
-            ${lane("tl-lane-pip", items.map((item) => html`<${OverlayClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
+                onClick=${() => removeLayer(layers, layer, items.length)} />
+              <${TrackMeter} track=${layer.id} />`)}
+            ${lane("tl-lane-pip", items.filter((o) => (editSel && editSel.id === o.id)
+              || inView(win, Number(o.start || 0), Number(o.length || 1))).map((item) => html`<${OverlayClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
               selected=${!!editSel && editSel.type === "overlay" && editSel.id === item.id} />`))}`,
             { drop: `layer:${layer.id}`, hidden: !!layer.hidden, muted: !!layer.muted });
         })}
@@ -593,30 +729,33 @@ export function Timeline({ project, clips, hotkeys = true }) {
             <${AdjustAddButton} clips=${clips} pps=${pps} onGhost=${setAdjGhost} />
             ${eyeBtn(!!tracks.videoHidden, () => setTrack("videoHidden", tracks.videoHidden ? "顯示畫面軌" : "隱藏畫面軌"))}
             ${muteBtn(!!tracks.videoMuted, () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲")}`)}
-          ${lane("tl-lane-video", html`<${VideoTrack} project=${project} clips=${clips} ctx=${ctx} editSel=${editSel} focus=${focus} />
+          ${lane("tl-lane-video", html`<${VideoTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} focus=${focus} />
             ${drop && drop.row === "video" && drop.at != null && html`<i class="tl-insert" style=${`left:${drop.at * pps}px`}></i>`}`)}`,
           { drop: "video", hidden: !!tracks.videoHidden, muted: !!tracks.videoMuted })}
         ${hasSourceAudio(clips) && row("source-audio", AUDIO_H, html`
-          ${label("volume", "原聲", muteBtn(!!tracks.videoMuted,
-            () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲"))}
-          ${lane("tl-lane-audio", html`<${SourceAudioTrack} project=${project} clips=${clips} ctx=${ctx} editSel=${editSel} />`)}`,
+          ${label("volume", "原聲", html`${soloBtn(SOURCE_TRACK, "影片原聲")}${muteBtn(!!tracks.videoMuted,
+            () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲")}
+            <${TrackMeter} track=${SOURCE_TRACK} />`)}
+          ${lane("tl-lane-audio", html`<${SourceAudioTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} />`)}`,
           { muted: !!tracks.videoMuted })}
         ${voiceRows.map((items, i) => row(`voice-${i}`, AUDIO_H, html`
-          ${label("mic", voiceRows.length > 1 ? `配音 ${i + 1}` : "配音", muteBtn(!!tracks.voiceMuted,
-            () => setTrack("voiceMuted", tracks.voiceMuted ? "取消配音靜音" : "配音全部靜音"), "所有配音"))}
-          ${lane("tl-lane-audio", items.map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
-            selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`))}`,
+          ${label("mic", voiceRows.length > 1 ? `配音 ${i + 1}` : "配音", html`${soloBtn(VOICE_TRACK, "所有配音")}${muteBtn(!!tracks.voiceMuted,
+            () => setTrack("voiceMuted", tracks.voiceMuted ? "取消配音靜音" : "配音全部靜音"), "所有配音")}
+            ${i === 0 && html`<${TrackMeter} track=${VOICE_TRACK} />`}`)}
+          ${lane("tl-lane-audio", items.filter(nearAudio).map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
+            selected=${audioOn(item.id)} />`))}`,
           { drop: `audio:${VOICE_TRACK}`, muted: !!tracks.voiceMuted }))}
         ${music.map(({ key, items }, i) => {
           // The track counts as muted when every clip on it is; the switch sets them all alike.
           const muted = items.every((a) => a.muted);
           return row(key, AUDIO_H, html`
-            ${label("music", `音訊 ${i + 1}`, html`<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
+            ${label("music", `音訊 ${i + 1}`, html`${orderBtns(i)}${soloBtn(key, "這條音軌")}<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
               active=${muted} title=${muted ? "取消靜音" : "這條音軌靜音"}
               onClick=${() => ops(items.filter((a) => !!a.muted === muted).map((a) => ({ op: "audio.update", id: a.id, patch: { muted: !muted } })),
-                { label: muted ? "取消靜音" : "音軌靜音" })} />`)}
-            ${lane("tl-lane-audio", items.map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
-              selected=${!!editSel && editSel.type === "audio" && editSel.id === item.id} />`))}`,
+                { label: muted ? "取消靜音" : "音軌靜音" })} />
+              <${TrackMeter} track=${key} />`)}
+            ${lane("tl-lane-audio", items.filter(nearAudio).map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
+              selected=${audioOn(item.id)} />`))}`,
             { drop: `audio:${key}` });
         })}
         ${!watch && audio.length > 0 && (audioDrag || drop) && row("add-audio", ADD_H, html`
@@ -631,5 +770,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
         <div class="tl-playhead" ref=${headRef} style=${`left:${LABEL_W}px`}></div>
       </div>
     </div>
+    ${viewW > 0 && span * pps > viewW && html`<${Minimap} pid=${project.id} clips=${clips} span=${span} pps=${pps} viewW=${viewW}
+      scrollRef=${scrollRef} labelW=${LABEL_W} />`}
   </div>`;
 }

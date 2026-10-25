@@ -10,7 +10,7 @@ import pytest
 
 from test_server import Client
 from vc.app import App
-from vc.providers import catalog, hosted
+from vc.providers import catalog, hosted, published
 from vc import providers
 from vc.providers.catalog import (ModelCatalog, family_of, model_status, model_warning, pick_newest, same_line,
                                   tier_of)
@@ -245,6 +245,36 @@ def test_a_shot_asks_the_model_for_one_of_its_own_lengths(client: Client, fal) -
     assert duration == "6s" and not any("改用" in n for n in notes), notes
 
 
+def test_text_to_video_asks_for_the_nearest_ratio_the_model_offers(client: Client, fal,
+                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    i2v, t2v = TURBO_STD_I2V, LTX_FAST_T2V
+    square = fal_model(t2v, props=("prompt",))
+    square["openapi"]["components"]["schemas"]["ModelInput"]["properties"]["aspect_ratio"] = {
+        "enum": ["16:9", "9:16", "4:5", "auto"]}
+    fal.route("GET", fal_lookup(*sorted({i2v, t2v})), (200, {"models": [
+        fal_model(i2v, required=("prompt", "image_url")), square]}))
+    for category in ("image-to-video", "text-to-video"):
+        fal.route("GET", fal_search(category), (200, {"models": []}))
+    fal.route("GET", fal_search("image-to-video", "kling"), (200, {"models": []}))
+    fal.route("GET", fal_search("text-to-video", "ltx"), (200, {"models": []}))
+    client.json("PUT", "/api/providers/fal-video", {"config": {"model": i2v, "modelT2V": t2v}})
+    client.json("PUT", "/api/secrets", {"name": "provider.fal-image.api_key", "value": KEY})
+    fields = client.json("POST", "/api/providers/fal-video/models", {})["models"]["fields"]
+    assert fields["modelT2V"]["ratios"] == {t2v: ["16:9", "9:16", "4:5"]} and fields["model"]["ratios"] == {}
+
+    prov = providers.get("fal-video")
+    sent: list[dict] = []
+    monkeypatch.setattr(hosted.FalVideo, "_submit", lambda self, ctx, model, payload: sent.append(payload) or {})
+    monkeypatch.setattr(hosted.FalVideo, "_wait", lambda self, ctx, remote: [])
+    config = prov.resolve_config({"model": i2v, "modelT2V": t2v, "durations": ""})
+    entry = provider(client, "fal-video")["models"]
+    for models, (w, h), ratio in ((entry, (1080, 1350), "4:5"), (None, (1080, 1350), "1:1"),
+                                  (entry, (1080, 1080), "4:5")):
+        ctx = providers.Context("fal-video", config, lambda name: KEY, models=models)
+        prov.run(ctx, providers.Request(kind="video", prompt="清晨漁港", width=w, height=h))
+        assert sent[-1]["aspect_ratio"] == ratio, (models is None, w, h)
+
+
 def test_a_draft_is_checked_without_touching_the_settings(client: Client, fal) -> None:
     route_kling(fal)
     result = client.json("POST", "/api/providers/fal-video/models",
@@ -360,7 +390,141 @@ def test_google_key_without_omni_lists_no_video_model(client: Client, mock_http)
 
 
 def test_vendors_without_a_model_list_refuse_detection(client: Client) -> None:
-    info = provider(client, "kling")
+    info = provider(client, "custom-video")
     assert info["modelKeys"] == {} and "models" not in info
-    error = client.json("POST", "/api/providers/kling/models", {}, status=400)
+    error = client.json("POST", "/api/providers/custom-video/models", {}, status=400)
     assert "沒有可查詢的模型清單" in error["error"]
+
+
+# ---------------------------------------------------------------- lists kept on GitHub (CL-04)
+@pytest.fixture()
+def github(mock_http, monkeypatch: pytest.MonkeyPatch):
+    """The published model_lists.json on the mock server."""
+    monkeypatch.setattr(published, "LISTS_URL", mock_http.url + "/model_lists.json")
+    return mock_http
+
+
+def test_published_list_moves_a_retired_default_and_names_its_source(client: Client, github) -> None:
+    lists = json.loads(json.dumps(published.BUNDLED))
+    lists["version"] = "2099-01-01"
+    lists["providers"]["kling"]["model"] = {"options": ["kling-v9", "kling-v2-1-master"], "retired": ["kling-v2-1"],
+                                            "replaces": {"kling-v2-1": "kling-v9"}}
+    github.route("GET", "/model_lists.json", (200, lists))
+    result = client.json("POST", "/api/providers/kling/models", {})
+    field = result["models"]["fields"]["model"]
+    assert [o["value"] for o in field["options"]] == ["kling-v9", "kling-v2-1-master"]
+    assert field["known"] == {"kling-v2-1": "deprecated"} and field["complete"] is False
+    assert field["suggested"] == "kling-v9" and "2099-01-01" in field["message"]
+    assert result["pinned"] == {"model": "kling-v9"}  # the untouched default was retired
+    t2v = result["models"]["fields"]["modelT2V"]
+    assert t2v["suggested"] is None and t2v["known"] == {}
+    assert [o["value"] for o in t2v["options"]] == published.options("kling", "modelT2V")
+
+
+def test_published_list_falls_back_to_the_bundled_one(client: Client, github) -> None:
+    field = client.json("POST", "/api/providers/runway/models", {})["models"]["fields"]["model"]  # 404 on main
+    assert [o["value"] for o in field["options"]] == published.options("runway", "model")
+    assert field["message"].startswith("取不到 GitHub 上的最新清單")
+    older = {**published.BUNDLED, "version": "2000-01-01",
+             "providers": {"runway": {"model": {"options": ["gen1"], "retired": [], "replaces": {}}}}}
+    github.route("GET", "/model_lists.json", (200, older))
+    field = client.json("POST", "/api/providers/runway/models", {})["models"]["fields"]["model"]
+    assert [o["value"] for o in field["options"]] == published.options("runway", "model")  # the bundled is newer
+    assert published.BUNDLED["version"] in field["message"]
+
+
+# ---------------------------------------------------------------- Replicate (CL-03)
+@pytest.fixture()
+def replicate(mock_http, monkeypatch: pytest.MonkeyPatch):
+    """Replicate's API on the mock server."""
+    monkeypatch.setattr(hosted, "REPLICATE", mock_http.url)
+    return mock_http
+
+
+def cog_model(mid: str, date: str = "2025-01-01", *, props: tuple = ("prompt", "aspect_ratio"),
+              required: tuple = ("prompt",), files: tuple = ("image",), durations: tuple = ()) -> dict:
+    """A Replicate model whose Cog schema writes the duration enum as allOf/$ref, the way Cog does."""
+    schemas: dict[str, Any] = {}
+    properties: dict[str, Any] = {p: {"type": "string"} for p in props}
+    properties.update({f: {"type": "string", "format": "uri"} for f in files})
+    if durations:
+        properties["duration"] = {"allOf": [{"$ref": "#/components/schemas/duration"}], "default": durations[0]}
+        schemas["duration"] = {"type": "integer", "enum": list(durations)}
+    schemas["Input"] = {"type": "object", "required": list(required), "properties": properties}
+    owner, name = mid.split("/")
+    return {"owner": owner, "name": name, "latest_version": {
+        "id": "0" * 64, "created_at": f"{date}T08:00:00Z", "openapi_schema": {"components": {"schemas": schemas}}}}
+
+
+def without_schema(model: dict) -> dict:
+    return {**model, "latest_version": {**model["latest_version"], "openapi_schema": {}}}
+
+
+def test_replicate_lists_its_collection_and_moves_the_default_to_a_newer_version(client: Client, replicate) -> None:
+    client.json("PUT", "/api/secrets", {"name": "provider.replicate-image.api_key", "value": KEY})
+    replicate.route("GET", "/collections/text-to-image", (200, {"models": [
+        without_schema(cog_model("black-forest-labs/flux-dev", "2025-03-01")),
+        cog_model("black-forest-labs/flux-2-dev", "2025-11-01"),
+        cog_model("black-forest-labs/flux-3-dev", "2025-12-01", files=("input_images",)),  # picture goes elsewhere
+        cog_model("someone/needs-a-mask", "2026-01-01", required=("prompt", "mask"))]}))
+    replicate.route("GET", "/models/black-forest-labs/flux-dev", (200, cog_model("black-forest-labs/flux-dev")))
+    result = client.json("POST", "/api/providers/replicate-image/models", {})
+    field = result["models"]["fields"]["model"]
+    assert [o["value"] for o in field["options"]] == [
+        "black-forest-labs/flux-3-dev", "black-forest-labs/flux-2-dev", "black-forest-labs/flux-dev"]
+    assert field["known"] == {"black-forest-labs/flux-dev": "ok"} and field["complete"] is False
+    assert field["suggested"] == "black-forest-labs/flux-2-dev" and "message" not in field
+    assert result["pinned"] == {"model": "black-forest-labs/flux-2-dev"}  # the untouched default follows
+    assert {c.headers.get("authorization") for c in replicate.calls} == {f"Bearer {KEY}"}
+
+
+def test_replicate_flags_a_saved_model_that_is_gone_or_needs_more(client: Client, replicate) -> None:
+    client.json("PUT", "/api/secrets", {"name": "provider.replicate-image.api_key", "value": KEY})
+    replicate.route("GET", "/collections/text-to-image", (200, {"models": []}))
+    replicate.route("GET", "/models/someone/needs-a-mask", (200, cog_model(
+        "someone/needs-a-mask", required=("prompt", "mask"))))
+    replicate.route("GET", "/models/someone/kontext", (200, cog_model("someone/kontext", files=("input_image",))))
+    for model, status in (("someone/gone", "unlisted"), ("someone/needs-a-mask", "incompatible"),
+                          ("someone/kontext", "ok")):
+        client.json("PUT", "/api/providers/replicate-image", {"config": {"model": model}})
+        result = client.json("POST", "/api/providers/replicate-image/models", {})
+        field = result["models"]["fields"]["model"]
+        assert field["known"] == {model: status} and result["pinned"] == {}, model
+    assert field["message"] == "someone/kontext 沒有「image」參數，它的圖片參數是 input_image，請改設定裡的圖片欄位名稱"
+    entry = provider(client, "replicate-image")["models"]
+    assert model_warning(entry, "model", "someone/gone", "Replicate") is None  # each check replaces the last
+    assert "公開模型清單查不到" in model_warning({"fields": {"model": {"known": {"someone/gone": "unlisted"}}}},
+                                          "model", "someone/gone", "Replicate")
+
+
+def test_replicate_video_lengths_come_from_the_cog_schema(client: Client, replicate) -> None:
+    client.json("PUT", "/api/secrets", {"name": "provider.replicate-image.api_key", "value": KEY})
+    replicate.route("GET", "/collections/image-to-video", (200, {"models": [
+        cog_model("kwaivgi/kling-v2.1", "2025-06-01", files=("start_image",), durations=(5, 10)),
+        cog_model("kwaivgi/kling-v2.6", "2025-12-01", files=("start_image",), durations=(5, 10))]}))
+    replicate.route("GET", "/collections/text-to-video", (200, {"models": [
+        cog_model("kwaivgi/kling-v2.6", "2025-12-01", files=("start_image",), durations=(5, 10)),
+        cog_model("someone/needs-audio", required=("prompt", "audio"))]}))
+    replicate.route("GET", "/models/kwaivgi/kling-v2.1", (200, cog_model(
+        "kwaivgi/kling-v2.1", files=("start_image",), durations=(5, 10))))
+    client.json("PUT", "/api/providers/replicate-video", {"config": {"model": "kwaivgi/kling-v2.1"}})
+    assert provider(client, "replicate-video")["durations"] == {"i2v": [6, 8, 10], "t2v": [6, 8, 10]}  # typed list
+
+    field = client.json("POST", "/api/providers/replicate-video/models", {})["models"]["fields"]["model"]
+    assert [o["value"] for o in field["options"]] == ["kwaivgi/kling-v2.6", "kwaivgi/kling-v2.1"]
+    assert field["options"][0]["hint"] == "圖轉影片、文字轉影片；秒數 5、10"
+    assert field["durations"] == {"kwaivgi/kling-v2.6": [5, 10], "kwaivgi/kling-v2.1": [5, 10]}
+    assert field["message"] == "kwaivgi/kling-v2.1 沒有「image」參數，它的圖片參數是 start_image，請改設定裡的圖片欄位名稱"
+    assert field["suggested"] is None  # the settings send the picture as image, which kling does not take
+    assert provider(client, "replicate-video")["durations"] == {"i2v": [5, 10], "t2v": [5, 10]}
+
+    client.json("PUT", "/api/providers/replicate-video", {"config": {"model": "kwaivgi/kling-v2.1",
+                                                                     "imageField": "start_image"}})
+    field = client.json("POST", "/api/providers/replicate-video/models", {})["models"]["fields"]["model"]
+    assert field["suggested"] == "kwaivgi/kling-v2.6" and "message" not in field
+    replicate.route("GET", "/models/kwaivgi/kling-v3.0", (200, cog_model(
+        "kwaivgi/kling-v3.0", files=("start_image",), durations=(5, 10))))
+    client.json("PUT", "/api/providers/replicate-video", {"config": {"model": "kwaivgi/kling-v3.0",
+                                                                     "imageField": "start_image"}})
+    field = client.json("POST", "/api/providers/replicate-video/models", {})["models"]["fields"]["model"]
+    assert field["suggested"] is None  # a newer push date of v2.6 is no reason to step back from v3.0

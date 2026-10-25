@@ -3,8 +3,8 @@
     python -m pip install pyinstaller
     python packaging/build_exe.py
 
-The app is pure standard library, so PyInstaller needs no hidden imports; only the web UI and the built-in
-ComfyUI workflow templates are added as data. ffmpeg and Video2X are not bundled: the settings page
+The app is pure standard library, so PyInstaller needs no hidden imports; only the web UI, the built-in
+ComfyUI workflow templates, the model menus (vc/providers/model_lists.json) and the tool versions (vc/deps.json) are added as data. ffmpeg and Video2X are not bundled: the settings page
 installs them into data/tools on first use.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 sys.path.insert(0, str(APP))
 
-from vc import APP_NAME, VERSION  # noqa: E402
+from vc import APP_NAME, BUILD, VERSION  # noqa: E402
 
 DIST = ROOT / "dist"
 WORK = ROOT / "build"
@@ -27,10 +27,17 @@ EXTRAS = ("README.md", "LICENSE", "docs", "tools", "claude")  # copied beside th
 
 
 def build() -> Path:
+    # The packaged vc/BUILD lets the exe report the source build it was made from, and lets vc_client read it.
+    stamp = WORK / "stamp" / "BUILD"
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(BUILD, encoding="utf-8")
     subprocess.run([
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--onedir",
         "--name", APP_NAME, "--icon", str(ROOT / "packaging" / "icon.ico"),
         "--add-data", f"{APP / 'web'};web", "--add-data", f"{APP / 'workflows'};workflows",
+        "--add-data", f"{stamp};vc",
+        "--add-data", f"{APP / 'vc' / 'providers' / 'model_lists.json'};vc/providers",
+        "--add-data", f"{APP / 'vc' / 'deps.json'};vc",
         "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
         str(APP / "main.py"),
     ], check=True)

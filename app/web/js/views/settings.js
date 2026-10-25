@@ -3,11 +3,13 @@
 import { html, useState, useRef } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { saveSettings } from "../lib/actions.js";
-import { currentTheme } from "../lib/theme.js";
-import { Button, Field, TextArea, NumberInput, Select, Segmented, Toggle, Section } from "../components/ui.js";
+import { useTheme } from "../lib/theme.js";
+import { Button, IconButton, Field, TextArea, DraftText, NumberInput, Select, Segmented, Toggle, Section } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
+import { toast } from "../components/toast.js";
 import { AspectOptions } from "../dialogs/new-project.js";
 import { KeymapEditor } from "./settings-keymap.js";
+import { undoKeyText } from "../lib/keymap.js";
 import { openHistory } from "../dialogs/history-dialog.js";
 import { NotifySection } from "./settings-notify.js";
 import { OutputSection, SystemSection } from "./settings-system.js";
@@ -15,22 +17,60 @@ import { DepsSection } from "./settings-deps.js";
 import { useSectionDraft, DraftFoot } from "./settings-draft.js";
 
 const NONE = [];
+const MAX_LABEL_COLORS = 12;
 const FPS_CHOICES = [24, 25, 29.97, 30];
 const THEMES = [
   { value: "dark", label: "深色", icon: "moon" },
   { value: "light", label: "淺色", icon: "sun" },
   { value: "system", label: "跟隨 Windows", icon: "panel" },
 ];
+const TEXT_SCALES = [
+  { value: 1, label: "標準" },
+  { value: 1.15, label: "大" },
+  { value: 1.3, label: "更大" },
+];
 
 function Appearance() {
   const ui = useStore((s) => s.settings.ui);
+  const look = useTheme();
   return html`<div class="set-appearance">
-    <${Field} label="主題" hint=${ui.theme === "system" ? `目前套用${currentTheme() === "light" ? "淺色" : "深色"}，Windows 切換深淺色時跟著變` : ""}>
+    <${Field} label="主題" hint=${ui.theme === "system" ? `目前套用${look === "light" ? "淺色" : "深色"}，Windows 切換深淺色時跟著變` : ""}>
       <${Segmented} value=${ui.theme} options=${THEMES} onChange=${(theme) => saveSettings({ ui: { theme } })} />
     <//>
+    <${Field} label="文字大小" hint="放大介面上的所有文字，不影響影片裡的字幕。高解析螢幕或看小字吃力時使用">
+      <${Segmented} value=${ui.textScale || 1} options=${TEXT_SCALES} onChange=${(textScale) => saveSettings({ ui: { textScale } })} />
+    <//>
     <${Toggle} checked=${ui.confirmDelete !== false} onChange=${(confirmDelete) => saveSettings({ ui: { confirmDelete } })}
-      label="刪除鏡頭前先確認" hint="關閉後直接刪除；刪錯了仍然可以按 Ctrl+Z 復原" />
+      label="刪除鏡頭前先確認" hint=${`關閉後直接刪除；刪錯了仍然可以${undoKeyText()}復原`} />
+    <${LabelColors} colors=${ui.labelColors || NONE} />
   </div>`;
+}
+
+// The label colours offered on shot cards and timeline clips (settings ui.labelColors), saved at once.
+function LabelColors({ colors }) {
+  const save = (labelColors) => saveSettings({ ui: { labelColors } });
+  const pick = (i, value) => {
+    if (value === colors[i].value) return;
+    if (colors.some((c) => c.value === value)) return toast("這個顏色已經在清單裡", { duration: 2500 });
+    save(colors.map((c, j) => (j === i ? { ...c, value } : c)));
+  };
+  const add = () => {
+    let value;
+    do value = `#${Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, "0")}`;
+    while (colors.some((c) => c.value === value));
+    save([...colors, { value, label: "新顏色" }]);
+  };
+  return html`<${Field} label="標籤顏色" hint="分鏡卡片與剪輯頁片段可以標的顏色。改色碼不會改到已經標上舊顏色的鏡頭。">
+    <div class="label-colors">
+      ${colors.map((c, i) => html`<div class="label-color" key=${c.value}>
+        <input type="color" value=${c.value} aria-label=${`${c.label}的色碼`} onChange=${(e) => pick(i, e.currentTarget.value)} />
+        <${DraftText} value=${c.label} maxLength=${12} aria-label="顏色名稱"
+          onCommit=${(label) => save(colors.map((x, j) => (j === i ? { ...x, label: label.trim() || x.value } : x)))} />
+        <${IconButton} icon="trash" size=${15} title="移除這個顏色" onClick=${() => save(colors.filter((_, j) => j !== i))} />
+      </div>`)}
+      <${Button} size="sm" icon="plus" disabled=${colors.length >= MAX_LABEL_COLORS} onClick=${add}>新增顏色<//>
+    </div>
+  <//>`;
 }
 
 function sizeOptions(aspect, width, height) {
@@ -92,7 +132,7 @@ function HistorySettings() {
   const { draft, set } = form;
   return html`<div class="set-history">
     <p class="set-lead dim">修改專案時，距離上一份快照超過設定的間隔，伺服器會先存一份修改前的版本。
-      快照和 Ctrl+Z 的復原紀錄分開保存，關閉程式後仍然留著。</p>
+      快照和復原紀錄分開保存，關閉程式後仍然留著。</p>
     <div class="row-2">
       <${Field} label="快照間隔" hint="10 到 3600 秒">
         <${NumberInput} value=${draft.intervalSec} min=${10} max=${3600} step=${30} digits=${0} suffix="秒"
@@ -109,12 +149,41 @@ function HistorySettings() {
   </div>`;
 }
 
+function QueueSettings() {
+  const saved = useStore((s) => s.settings.queue);
+  const form = useSectionDraft(saved, (d) => ({ queue: d }), "已儲存工作佇列設定");
+  const { draft, set } = form;
+  return html`<div class="set-queue">
+    <${Field} label="網路錯誤自動重試" hint=${"連線逾時、連不上、伺服器忙碌（429、502 到 504）時，等 15 秒後重新排隊，"
+        + "每次間隔加倍。雲端任務已送出的，重試只接續查詢結果；送出當下就斷線的會重新送出，可能多扣一次點數。0 表示不重試"}>
+      <${NumberInput} value=${draft.autoRetry} min=${0} max=${5} step=${1} digits=${0} suffix="次"
+        onCommit=${(autoRetry) => set({ autoRetry })} />
+    <//>
+    <${DraftFoot} form=${form} />
+  </div>`;
+}
+
+// The caption word list (CP-12): the edit page marks caption text that looks like a misspelt term.
+function GlossarySettings() {
+  const saved = { text: useStore((s) => s.settings.glossary) || "" };
+  const form = useSectionDraft(saved, (d) => ({ glossary: d.text }), "已儲存字幕用語詞庫");
+  const { draft, set } = form;
+  return html`<div class="set-glossary">
+    <p class="set-lead dim">每行一個正確的詞（產品名、人名）。剪輯頁會標出字幕裡跟它差一個字或只差大小寫的地方，
+      三個字以上才比對。已知的錯字可接在「=」後面，用逗號分隔，例如「黃政文=黃正文,黃正雯」，短詞也能抓到。</p>
+    <${TextArea} mono value=${draft.text} rows=${6} autosize onChange=${(text) => set({ text })} />
+    <${DraftFoot} form=${form} />
+  </div>`;
+}
+
 const SECTIONS = [
   { id: "deps", label: "依賴元件", icon: "package", view: DepsSection },
   { id: "appearance", label: "外觀與操作", icon: "palette", view: Appearance },
   { id: "defaults", label: "新專案預設", icon: "clapper", view: ProjectDefaults },
+  { id: "glossary", label: "字幕用語詞庫", icon: "captions", view: GlossarySettings },
   { id: "output", label: "影片輸出", icon: "film", view: OutputSection },
   { id: "notify", label: "通知", icon: "bell", view: NotifySection },
+  { id: "queue", label: "工作佇列", icon: "queue", view: QueueSettings },
   { id: "history", label: "版本紀錄", icon: "history", view: HistorySettings },
   { id: "shortcuts", label: "快捷鍵", icon: "keyboard", view: KeymapEditor },
   { id: "system", label: "資料與系統", icon: "drive", view: SystemSection },

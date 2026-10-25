@@ -42,6 +42,13 @@ export async function loadVoices(refresh = false) {
 export const castMember = (project, id) => (id ? (project.cast || []).find((m) => m.id === id) || null : null);
 export const voiceClip = (project, capId) => (project.audio || []).find((a) => a.captionId === capId) || null;
 
+// Where a caption should end to cover a voice-over `length` seconds long (AU-12, as voice.py voice_end does
+// after a voice job): the voice's end, but never past the start of the next caption.
+export function voiceEnd(project, cap, length) {
+  const later = (project.captions || []).filter((c) => c.id !== cap.id && c.start >= cap.start).map((c) => c.start);
+  return Math.round(Math.max(cap.end, Math.min(cap.start + length, ...later)) * 1000) / 1000;
+}
+
 const isActive = (j) => j.status === "queued" || j.status === "running";
 
 // A voice's first line also waits for Audio8Voice to transcribe its reference clip (about 30 s, 180 s

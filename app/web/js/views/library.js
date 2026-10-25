@@ -5,12 +5,14 @@ import { html, useState, useEffect, useMemo, useRef } from "../lib/h.js";
 import { useStore, setState, getState } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { ops, undo, navigate, focusShot, revealInFolder } from "../lib/actions.js";
-import { uploadFiles } from "../lib/jobs-actions.js";
+import { uploadFiles, relinkFile } from "../lib/jobs-actions.js";
 import { clock } from "../lib/clock.js";
-import { useKeymap, keyLabel } from "../lib/keymap.js";
+import { useKeymap, keyLabel, undoKeyText, confirmKeyText } from "../lib/keymap.js";
 import { usePref } from "../lib/prefs.js";
-import { clamp, fileUrl, fmtBytes, fmtDuration, fmtTime, newId, round, shotLabel, ACCEPT_ALL } from "../lib/format.js";
+import { fileUrl, fmtBytes, fmtDuration, fmtTime, newId, round, shotLabel, ACCEPT_ALL, ACCEPT_AUDIO, ACCEPT_IMAGE, ACCEPT_VISUAL }
+  from "../lib/format.js";
 import { shotCover, newOverlay } from "../lib/sequence.js";
+import { takeFromMedia, shotOps, placeMedia, mediaMatches } from "../lib/media-actions.js";
 import { Button, IconButton, Chip, Select, Tabs, Empty, Spinner, Progress, Badge } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 import { Thumb, mediaEntry, openLightbox } from "../components/media.js";
@@ -27,6 +29,7 @@ const FILTERS = [
   { id: "video", label: "影片", icon: "film", test: (m) => m.kind === "video" },
   { id: "audio", label: "音訊", icon: "music", test: (m) => m.kind === "audio" },
   { id: "favorite", label: "最愛", icon: "star", test: (m) => !!m.favorite },
+  { id: "unused", label: "沒用到", icon: "inbox", test: (m, unused) => unused.has(m.id) },
 ];
 const SORTS = [
   { value: "new", label: "最新匯入" },
@@ -40,31 +43,8 @@ const SORT_FN = {
   name: (a, b) => (a.name || "").localeCompare(b.name || "", "zh-Hant"),
   duration: (a, b) => (b.duration || 0) - (a.duration || 0),
 };
-const TAKE_KEYS = ["kind", "file", "thumb", "strip", "wave", "width", "height", "duration", "fps", "hasAudio"];
 
 const countBy = (list, key) => list.reduce((m, x) => (x[key] ? m.set(x[key], (m.get(x[key]) || 0) + 1) : m), new Map());
-
-// A take that points at the same files as the media item, so the shot keeps its picture even if the
-// item is later removed from the library.
-export function takeFromMedia(media, shotId) {
-  return {
-    id: newId("t"),
-    shot: shotId,
-    ...Object.fromEntries(TAKE_KEYS.map((k) => [k, media[k] ?? null])),
-    created: Math.round(Date.now()) / 1000,
-    source: { backend: "import", name: media.name || "" },
-    prompt: "",
-    negative: "",
-    seed: null,
-    params: {},
-    parent: null,
-    favorite: false,
-    rating: 0,
-    note: "",
-    label: (media.name || "").replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 120),
-    jobId: null,
-  };
-}
 
 // Picks a shot (close(shotId)), or in insert mode a position between shots (close(index into project.shots)).
 function ShotPicker({ project, title, insert, close }) {
@@ -119,15 +99,8 @@ async function assignToShot(project, media, shotId) {
 
 // A new shot at `index` whose picture is the media item, so it slots in between existing shots.
 async function insertAsShot(project, media, index) {
-  const shot = { id: newId("s"), name: (media.name || "").replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 120) };
-  if (media.kind === "video" && media.duration) shot.duration = round(clamp(Number(media.duration), 0.2, 600), 3);
-  const take = takeFromMedia(media, shot.id);
-  const key = media.kind === "image" ? "activeImage" : "activeVideo";
-  const res = await ops([
-    { op: "shot.add", shot, index },
-    { op: "take.add", take },
-    { op: "shot.update", id: shot.id, patch: { [key]: take.id } },
-  ], { label: "穿插素材為新鏡頭" });
+  const { shot, list } = shotOps(media, index);
+  const res = await ops(list, { label: "穿插素材為新鏡頭" });
   if (res) {
     toast(`已把「${media.name}」穿插為第 ${index + 1} 個鏡頭`, {
       level: "success", action: { label: "查看", fn: () => focusShot(shot.id, { tab: "takes", view: "board" }) },
@@ -165,7 +138,7 @@ async function setAsRef(project, media, shotId) {
 }
 
 async function addToTrack(media, start) {
-  const item = { id: newId("a"), mediaId: media.id, name: (media.name || "").slice(0, 120), start: round(start, 3), volume: 1 };
+  const item = { id: newId("a"), mediaId: media.id, name: (media.name || "").slice(0, 120), start: round(start, 3), volume: media.gain ?? 1 };
   const res = await ops([{ op: "audio.add", item }], { label: "加入音軌" });
   if (res) {
     toast(`已加入音軌，從 ${fmtTime(start)} 開始`, {
@@ -182,23 +155,100 @@ async function rename(media) {
 
 async function editNote(media) {
   const note = await promptDialog({ title: "素材備註", label: "備註", value: media.note || "", multiline: true,
-    confirmLabel: "儲存", hint: "Ctrl+Enter 儲存，留白代表清除備註", validate: (v) => (v.length > 1000 ? "備註最多 1000 字" : "") });
+    confirmLabel: "儲存", hint: [confirmKeyText("儲存"), "留白代表清除備註"].filter(Boolean).join("，"), validate: (v) => (v.length > 1000 ? "備註最多 1000 字" : "") });
   if (note !== null && note !== (media.note || "")) ops([{ op: "media.update", id: media.id, patch: { note } }], { label: "編輯素材備註" });
+}
+
+// Tags (LB-04), typed as words split by commas, 、 or spaces.
+const MAX_TAGS = 20;
+const splitTags = (text) => [...new Set(text.split(/[,，、\s]+/).map((t) => t.slice(0, 30)).filter(Boolean))];
+
+async function editTags(media) {
+  const text = await promptDialog({ title: "素材標籤", label: "標籤", value: (media.tags || []).join("、"), confirmLabel: "儲存",
+    hint: "用逗號、頓號或空白分開，例如：海邊、人物、夜景；留白代表清除",
+    validate: (v) => (splitTags(v).length > MAX_TAGS ? `每個素材最多 ${MAX_TAGS} 個標籤` : "") });
+  if (text === null) return;
+  const tags = splitTags(text);
+  if (tags.join("\n") !== (media.tags || []).join("\n")) {
+    ops([{ op: "media.update", id: media.id, patch: { tags } }], { label: "編輯素材標籤" });
+  }
+}
+
+async function tagMany(list) {
+  const text = await promptDialog({ title: `替 ${list.length} 個素材加標籤`, label: "標籤", confirmLabel: "加上",
+    hint: "用逗號、頓號或空白分開；已有的標籤會保留", validate: (v) => (splitTags(v).length ? "" : "請輸入標籤") });
+  if (!text) return;
+  const add = splitTags(text);
+  const changed = list.map((m) => ({ m, tags: [...new Set([...(m.tags || []), ...add])].slice(0, MAX_TAGS) }))
+    .filter(({ m, tags }) => tags.length !== (m.tags || []).length);
+  if (changed.length) ops(changed.map(({ m, tags }) => ({ op: "media.update", id: m.id, patch: { tags } })), { label: "加上素材標籤" });
 }
 
 const toggleFavorite = (media) =>
   ops([{ op: "media.update", id: media.id, patch: { favorite: !media.favorite } }], { label: media.favorite ? "取消最愛" : "加入最愛" });
+
+// Items nothing else in the project mentions: not on a track, a layer, a shot (as picture or reference),
+// a cast member or anywhere else. Imported takes keep the media id in their file path, so they count too.
+function unusedMedia(project) {
+  const rest = JSON.stringify({ ...project, media: null });
+  return new Set(Object.keys(project.media || {}).filter((id) => !rest.includes(id)));
+}
+
+async function removeUnused(list) {
+  const ok = await confirmDialog({ title: "移除沒用到的素材", danger: true, confirmLabel: `移除 ${list.length} 個`,
+    message: `會從素材庫移除 ${list.length} 個沒放進任何鏡頭、音軌或畫面軌的素材，之後仍可${undoKeyText()}復原。`
+      + "檔案會保留到按下方「清除」為止。" });
+  if (!ok) return;
+  const res = await ops(list.map((m) => ({ op: "media.delete", id: m.id })), { label: "移除沒用到的素材" });
+  if (res) toast(`已移除 ${list.length} 個素材`, { action: { label: "復原", fn: undo } });
+}
 
 async function removeMedia(media, uses) {
   const parts = [uses.track && `音軌上的 ${uses.track} 段`, uses.pip && `上層畫面軌上的 ${uses.pip} 段`,
     uses.refs && `${uses.refs} 個鏡頭的參考圖`].filter(Boolean);
   if (parts.length) {
     const ok = await confirmDialog({ title: "刪除素材", danger: true, confirmLabel: "刪除",
-      message: `「${media.name}」正在使用中，刪除後${parts.join("與")}也會一併移除。之後仍可用 Ctrl+Z 復原。` });
+      message: `「${media.name}」正在使用中，刪除後${parts.join("與")}也會一併移除。之後仍可${undoKeyText()}復原。` });
     if (!ok) return;
   }
   const res = await ops([{ op: "media.delete", id: media.id }], { label: "刪除素材" });
   if (res) toast(`已刪除「${media.name}」`, { action: { label: "復原", fn: undo } });
+}
+
+// Several items at once (LB-01), each a single undo step.
+function favoriteMany(list) {
+  const on = !list.every((m) => m.favorite);
+  return ops(list.filter((m) => !!m.favorite !== on).map((m) => ({ op: "media.update", id: m.id, patch: { favorite: on } })),
+    { label: on ? "加入最愛" : "取消最愛" });
+}
+
+async function placeMany(project, list) {
+  const res = await placeMedia(project, list, { index: project.shots.length, start: clock.time }, "加到時間軸");
+  if (res) {
+    toast(`已把 ${list.length} 個素材加到時間軸：圖片與影片接在最後，聲音從 ${fmtTime(clock.time)} 開始`, {
+      level: "success", action: { label: "到剪輯頁", fn: () => setState({ view: "edit" }) },
+    });
+  }
+}
+
+async function removeMany(list, uses) {
+  const busy = list.filter((m) => { const u = uses(m); return u.track || u.pip || u.refs; }).length;
+  const ok = await confirmDialog({ title: "刪除素材", danger: true, confirmLabel: `刪除 ${list.length} 個`,
+    message: `會從素材庫刪除 ${list.length} 個素材${busy ? `，其中 ${busy} 個正在音軌、畫面軌或參考圖上使用，那些地方也會一併移除` : ""}。`
+      + `之後仍可${undoKeyText()}復原。` });
+  if (!ok) return;
+  const res = await ops(list.map((m) => ({ op: "media.delete", id: m.id })), { label: "刪除素材" });
+  if (res) toast(`已刪除 ${list.length} 個素材`, { action: { label: "復原", fn: undo } });
+}
+
+// Point an item at another file (LB-09): moved or renamed on disk, or a better version of the same thing.
+function relink(media) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = { image: ACCEPT_IMAGE, audio: ACCEPT_AUDIO }[media.kind]
+    || ACCEPT_VISUAL.split(",").filter((x) => !ACCEPT_IMAGE.split(",").includes(x)).join(",");
+  input.onchange = () => input.files[0] && relinkFile(media, input.files[0]);
+  input.click();
 }
 
 function download(pid, media) {
@@ -219,6 +269,7 @@ function mediaMenu(e, ctx, media) {
     { label: "預覽", icon: "eye", hint: keyLabel("library.preview"), onClick: () => preview(media) },
     { label: "重新命名", icon: "pencil", hint: keyLabel("library.rename"), onClick: () => rename(media) },
     { label: media.note ? "編輯備註" : "加上備註", icon: "clipboard", onClick: () => editNote(media) },
+    { label: media.tags?.length ? "編輯標籤" : "加上標籤", icon: "hash", onClick: () => editTags(media) },
     { label: media.favorite ? "取消最愛" : "加入最愛", icon: "star", hint: keyLabel("library.favorite"), checked: !!media.favorite,
       onClick: () => toggleFavorite(media) },
     { divider: true },
@@ -242,12 +293,13 @@ function mediaMenu(e, ctx, media) {
     { divider: true },
     { label: "在檔案總管中顯示", icon: "folder-open", onClick: () => revealInFolder(media.file) },
     { label: "下載原始檔", icon: "download", onClick: () => download(project.id, media) },
+    { label: "重新連結檔案…", icon: "link", onClick: () => relink(media) },
     { divider: true },
     { label: "刪除", icon: "trash", danger: true, hint: keyLabel("library.delete"), onClick: () => removeMedia(media, uses(media)) },
   ]);
 }
 
-function MediaCard({ media, project, selected, uses, onSelect, onOpen, onMenu }) {
+function MediaCard({ media, project, selected, missing, uses, onSelect, onOpen, onMenu }) {
   const u = uses(media);
   const isAudio = media.kind === "audio";
   const tags = [
@@ -262,7 +314,7 @@ function MediaCard({ media, project, selected, uses, onSelect, onOpen, onMenu })
   ].filter(Boolean).join(" · ");
   return html`<div class=${`lib-card kind-${media.kind} ${selected ? "selected" : ""}`} data-media=${media.id} tabindex="0"
       role="option" aria-selected=${selected ? "true" : "false"} title=${media.note || media.name}
-      onClick=${() => onSelect(media.id)} onDblClick=${() => onOpen(media)}
+      onClick=${(e) => onSelect(media.id, e)} onDblClick=${() => onOpen(media)}
       onContextMenu=${(e) => { onSelect(media.id); onMenu(e, media); }}>
     ${isAudio
       ? html`<div class="lib-audio-ph"><${Icon} name="music" size=${28} /><span>${fmtDuration(media.duration)}</span></div>`
@@ -283,7 +335,11 @@ function MediaCard({ media, project, selected, uses, onSelect, onOpen, onMenu })
       <div class="lib-meta">
         <span class="dim">${meta || KIND_NAME[media.kind]}</span>
         ${tags.length > 0 && html`<span class="lib-tags">${tags}</span>`}
+        ${missing && html`<button type="button" class="lib-missing" title="原始檔已被移動或刪除，點一下選新的檔案"
+          onClick=${(e) => { e.stopPropagation(); relink(media); }} onDblClick=${(e) => e.stopPropagation()}>
+          <${Icon} name="alert" size=${11} />找不到檔案</button>`}
       </div>
+      ${media.tags?.length > 0 && html`<div class="lib-labels">${media.tags.map((t) => html`<span key=${t}>${t}</span>`)}</div>`}
     </div>
   </div>`;
 }
@@ -313,7 +369,7 @@ function UsageBar({ pid, rev }) {
   if (!info) return null;
   const purge = async () => {
     const ok = await confirmDialog({ title: "清除未使用的檔案", danger: true, confirmLabel: "永久清除",
-      message: `會永久刪除 ${info.orphans} 個沒有任何版本或素材使用的檔案（約 ${fmtBytes(info.unused)}），`
+      message: `會永久刪除 ${info.orphans} 個沒有任何版本或素材使用的檔案與一天以上的暫存檔（約 ${fmtBytes(info.unused)}），`
         + "並清空這個專案的復原紀錄，已刪除的版本之後就無法再救回。最近 5 分鐘內產生的檔案不受影響。" });
     if (!ok) return;
     setBusy(true);
@@ -331,7 +387,7 @@ function UsageBar({ pid, rev }) {
     <${Icon} name="drive" size=${15} />
     <span>專案媒體 <b>${fmtBytes(info.used + info.unused)}</b></span>
     ${info.orphans > 0
-      ? html`<span class="dim">其中 ${fmtBytes(info.unused)} 是已刪除版本留下的檔案（${info.orphans} 個）</span>
+      ? html`<span class="dim">其中 ${fmtBytes(info.unused)} 是已刪除的版本、素材與暫存檔（${info.orphans} 個）</span>
           <${Button} size="sm" kind="ghost" icon="trash" busy=${busy} onClick=${purge}>清除<//>`
       : html`<span class="dim">沒有多餘的檔案</span>`}
   </div>`;
@@ -342,7 +398,10 @@ function MediaPane({ project }) {
   const [filter, setFilter] = usePref("vc.lib.filter", "all", (v) => FILTERS.some((f) => f.id === v));
   const [sort, setSort] = usePref("vc.lib.sort", "new", (v) => v in SORT_FN);
   const [query, setQuery] = useState("");
-  const [sel, setSel] = useState(null);
+  const [tag, setTag] = useState("");
+  // sel: the current item (keys act on it, Shift-click ranges start from it); picked: everything selected.
+  const [sel, setCurrent] = useState(null);
+  const [picked, setPicked] = useState(() => new Set());
   const [dropping, setDropping] = useState(false);
   const fileRef = useRef(null);
   const gridRef = useRef(null);
@@ -356,19 +415,59 @@ function MediaPane({ project }) {
     const shots = countBy(Object.values(project.takes).filter((t) => t.source && t.source.backend === "import"), "file");
     return (m) => ({ track: track.get(m.id) || 0, pip: pip.get(m.id) || 0, refs: refs.get(m.id) || 0, shots: shots.get(m.file) || 0 });
   }, [project.audio, project.overlays, project.shots, project.takes]);
-  const counts = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.id, all.filter(f.test).length])), [all]);
+  const unused = useMemo(() => unusedMedia(project), [project]);
+  // Items whose file is gone from disk (LB-09), asked again whenever a file changes.
+  const [missing, setMissing] = useState(() => new Set());
+  const files = all.map((m) => m.file).join("|");
+  useEffect(() => {
+    let alive = true;
+    api.get(`/api/projects/${enc(pid)}/missing`).then((d) => alive && setMissing(new Set(d.media)), () => {});
+    return () => {
+      alive = false;
+    };
+  }, [pid, files]);
+  const counts = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.id, all.filter((m) => f.test(m, unused)).length])),
+    [all, unused]);
+  const allTags = useMemo(() => [...new Set(all.flatMap((m) => m.tags || []))].sort((a, b) => a.localeCompare(b, "zh-Hant")),
+    [all]);
   const list = useMemo(() => {
     const f = FILTERS.find((x) => x.id === filter) || FILTERS[0];
     const q = query.trim().toLowerCase();
-    return all.filter((m) => f.test(m) && (!q || `${m.name || ""} ${m.note || ""}`.toLowerCase().includes(q)))
+    return all.filter((m) => f.test(m, unused) && mediaMatches(m, q) && (!tag || (m.tags || []).includes(tag)))
       .sort(SORT_FN[sort]);
-  }, [all, filter, query, sort]);
+  }, [all, unused, filter, query, sort, tag]);
+  useEffect(() => {
+    if (tag && !allTags.includes(tag)) setTag("");
+  }, [allTags]);
   const pending = jobs.filter((j) => j.pid === pid && j.kind === "ingest" && !j.shotId
     && (j.status === "queued" || j.status === "running"));
 
+  const setSel = (id) => {
+    setCurrent(id);
+    setPicked(new Set(id ? [id] : []));
+  };
+  // Plain click picks one, Ctrl toggles one, Shift takes the run from the current item. A right-click on an
+  // item that is already picked keeps the others (no event is passed then).
+  const select = (id, e = null) => {
+    if (!e) return picked.has(id) ? setCurrent(id) : setSel(id);
+    if (e.shiftKey && sel) {
+      const a = list.findIndex((m) => m.id === sel);
+      const b = list.findIndex((m) => m.id === id);
+      if (a >= 0 && b >= 0) return setPicked(new Set(list.slice(Math.min(a, b), Math.max(a, b) + 1).map((m) => m.id)));
+    }
+    if (e.ctrlKey || e.metaKey) {
+      const next = new Set(picked);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setCurrent(id);
+      return setPicked(next);
+    }
+    return setSel(id);
+  };
   useEffect(() => {
-    if (sel && !project.media[sel]) setSel(null);
-  }, [project.media, sel]);
+    if (sel && !project.media[sel]) setCurrent(null);
+    if ([...picked].some((id) => !project.media[id])) setPicked(new Set([...picked].filter((id) => project.media[id])));
+  }, [project.media]);
   useEffect(() => {
     const el = sel && gridRef.current && gridRef.current.querySelector(`[data-media="${sel}"]`);
     if (el) el.scrollIntoView({ block: "nearest" });
@@ -381,6 +480,8 @@ function MediaPane({ project }) {
   };
   const ctx = { project, uses, preview };
   const current = sel ? project.media[sel] : null;
+  const many = list.filter((m) => picked.has(m.id));
+  const bulk = many.length > 1 ? many : null;
   const step = (d) => {
     if (!list.length) return;
     const i = list.findIndex((m) => m.id === sel);
@@ -388,16 +489,23 @@ function MediaPane({ project }) {
   };
   useKeymap({
     "library.preview": () => (current ? preview(current) : false),
-    "library.favorite": () => (current ? toggleFavorite(current) : false),
+    "library.favorite": () => (bulk ? favoriteMany(bulk) : current ? toggleFavorite(current) : false),
     "library.rename": () => (current ? rename(current) : false),
-    "library.delete": () => (current ? removeMedia(current, uses(current)) : false),
+    "library.delete": () => (bulk ? removeMany(bulk, uses) : current ? removeMedia(current, uses(current)) : false),
     "library.prev": () => step(-1),
     "library.next": () => step(1),
     "library.first": () => list.length && setSel(list[0].id),
     "library.last": () => list.length && setSel(list[list.length - 1].id),
-    "library.deselect": () => (sel ? setSel(null) : false),
+    "library.deselect": () => (sel || picked.size ? setSel(null) : false),
+    "library.selectAll": () => {
+      if (!list.length) return false;
+      setCurrent(sel && picked.has(sel) ? sel : list[0].id);
+      return setPicked(new Set(list.map((m) => m.id)));
+    },
   });
 
+  const libKeys = [["library.favorite", "加入最愛"], ["library.rename", "重新命名"], ["library.delete", "刪除"]]
+    .map(([id, verb]) => [keyLabel(id), verb]).filter(([k]) => k).map(([k, verb]) => `${k} ${verb}`).join("，");
   const pickFiles = (e) => {
     const files = [...e.currentTarget.files];
     e.currentTarget.value = "";
@@ -431,14 +539,29 @@ function MediaPane({ project }) {
       </div>
       <label class="search-box">
         <${Icon} name="search" size=${14} />
-        <input type="search" value=${query} placeholder="搜尋名稱或備註" aria-label="搜尋素材"
+        <input type="search" value=${query} placeholder="搜尋名稱、備註或標籤" aria-label="搜尋素材"
           onInput=${(e) => setQuery(e.currentTarget.value)} />
       </label>
       <${Select} value=${sort} options=${SORTS} onChange=${setSort} title="排序" class="lib-sort" />
+      ${allTags.length > 0 && html`<${Select} value=${tag} onChange=${setTag} title="依標籤篩選" class="lib-sort"
+        options=${[{ value: "", label: "所有標籤" }, ...allTags.map((t) => ({ value: t, label: `# ${t}` }))]} />`}
       <span class="grow"></span>
+      ${filter === "unused" && list.length > 0 && html`<${Button} kind="danger-ghost" icon="trash"
+        onClick=${() => removeUnused(list)}>移除這 ${list.length} 個<//>`}
       <input ref=${fileRef} type="file" multiple accept=${ACCEPT_ALL} hidden onChange=${pickFiles} />
       <${Button} kind="primary" icon="upload" onClick=${() => fileRef.current.click()}>匯入檔案<//>
     </div>
+    ${bulk && html`<div class="lib-bulk" role="toolbar" aria-label="批次操作">
+      <b>已選 ${bulk.length} 個</b>
+      <${Button} size="sm" kind="ghost" icon="star" onClick=${() => favoriteMany(bulk)}>
+        ${bulk.every((m) => m.favorite) ? "取消最愛" : "加入最愛"}<//>
+      <${Button} size="sm" kind="ghost" icon="film" title=${`圖片與影片接在最後一個鏡頭後面，聲音從播放頭 ${fmtTime(clock.time)} 開始`}
+        onClick=${() => placeMany(project, bulk)}>加到時間軸<//>
+      <${Button} size="sm" kind="ghost" icon="hash" onClick=${() => tagMany(bulk)}>加標籤<//>
+      <${Button} size="sm" kind="danger-ghost" icon="trash" onClick=${() => removeMany(bulk, uses)}>刪除<//>
+      <span class="grow"></span>
+      <${Button} size="sm" kind="ghost" icon="x" onClick=${() => setSel(null)}>取消選取<//>
+    </div>`}
     <div class=${`lib-scroll ${dropping ? "drop-files" : ""}`} ...${drop}>
       ${empty
         ? html`<${Empty} icon="images" title="素材庫是空的" class="lib-empty"
@@ -448,16 +571,16 @@ function MediaPane({ project }) {
         : !list.length && !pending.length
           ? html`<${Empty} icon="filter" title="沒有符合的素材"
               actions=${html`<${Button} onClick=${() => { setFilter("all"); setQuery(""); }}>清除篩選<//>`} />`
-          : html`<div class="lib-grid" role="listbox" aria-label="素材" ref=${gridRef}
+          : html`<div class="lib-grid" role="listbox" aria-label="素材" aria-multiselectable="true" ref=${gridRef}
               onClick=${(e) => { if (e.target === e.currentTarget) setSel(null); }}>
               ${pending.map((j) => html`<${PendingCard} key=${j.id} job=${j} />`)}
-              ${list.map((m) => html`<${MediaCard} key=${m.id} media=${m} project=${project} selected=${m.id === sel}
-                uses=${uses} onSelect=${setSel} onOpen=${preview} onMenu=${(e, x) => mediaMenu(e, ctx, x)} />`)}
+              ${list.map((m) => html`<${MediaCard} key=${m.id} media=${m} project=${project} selected=${picked.has(m.id)}
+                missing=${missing.has(m.id)} uses=${uses} onSelect=${select} onOpen=${preview} onMenu=${(e, x) => mediaMenu(e, ctx, x)} />`)}
             </div>`}
       ${dropping && html`<div class="drop-hint"><${Icon} name="upload" size=${28} /><span>放開以匯入素材庫</span></div>`}
     </div>
     <div class="lib-foot">
-      <span class="dim">雙擊預覽，右鍵開啟選單；F 加入最愛，F2 重新命名，Del 刪除</span>
+      <span class="dim">雙擊預覽，右鍵開啟選單，Ctrl 或 Shift 加選${libKeys ? `；${libKeys}` : ""}</span>
       <span class="grow"></span>
       <${UsageBar} pid=${pid} rev=${project.rev} />
     </div>

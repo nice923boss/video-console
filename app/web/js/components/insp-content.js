@@ -1,27 +1,21 @@
 // Shot inspector, "描述" tab: what the shot shows (prompt, framing, camera move, action), its length
 // and its label colour. The prompt and camera fields share one draft with their quick chips, so a
 // chip click never overwrites text that is still being typed.
-import { html, useState, useRef } from "../lib/h.js";
+import { html, useState, useRef, useEffect } from "../lib/h.js";
 import { useStore, getState } from "../lib/store.js";
-import { useHotkeys } from "../lib/keys.js";
+import { useDialogKeys } from "../lib/keymap.js";
 import { updateShot, navigate, ops } from "../lib/actions.js";
 import { api } from "../lib/api.js";
 import { setTime } from "../lib/clock.js";
 import { hasCJK, newId, round, fmtSeconds } from "../lib/format.js";
-import { videoTake, buildSequence, shotCaption } from "../lib/sequence.js";
+import { videoTake, buildSequence, shotCaptions, castInText } from "../lib/sequence.js";
 import { Field, TextArea, TextInput, useDraft, DraftText, NumberInput, Section, Chip, Button } from "./ui.js";
 import { openMenu, openModal, Modal } from "./overlay.js";
 import { toast, toastError } from "./toast.js";
 
-export const SHOT_COLORS = [
-  { value: null, label: "無顏色" },
-  { value: "#ff6b6b", label: "紅色" },
-  { value: "#f5b14c", label: "橘色" },
-  { value: "#c6f24e", label: "萊姆綠" },
-  { value: "#4fd18b", label: "綠色" },
-  { value: "#6ea8ff", label: "藍色" },
-  { value: "#b28cff", label: "紫色" },
-];
+const NO_COLOR = { value: null, label: "無顏色" };
+// "None" plus the label colours set in settings (ui.labelColors).
+export const labelColors = (settings) => [NO_COLOR, ...((settings && settings.ui && settings.ui.labelColors) || [])];
 
 const NONE = [];
 const LEAD_SEP = /^\s*[，,、]\s*/;
@@ -29,10 +23,11 @@ const GO_LLM = { label: "前往設定", fn: () => navigate("engines", { enginesT
 
 // value: a colour, null for none, undefined when a multi-selection disagrees (nothing highlighted).
 export function ColorSwatches({ value, onChange }) {
+  const colors = labelColors(useStore((s) => s.settings));
   return html`<div class="swatches" role="radiogroup" aria-label="標籤顏色">
-    ${SHOT_COLORS.map((c) => {
+    ${colors.map((c) => {
       const on = value === c.value;
-      return html`<button type="button" key=${c.label} role="radio" aria-checked=${on ? "true" : "false"} title=${c.label}
+      return html`<button type="button" key=${c.value || "none"} role="radio" aria-checked=${on ? "true" : "false"} title=${c.label}
         aria-label=${c.label} class=${`swatch ${on ? "active" : ""} ${c.value ? "" : "swatch-none"}`}
         style=${c.value ? `--swatch:${c.value}` : undefined} onClick=${() => !on && onChange(c.value)}></button>`;
     })}
@@ -61,7 +56,7 @@ const preferChinese = (text) => !text.trim() || hasCJK(text);
 function EnhanceDialog({ before, after, close }) {
   const [text, setText] = useState(after);
   const apply = () => close(text.trim() ? text : null);
-  useHotkeys({ "mod+enter": { fn: apply, allowInInput: true } });
+  useDialogKeys({ "dialog.confirm": { fn: apply, allowInInput: true } });
   return html`<${Modal} title="AI 潤飾結果" width=${680} backdropClose=${false} onClose=${() => close(null)}
       footer=${html`
         <${Button} onClick=${() => close(null)}>取消<//>
@@ -116,21 +111,49 @@ function EnhanceButton({ text, kind, onApply }) {
     onClick=${open}>潤飾<//>`;
 }
 
-// The caption bound to this shot. Typing the first text adds a caption over the shot's clip and binds
-// it; clearing the text removes it. Only the text is tied to the shot: timing stays the caption's own.
+const MIN_LINE = 0.5; // shortest caption "再加一句" makes, in seconds
+
+// Where the next line of a shot goes: after its last bound caption up to the clip's end, or else the last one's
+// second half. Returns the ops that make room (none, or shortening the last line) and the new line's times.
+function nextLine(list, seq) {
+  if (!list.length) return { room: [], start: seq.start, end: round(seq.start + seq.length, 3) };
+  const last = list[list.length - 1];
+  const clipEnd = round(seq.start + seq.length, 3);
+  if (clipEnd - last.end >= MIN_LINE) return { room: [], start: last.end, end: clipEnd };
+  if (last.end - last.start < 2 * MIN_LINE) return null;
+  const mid = round((last.start + last.end) / 2, 3);
+  return { room: [{ op: "caption.update", id: last.id, patch: { end: mid } }], start: mid, end: last.end };
+}
+
+// The captions bound to this shot, one box per line in time order (CP-06). Typing in the empty box adds a caption
+// over the shot's clip (a further line after the last one, or in the last one's second half) and binds it;
+// clearing a box removes that caption. Only the text is tied to the shot: timing stays each caption's own.
 function CaptionSection({ project, shot }) {
-  const cap = shotCaption(project, shot.id);
+  const caps = shotCaptions(project, shot.id);
   const clip = buildSequence(project).find((c) => c.shot.id === shot.id) || null;
+  const [adding, setAdding] = useState(false);
   const created = useRef(null); // id of a caption added here that the project does not show yet
   const queue = useRef(Promise.resolve());
-  const commit = (v) => {
+  const shown = created.current && caps.some((c) => c.id === created.current);
+  useEffect(() => {
+    if (!shown) return;
+    created.current = null;
+    setAdding(false);
+  }, [shown]);
+  useEffect(() => {
+    created.current = null;
+    setAdding(false);
+  }, [shot.id]);
+  // Boxes keep their place by index, so the empty box that becomes a caption keeps its focus.
+  const lines = caps.length === 0 || (adding && !shown) ? [...caps, null] : caps;
+  const commit = (i) => (v) => {
     queue.current = queue.current.then(async () => {
-      const cur = shotCaption(getState().project, shot.id);
-      if (cur) created.current = null;
-      const id = cur ? cur.id : created.current;
+      const list = shotCaptions(getState().project, shot.id);
+      const cur = list[i] || null;
+      const id = cur ? cur.id : i === list.length ? created.current : null;
       if (id) {
         if (!v.trim()) {
-          created.current = null;
+          if (id === created.current) created.current = null;
           await ops([{ op: "caption.delete", id }], { label: "刪除字幕" });
         } else {
           await ops([{ op: "caption.update", id, patch: { text: v } }], { label: "修改字幕", coalesce: `caption-text:${id}` });
@@ -138,27 +161,41 @@ function CaptionSection({ project, shot }) {
         return;
       }
       const seq = buildSequence(getState().project).find((c) => c.shot.id === shot.id);
-      if (!v.trim() || !seq) return;
-      const item = { id: newId("c"), start: seq.start, end: round(seq.start + seq.length, 3), text: v, position: "bottom", shot: shot.id };
+      if (!v.trim() || !seq || i !== list.length) return;
+      const at = nextLine(list, seq);
+      if (!at) {
+        toast("最後一句太短，分不出下一句，請先到剪輯頁延長字幕或鏡頭");
+        return;
+      }
+      const position = list.length ? list[list.length - 1].position || "bottom" : "bottom";
+      const item = { id: newId("c"), start: at.start, end: at.end, text: v, position, shot: shot.id };
       created.current = item.id;
-      if (!(await ops([{ op: "caption.add", item }], { label: "新增字幕" }))) created.current = null;
+      if (!(await ops([...at.room, { op: "caption.add", item }], { label: "新增字幕" }))) created.current = null;
     });
   };
-  const hint = cap
-    ? `字幕在 ${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}；這裡只同步文字，時間與長度到剪輯頁調整`
+  const first = caps[0];
+  const last = caps[caps.length - 1];
+  const hint = first
+    ? `${caps.length > 1 ? `${caps.length} 句字幕，` : "字幕"}在 ${fmtSeconds(first.start, 2)} 到 ${fmtSeconds(last.end, 2)}；這裡只同步文字，時間與長度到剪輯頁調整；清空一句就移除那句`
     : clip ? "填寫後會在這個鏡頭的位置新增一句字幕並綁定；清空就移除" : "這個鏡頭不在輸出序列，放入序列後才能加字幕";
   return html`<${Section} title="字幕" icon="captions">
     <${Field} hint=${hint}>
-      <${DraftText} multiline rows=${2} value=${cap ? cap.text || "" : ""} maxlength="500" disabled=${!cap && !clip}
-        placeholder="這個鏡頭要說的話（選填）" onCommit=${commit} />
+      <div class="caption-lines">
+        ${lines.map((cap, i) => html`<${DraftText} key=${i} multiline rows=${2} value=${cap ? cap.text || "" : ""} maxlength="500"
+          disabled=${!cap && !clip} onCommit=${commit(i)}
+          placeholder=${i === 0 ? "這個鏡頭要說的話（選填）" : "下一句（留空不新增）"} />`)}
+      </div>
     <//>
-    ${cap && html`<div class="row">
+    ${first && html`<div class="row">
       <${Button} size="sm" icon="scissors" onClick=${() => {
-        navigate("edit", { editSel: { type: "caption", id: cap.id } });
-        setTime(cap.start);
+        navigate("edit", { editSel: { type: "caption", id: first.id } });
+        setTime(first.start);
       }}>在剪輯頁查看<//>
+      ${clip && !adding && html`<${Button} size="sm" kind="ghost" icon="plus"
+        title="在最後一句之後加一句；鏡頭後段沒有空檔時，把最後一句的後半段分給新的一句" onClick=${() => setAdding(true)}>再加一句<//>`}
       <${Button} size="sm" kind="ghost" icon="link" title="字幕留在時間軸上，只是不再顯示在這個分鏡"
-        onClick=${() => ops([{ op: "caption.update", id: cap.id, patch: { shot: null } }], { label: "解除綁定鏡頭" })}>解除綁定<//>
+        onClick=${() => ops(caps.map((c) => ({ op: "caption.update", id: c.id, patch: { shot: null } })), { label: "解除綁定鏡頭" })}>
+        ${caps.length > 1 ? "全部解除綁定" : "解除綁定"}<//>
     </div>`}
   <//>`;
 }
@@ -192,9 +229,11 @@ export function ContentTab({ project, shot }) {
   const toggleMove = (m) => putCamera(moveOn(m) ? "" : preferChinese(prompt) ? m.text : m.en);
 
   const stylePrompt = (project.style && project.style.prompt) || "";
-  const promptHint = stylePrompt
-    ? `全片風格會接在後面：${stylePrompt.length > 40 ? `${stylePrompt.slice(0, 40)}…` : stylePrompt}`
-    : "主體、動作、場景、光線寫得越具體，生成結果越穩定";
+  const named = castInText(project, prompt).map((m) => m.name.trim());
+  const promptHint = [
+    named.length ? `會帶入人物外觀：${named.join("、")}` : "",
+    stylePrompt ? `全片風格會接在後面：${stylePrompt.length > 40 ? `${stylePrompt.slice(0, 40)}…` : stylePrompt}` : "",
+  ].filter(Boolean).join("；") || "主體、動作、場景、光線寫得越具體，生成結果越穩定";
   const hasVideo = !!videoTake(project, shot);
 
   return html`

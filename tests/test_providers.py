@@ -13,7 +13,7 @@ from typing import Any, Iterator
 import pytest
 
 from test_server import Client, needs_ffmpeg, png_bytes
-from vc import net, providers
+from vc import cloud_cache, net, providers
 from vc.app import App
 from vc.media import find_ffmpeg
 from vc.notext import GUARD
@@ -118,6 +118,50 @@ def test_custom_image_job_sends_the_key_only_in_its_header(client: Client, proje
     assert (take["width"], take["height"]) == (96, 54)
 
 
+# ---------------------------------------------------------------- spend estimate and reuse (CL-01, CL-02)
+def image_api(mock_http) -> dict:
+    mock_http.route("POST", "/v1/generate", (200, {"data": [{"url": mock_http.url + "/files/out.png"}]}))
+    mock_http.route("GET", "/files/out.png", (200, OUTPUT_PNG))
+    return {"url": mock_http.url + "/v1/generate", "body": IMAGE_BODY}
+
+
+def test_a_unit_price_gives_an_estimate_and_a_monthly_total(client: Client, project: dict, mock_http) -> None:
+    config = image_api(mock_http)
+    configure(client, "custom-image", **config)
+    done = run_job(client, project, "image", "custom-image")
+    assert done["status"] == "done" and "cost" not in done["payload"]
+    assert client.json("GET", "/api/costs")["jobs"] == 0
+
+    configure(client, "custom-image", **config, price=0.04)
+    done = run_job(client, project, "image", "custom-image")
+    assert done["payload"]["cost"] == 0.04
+    assert any(n.startswith("預估費用約 US$0.04") for n in done["notes"])
+    summary = client.json("GET", "/api/costs")
+    assert (summary["usd"], summary["jobs"], summary["byProvider"]) == (0.04, 1, {"custom-image": 0.04})
+    assert client.json("GET", "/api/bootstrap")["costs"] == summary
+
+
+def test_the_same_request_reuses_its_take_instead_of_paying_again(client: Client, project: dict, mock_http) -> None:
+    configure(client, "custom-image", **image_api(mock_http), price=0.04)
+    body = {"kind": "image", "pid": project["id"], "shotId": project["shots"][0]["id"],
+            "payload": {"provider": "custom-image", "prompt": PROMPT, "seed": 1234}}
+    first = client.wait_job(client.json("POST", "/api/jobs", body)["job"]["id"], timeout=60)
+    second = client.wait_job(client.json("POST", "/api/jobs", body)["job"]["id"], timeout=60)
+    assert first["status"] == second["status"] == "done"
+    assert len([c for c in mock_http.calls if c.path == "/v1/generate"]) == 1
+    assert cloud_cache.REUSED_NOTE in second["notes"]
+    assert client.json("GET", "/api/costs")["jobs"] == 1  # only the call that went out is counted
+
+    saved = client.json("GET", f"/api/projects/{project['id']}")["project"]
+    a, b = (saved["takes"][j["result"]["takeIds"][0]] for j in (first, second))
+    assert a["file"] != b["file"] and a["source"]["requestKey"] == b["source"]["requestKey"]
+    assert saved["shots"][0]["activeImage"] == b["id"]
+
+    body["payload"]["seed"] = 1235
+    client.wait_job(client.json("POST", "/api/jobs", body)["job"]["id"], timeout=60)
+    assert len([c for c in mock_http.calls if c.path == "/v1/generate"]) == 2
+
+
 def async_config(mock_http) -> dict:
     return {"url": mock_http.url + "/v1/generate", "body": IMAGE_BODY, "idPath": "task.id", "resultPath": "output.url",
             "pollUrl": mock_http.url + "/v1/tasks/{{id}}", "pollInterval": 2}
@@ -147,15 +191,22 @@ def test_async_task_failure_is_reported_and_the_handle_kept(client: Client, proj
     configure(client, "custom-image", **async_config(mock_http))
     done = run_job(client, project, "image", "custom-image")
     assert done["status"] == "failed"
-    assert done["error"] == "自訂 API 回報任務失敗：" + json.dumps(reason, ensure_ascii=False)
+    assert done["error"] == ("自訂 API 回報任務失敗：" + json.dumps(reason, ensure_ascii=False)
+                             + "。內容可能被供應商的安全審查擋下，請修改提示詞或換一張參考圖")
     assert done["remote"] == {"type": "provider", "provider": "custom-image",
                               "data": {"vendor": "custom", "id": "task_123"}}
 
 
 @pytest.mark.parametrize("status, body, expected", [
-    (401, {"error": {"message": "invalid api key"}}, "金鑰無效或未授權（401）：invalid api key"),
-    (429, {"message": "rate limited"}, "請求太頻繁或額度不足（429）：rate limited"),
-    (500, b"upstream exploded", "伺服器錯誤（500）：upstream exploded"),
+    (401, {"error": {"message": "invalid api key"}},
+     "金鑰無效或未授權（401）：invalid api key。請檢查金鑰或存取權杖是否正確、是否過期"),
+    (429, {"message": "rate limited"}, "請求太頻繁或額度不足（429）：rate limited。請求太頻繁或同時執行的任務太多，請稍等幾分鐘再試"),
+    (429, {"error": {"message": "You exceeded your current quota"}},
+     "請求太頻繁或額度不足（429）：You exceeded your current quota。帳戶額度或點數不足，請到供應商網站儲值或確認方案"),
+    (500, b"upstream exploded", "伺服器錯誤（500）：upstream exploded。供應商服務暫時異常，請稍後再試"),
+    (422, {"detail": [{"msg": "duration must be 5 or 10"}]},
+     "參數不被接受（422）：duration must be 5 or 10。秒數、比例或解析度不在模型支援的範圍內，請改用模型支援的設定"),
+    (418, b"", "HTTP 錯誤（418）"),
 ])
 def test_vendor_http_errors_fail_with_a_readable_message(client: Client, project: dict, mock_http, data_dir: Path,
                                                          caplog: pytest.LogCaptureFixture, status: int, body: Any,
@@ -168,6 +219,15 @@ def test_vendor_http_errors_fail_with_a_readable_message(client: Client, project
     assert done["error"] == expected
     assert len(mock_http.calls) == 1  # a rejected submit is not retried
     assert_key_not_kept(done, data_dir, caplog)
+
+
+def test_failure_advice_is_added_once_and_only_for_known_reasons() -> None:
+    local = "ComfyUI 執行失敗（節點 #7 KSampler）：Shape mismatch"
+    assert net.advise(local) == local
+    once = net.advise("fal.ai 任務失敗：Content policy violation.")
+    assert once == "fal.ai 任務失敗：Content policy violation。內容可能被供應商的安全審查擋下，請修改提示詞或換一張參考圖"
+    assert net.advise(once) == once
+    assert net.advise("Replicate 任務失敗：invalid credentials").endswith("。請檢查金鑰或存取權杖是否正確、是否過期")
 
 
 def test_missing_key_fails_before_anything_is_sent(client: Client, project: dict, mock_http) -> None:

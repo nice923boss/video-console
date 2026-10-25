@@ -1,6 +1,7 @@
 """LLMClient against a local OpenAI-compatible mock: model list, prompt polish, AI shot split, error paths."""
 from __future__ import annotations
 
+import json
 import socket
 
 import pytest
@@ -39,13 +40,15 @@ def closed_port() -> int:
 
 
 # ---------------------------------------------------------------- connection test
-def test_connection_test_lists_models_even_when_switched_off(llm, settings):
+def test_connection_test_lists_models_and_gets_a_reply_even_when_switched_off(llm, settings, mock_http):
     settings.update({"llm": {"enabled": False}})
+    mock_http.route("POST", CHAT, completion("OK"))
 
     result = llm.test()
 
-    assert result == {"ok": True, "models": ["gemma3:4b", "llama3"], "modelFound": True,
-                      "message": "連線成功，找到模型「gemma3:4b」"}
+    assert result == {"ok": True, "replied": True, "models": ["gemma3:4b", "llama3"], "modelFound": True,
+                      "message": "連線成功，模型「gemma3:4b」有回應"}
+    assert mock_http.calls[-1].json()["model"] == "gemma3:4b"
 
 
 def test_connection_test_flags_a_model_the_server_lacks(llm, settings):
@@ -53,8 +56,20 @@ def test_connection_test_flags_a_model_the_server_lacks(llm, settings):
 
     result = llm.test()
 
-    assert result["modelFound"] is False
-    assert result["message"] == "連線成功，但清單裡沒有「mistral」，請從下方清單挑一個"
+    assert (result["ok"], result["replied"], result["modelFound"]) == (False, False, False)
+    assert result["message"].startswith("服務有回應，但模型「mistral」沒有回話：")
+    assert result["message"].endswith("。清單裡沒有這個模型，請從下方清單挑一個")
+
+
+def test_connection_test_fails_when_the_list_is_open_but_the_chat_needs_a_key(llm, mock_http):
+    """GAPS #80: a server answered /models without a key, so the old test passed while every real call got 401."""
+    mock_http.route("POST", CHAT, (401, {"error": {"message": "missing api key"}}))
+
+    result = llm.test()
+
+    assert (result["ok"], result["replied"], result["modelFound"]) == (False, False, True)
+    assert "401" in result["message"]
+    assert "LLM 呼叫失敗" not in result["message"]
 
 
 def test_connection_test_explains_a_closed_port(llm, settings):
@@ -152,6 +167,32 @@ def test_translate_sends_one_chat_request_and_cleans_the_reply(llm, mock_http):
     system, user = call.json()["messages"]
     assert "only understands English" in system["content"] and "add nothing" in system["content"]
     assert user == {"role": "user", "content": "清晨的海港，薄霧，cinematic"}
+
+
+def test_condense_sends_the_captions_as_json_and_keeps_only_known_ids(llm, mock_http):
+    reply = '好的：\n```json\n[{"id": "c1", "text": "「我們明天出發。」"}, {"id": "zz", "text": "多的"}, {"id": "c2", "text": ""}]\n```'
+    mock_http.route("POST", CHAT, completion(reply))
+
+    items = [{"id": "c1", "text": "所以我們大家明天早上就一起出發吧", "max": 8},
+             {"id": "c2", "text": "這句也太長了", "max": 4}, {"id": "", "text": "沒有編號", "max": 3},
+             {"id": "c3", "text": "   ", "max": 3}, {"id": "c4", "text": "沒有上限"}]
+    assert llm.condense_captions(items) == [{"id": "c1", "text": "「我們明天出發。」"}]
+
+    [call] = mock_http.calls
+    system, user = call.json()["messages"]
+    assert "Traditional Chinese stays Traditional Chinese" in system["content"]
+    assert json.loads(user["content"]) == [{"id": "c1", "text": "所以我們大家明天早上就一起出發吧", "max": 8},
+                                           {"id": "c2", "text": "這句也太長了", "max": 4}]
+
+
+def test_condense_refuses_nothing_to_do_and_explains_a_reply_without_json(llm, mock_http):
+    with pytest.raises(AppError, match="沒有要濃縮的字幕"):
+        llm.condense_captions([{"id": "c1", "text": "", "max": 3}])
+    assert mock_http.calls == []
+    mock_http.route("POST", CHAT, completion("抱歉，我不懂"))
+    with pytest.raises(AppError) as err:
+        llm.condense_captions([{"id": "c1", "text": "很長的一句字幕", "max": 3}])
+    assert (err.value.status, err.value.message) == (502, "LLM 回傳的內容不是 JSON，請換個模型再試")
 
 
 def test_translate_refuses_empty_text_and_a_switched_off_model(llm, settings, mock_http):

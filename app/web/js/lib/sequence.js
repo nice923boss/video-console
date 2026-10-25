@@ -47,6 +47,8 @@ export const audioMedia = (project, item) =>
 // Voice lines (a caption's clip, or a clip dragged onto the voice rows) share the 配音 rows; every other clip sits
 // on its music track: its own, unless `track` names one it shares. A track lives only while a clip is on it.
 export const VOICE_TRACK = "voice";
+// The video clips' own sound (the 原聲 row) as a row key for the preview's meters and solo.
+export const SOURCE_TRACK = "source";
 export const audioTrack = (item) => (item.captionId || item.track === VOICE_TRACK ? VOICE_TRACK : item.track || item.id);
 
 export function buildSequence(project, includeAll = false) {
@@ -100,21 +102,39 @@ export function clipIndexAt(clips, t) {
   return idx;
 }
 
-// The caption bound to a shot (text only; its timing stays the caption's own).
-export function shotCaption(project, shotId) {
-  return (project.captions || []).find((c) => c.shot === shotId) || null;
+// The captions bound to a shot in time order (text only; their timing stays each caption's own). A long shot can
+// carry several lines (CP-06).
+export function shotCaptions(project, shotId) {
+  return (project.captions || []).filter((c) => c.shot === shotId).sort((a, b) => a.start - b.start);
 }
 
-// Length of an audio item on the timeline.
+// The cast members with a look that a shot's text names (SB-11); their looks go into its picture prompt.
+export function castInText(project, text) {
+  return (project.cast || []).filter((m) => {
+    const name = (m.name || "").trim();
+    return name && (m.look || "").trim() && (text || "").includes(name);
+  });
+}
+
+// The look lines a prompt carries for that cast (runners.py _prompts, sequence.cast_looks).
+export function castLooks(project, text) {
+  return castInText(project, text).map((m) => `${m.name.trim()}：${m.look.trim()}`).join("\n");
+}
+
+// Length of an audio item on the timeline (a sped item, the detached sound of a sped shot, plays its source faster).
 export function audioLength(item, media) {
   const full = media && media.duration ? Number(media.duration) : 0;
   const tIn = Number(item.in || 0);
   const tOut = item.out == null ? full : Number(item.out);
-  return Math.max(0.1, tOut - tIn);
+  return Math.max(0.1, (tOut - tIn) / audioSpeed(item));
 }
 
+// Source seconds per timeline second of an audio item.
+export const audioSpeed = (item) => Number(item.speed || 1);
+
 // One {key, items} per music track, in the order of each track's first clip (the server keeps audio sorted by start).
-export function musicTracks(audio) {
+// `order` (project.tracks.musicOrder) is the order the user set; tracks it leaves out go below.
+export function musicTracks(audio, order) {
   const music = [];
   for (const a of audio) {
     const key = audioTrack(a);
@@ -123,7 +143,9 @@ export function musicTracks(audio) {
     if (found) found.items.push(a);
     else music.push({ key, items: [a] });
   }
-  return music;
+  const saved = order || [];
+  const rank = (m) => (saved.includes(m.key) ? saved.indexOf(m.key) : saved.length);
+  return music.map((m, i) => [m, i]).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([m]) => m);
 }
 
 // 合併音軌: each music track moves onto the first track above it that plays nothing while it does, so sounds that
@@ -137,7 +159,7 @@ export function mergeTracks(project) {
   const clash = (a, b) => a.some(([s, e]) => b.some(([bs, be]) => s < be - 1e-3 && bs < e - 1e-3));
   const groups = [];
   const ops = [];
-  for (const { key, items } of musicTracks(project.audio || [])) {
+  for (const { key, items } of musicTracks(project.audio || [], (project.tracks || {}).musicOrder)) {
     const mine = spans(items);
     const into = groups.find((g) => !clash(mine, g.spans));
     if (!into) {
@@ -150,7 +172,7 @@ export function mergeTracks(project) {
   return { ops, tracks: groups.length };
 }
 
-// Mirror of fit_frame in app/vc/ops.py: the largest size that shows the whole picture, centered.
+// Mirror of fit_frame in app/vc/opfields.py: the largest size that shows the whole picture, centered.
 export function fitFrame(media, frameW, frameH) {
   const full = overlayHeight({ w: 1 }, media, frameW, frameH);
   const w = full > 1 ? 1 / full : 1;
@@ -158,7 +180,15 @@ export function fitFrame(media, frameW, frameH) {
   return { x: round4((1 - w) / 2), y: round4((1 - h) / 2), w: round4(w) };
 }
 
-// Mirror of new_overlay in app/vc/ops.py: a clip on an upper track that fills the frame.
+// The smallest size that covers the whole frame, centered; what lies past the frame is cropped.
+export function fillFrame(media, frameW, frameH) {
+  const full = overlayHeight({ w: 1 }, media, frameW, frameH);
+  const w = full < 1 ? Math.min(4, 1 / full) : 1;
+  const h = full * w;
+  return { x: round4((1 - w) / 2), y: round4(Math.max(-4, (1 - h) / 2)), w: round4(w) };
+}
+
+// Mirror of new_overlay in app/vc/opfields.py: a clip on an upper track that fills the frame.
 export function newOverlay(id, media, layer, start, frameW, frameH) {
   const video = media.kind === "video" && media.duration;
   return {

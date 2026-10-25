@@ -1,5 +1,6 @@
 // Cast editor: the project's characters and the voice, speed and volume each one speaks with, from the
-// local Audio8Voice or the VoAI cloud (speaker, style and model). Captions name a speaker from this list;
+// local Audio8Voice or the VoAI cloud (speaker, style and model), plus the look a picture prompt carries when
+// a shot names the character (SB-11). Captions name a speaker from this list;
 // every change is a project op, so it travels with the project package and is undoable. Picking an
 // Audio8Voice voice prepares it right away (see prepareVoice).
 import { html } from "../lib/h.js";
@@ -10,6 +11,9 @@ import { loadVoices, prepareVoice, prepareJob, isVoai } from "../lib/voice.js";
 import { openModal, Modal, confirmDialog, openMenu } from "../components/overlay.js";
 import { Button, IconButton, DraftText, NumberInput, Select, Empty, Spinner, Dot } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
+import { Thumb } from "../components/media.js";
+import { openRefPicker } from "../components/ref-picker.js";
+import { undoKeyText } from "../lib/keymap.js";
 
 const NONE = [];
 const VOAI_MAX_SPEED = 1.5;
@@ -126,13 +130,35 @@ function PrepNote({ job }) {
     ${running && html`<${Spinner} size=${11} />`}${running ? "準備聲音中…" : "準備聲音排隊中，等顯示卡空出"}</span>`;
 }
 
-function MemberRow({ member, lines, voices, presets, online, voai, prep }) {
+// The look text and look picture: the text joins the picture prompt of every shot whose description names the
+// member; the picture is offered as that shot's reference (insp-generate.js RefField).
+function LookRow({ project, member }) {
+  const ref = member.lookRef ? project.takes[member.lookRef] || project.media[member.lookRef] || null : null;
+  const pick = async () => {
+    const id = await openRefPicker(project, { id: "", ref: member.lookRef }, [member.lookRef]);
+    if (id && id !== member.lookRef) update(member.id, { lookRef: id }, "設定人物參考圖");
+  };
+  return html`<div class="cast-look">
+    <span class="dim">外觀</span>
+    <${DraftText} value=${member.look || ""} maxlength="1000" aria-label="人物外觀"
+      placeholder="生圖用，例如：短黑髮、圓框眼鏡、藍色制服；鏡頭描述寫到這個名字時自動帶入"
+      onCommit=${(v) => v.trim() !== (member.look || "") && update(member.id, { look: v.trim() }, "人物外觀")} />
+    ${ref
+      ? html`<button type="button" class="cast-look-ref" title="外觀參考圖，點一下更換" onClick=${pick}>
+          <${Thumb} pid=${project.id} path=${ref.thumb || ref.file} ratio="1/1" />
+        </button>
+        <${IconButton} icon="x" size=${13} title="移除外觀參考圖" onClick=${() => update(member.id, { lookRef: null }, "移除人物參考圖")} />`
+      : html`<${Button} size="sm" kind="ghost" icon="image" title="選一張這個人物的參考圖，生圖時可一鍵套用" onClick=${pick}>參考圖<//>`}
+  </div>`;
+}
+
+function MemberRow({ project, member, lines, voices, presets, online, voai, prep }) {
   const name = member.name || "未命名";
   const remove = async () => {
     if (lines) {
       const ok = await confirmDialog({
         title: `刪除人物「${name}」？`,
-        message: `${lines} 句字幕的人物會變成未指定，已生成的配音仍留在音軌上。按 Ctrl+Z 可以復原。`,
+        message: `${lines} 句字幕的人物會變成未指定，已生成的配音仍留在音軌上。${undoKeyText()}可以復原。`,
         confirmLabel: "刪除人物",
         danger: true,
       });
@@ -175,11 +201,12 @@ function MemberRow({ member, lines, voices, presets, online, voai, prep }) {
       suffix="倍" title=${cloud ? "語速（VoAI 0.5 到 1.5 倍）" : "語速"}
       onCommit=${(v) => update(member.id, { speed: round(v, 2) }, "人物語速")} />
     <${NumberInput} value=${Math.round(Number(member.volume ?? 1) * 100)} min=${0} max=${400} step=${5} digits=${0} suffix="%"
-      title="配音放到音軌時的音量" onCommit=${(v) => update(member.id, { volume: round(v / 100, 2) }, "人物音量")} />
+      title=${cloud ? "配音放到音軌時的音量（VoAI 音量偏小，會再加 6dB）" : "配音放到音軌時的音量"} onCommit=${(v) => update(member.id, { volume: round(v / 100, 2) }, "人物音量")} />
     <span class="cast-lines dim">${lines} 句</span>
     <${IconButton} icon="trash" size=${15} title="刪除人物" onClick=${remove} />
     ${cloud && picker.extra}
     ${prep && html`<${PrepNote} job=${prep} />`}
+    <${LookRow} project=${project} member=${member} />
   </li>`;
 }
 
@@ -213,7 +240,7 @@ function CastBody({ close }) {
     ${cast.length
       ? html`<div class="cast-head dim"><span>人物</span><span>聲音</span><span>語速</span><span>音量</span><span></span><span></span></div>
         <ul class="cast-list">
-          ${cast.map((m) => html`<${MemberRow} key=${m.id} member=${m} lines=${lines(m.id)} voices=${voices}
+          ${cast.map((m) => html`<${MemberRow} key=${m.id} project=${project} member=${m} lines=${lines(m.id)} voices=${voices}
             presets=${presets} online=${online} voai=${voice && voice.voai} prep=${isVoai(m) ? null : prepareJob(jobs, m.voice)} />`)}
         </ul>`
       : html`<${Empty} icon="users" title="還沒有人物">
