@@ -14,7 +14,7 @@ from .util import AppError
 
 log = logging.getLogger("vc.notify")
 
-NOTIFY_KINDS = {"image", "video", "upscale", "upscalevideo", "kenburns", "export", "package", "transcribe"}
+NOTIFY_KINDS = {"image", "video", "upscale", "upscalevideo", "kenburns", "export", "package", "transcribe", "align"}
 NTFY_TOKEN = "ntfy.token"
 PUSH_TITLE = "Video Console"
 MAX_LISTED = 5

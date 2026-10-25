@@ -920,3 +920,14 @@ a.exp-doc:hover { border-color: var(--border-strong); background: var(--surface-
 .cc-draft > .textarea { flex: 1; min-width: 0; }
 .cc-count { flex: none; white-space: nowrap; }
 .cc-count.is-over { color: var(--warn); }
+
+/* Bilingual caption import (dialogs/bilingual-import.js) */
+.bi-options { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.bi-list { display: flex; flex-direction: column; max-height: 34vh; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-input); background: var(--surface-2); }
+.bi-row { display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: calc(13px * var(--text-scale)); }
+.bi-row:last-child { border-bottom: 0; }
+.bi-row.is-split .bi-time { color: var(--accent); }
+.bi-time { flex: none; width: 48px; }
+.bi-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bi-text > span { color: var(--muted); white-space: pre-line; }
+.bi-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

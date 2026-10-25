@@ -22,7 +22,7 @@ from .util import AppError, new_id, now, random_seed, read_json, write_json_atom
 log = logging.getLogger("vc.jobs")
 
 KINDS = ("image", "video", "upscale", "upscalevideo", "kenburns", "lastframe", "reverse", "ingest", "export", "package",
-         "voice", "transcribe")
+         "voice", "transcribe", "align")
 ACTIVE = ("queued", "running")
 FINISHED = ("done", "failed", "canceled", "interrupted")
 LANE_LIMITS = {"comfy": 1, "provider": 2, "local:ffmpeg": 2, "local:export": 1}

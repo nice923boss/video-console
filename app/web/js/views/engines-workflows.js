@@ -56,6 +56,15 @@ async function exportTemplate(wf) {
   }
 }
 
+// API-format JSON the user drags into their own ComfyUI; the server names the file after the template.
+function downloadForComfy(wf) {
+  const a = document.createElement("a");
+  a.href = `/api/workflows/${enc(wf.id)}/comfyui.json`;
+  a.download = "";
+  a.click();
+  toast(`已下載「${wf.name}」，拖進 ComfyUI 畫面即可開啟`, { level: "success" });
+}
+
 async function duplicateTemplate(wf) {
   try {
     const copy = await api.post(`/api/workflows/${enc(wf.id)}/duplicate`);
@@ -120,6 +129,7 @@ function TemplateCard({ wf, users, report, serverName }) {
     { label: wf.builtin ? "檢視內容" : "編輯", icon: wf.builtin ? "eye" : "pencil", onClick: () => openWorkflowEditor(wf.id) },
     { label: "複製一份", icon: "copy", onClick: () => duplicateTemplate(wf) },
     { label: "匯出 JSON", icon: "download", onClick: () => exportTemplate(wf) },
+    { label: "下載給 ComfyUI 用", icon: "download", onClick: () => downloadForComfy(wf) },
     !wf.builtin && { divider: true },
     !wf.builtin && { label: "刪除", icon: "trash", danger: true, onClick: () => deleteTemplate(wf, users) },
   ]);
@@ -237,6 +247,9 @@ export function WorkflowsTab() {
       <span class="grow"></span>
       <input ref=${fileRef} type="file" accept=".json,application/json" hidden
         onChange=${(e) => { const f = e.currentTarget.files[0]; e.currentTarget.value = ""; importFile(f); }} />
+      <a class="btn" href="/api/workflows/comfyui.zip" download="" title="所有範本轉成 ComfyUI 可直接開啟的檔案，附模型清單與使用說明（.zip）">
+        <${Icon} name="download" size=${16} /><span class="btn-text">下載全部工作流程（ComfyUI 用）</span>
+      </a>
       <${Button} kind="primary" icon="upload" busy=${importing} onClick=${() => fileRef.current && fileRef.current.click()}>匯入工作流程<//>
     </div>
     <div class="wf-toolbar">

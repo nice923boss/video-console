@@ -1,4 +1,4 @@
-// Edit view: the preview player on top (with the media bin and the scopes beside it when shown), the timeline below (drag
+// Edit view: the preview player on top (with the media bin, the scopes and the AI assistant beside it when shown), the timeline below (drag
 // the divider to resize it), and the property panel for whatever is selected on the timeline (not shown in
 // watch mode, which changes nothing).
 import { html, useEffect, useMemo, useRef } from "../lib/h.js";
@@ -17,6 +17,7 @@ import { AudioMeters } from "../components/audio-meter.js";
 import { MediaBin } from "../components/media-bin.js";
 import { Scopes } from "../components/scopes.js";
 import { layoutMenu } from "../components/layouts.js";
+import { ChatPanel } from "../components/chat-panel.js";
 
 const TL_DEFAULT = 280;
 const TL_MIN = 170;
@@ -35,7 +36,9 @@ export function EditView() {
   const toggleBin = () => setBin(!bin);
   const [scopes, setScopes] = usePref("vc.edit.scopes", false, isBool);
   const toggleScopes = () => setScopes(!scopes);
-  useKeymap({ "edit.meters": toggleMeters, "edit.bin": toggleBin, "edit.scopes": toggleScopes });
+  const [chat, setChat] = usePref("vc.edit.chat", false, isBool);
+  const toggleChat = () => setChat(!chat);
+  useKeymap({ "edit.meters": toggleMeters, "edit.bin": toggleBin, "edit.scopes": toggleScopes, "edit.chat": toggleChat });
   const mainRef = useRef(null);
   const clips = useMemo(() => (project ? buildSequence(project) : []), [project]);
 
@@ -100,7 +103,9 @@ export function EditView() {
         ${bin && !watch && html`<${MediaBin} project=${project} />`}
         <${Player} project=${project} clips=${clips} meters=${meters} onToggleMeters=${toggleMeters}
           bin=${bin} onToggleBin=${watch ? null : toggleBin} scopes=${scopes} onToggleScopes=${toggleScopes} onLayout=${layoutMenu}
+          chat=${chat} onToggleChat=${watch ? null : toggleChat}
           side=${scopes && html`<${Scopes} onClose=${toggleScopes} />`} />
+        ${chat && !watch && html`<${ChatPanel} project=${project} onClose=${toggleChat} />`}
       </div>
       <div class="edit-split" role="separator" aria-orientation="horizontal" aria-label="調整時間軸高度"
           aria-valuenow=${height} tabindex="0" title="拖曳調整時間軸高度，雙擊還原"

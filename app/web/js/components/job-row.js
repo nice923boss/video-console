@@ -32,7 +32,7 @@ export function laneLabel(job, { providers = NONE, workflows = NONE, comfy = NON
   // Audio8Voice jobs share the "comfy" lane only to keep the GPU to one job at a time; VoAI ones run in the cloud
   if (job.kind === "voice") return job.lane === "provider:voai" ? "VoAI 雲端" : "Audio8Voice";
   if (job.kind === "upscalevideo") return "本機 Video2X";
-  if (job.kind === "transcribe") return "本機 Speech-to-subtitle";
+  if (job.kind === "transcribe" || job.kind === "align") return "本機 Speech-to-subtitle";
   if (p.backend === "provider" || String(job.lane || "").startsWith("provider:")) {
     const prov = providers.find((x) => x.id === p.provider);
     return `雲端 API · ${prov ? prov.name : p.provider || "未知供應商"}`;

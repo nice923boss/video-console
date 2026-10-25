@@ -19,6 +19,8 @@ import { rowRole, roleOp, duckDb, ROLE_LABELS, DUCK_LEVELS } from "../lib/duck.j
 import { decodeText, TEXT_ENCODINGS, encodingLabel, linesLabel } from "../lib/textfile.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openTitleDialog } from "../dialogs/title-dialog.js";
+import { openBilingualImport } from "../dialogs/bilingual-import.js";
+import { captionRows } from "./tl-captions.js";
 import { copyChapters } from "../lib/chapters.js";
 import { upload } from "../lib/api.js";
 import { MEDIA_MIME, placeMedia } from "../lib/media-actions.js";
@@ -33,8 +35,8 @@ import { Button, IconButton, Field, Select, Segmented, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
 import { TrackMeter } from "./audio-meter.js";
 import {
-  VideoTrack, CaptionTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H, multiAudio,
-  CAPTION_H, AUDIO_H, PIP_H, ADD_H,
+  VideoTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H, multiAudio,
+  AUDIO_H, PIP_H, ADD_H,
 } from "./tl-tracks.js";
 import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
 import { Minimap } from "./tl-minimap.js";
@@ -680,6 +682,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
       <${Button} size="sm" kind="ghost" icon="upload" onClick=${() => srtRef.current && srtRef.current.click()}
         title="匯入 SRT 字幕檔，字幕放在檔案記載的時間；也可以把 .srt 拖進時間軸">匯入 SRT<//>
       <input ref=${srtRef} type="file" accept=".srt" hidden onChange=${pickSrt} />
+      <${Button} size="sm" kind="ghost" icon="globe" onClick=${() => openBilingualImport(project)}
+        title="匯入中英對照的 Word 或文字檔，中文、英文分成上下兩條字幕軌，可用語音對齊到影片">雙語字幕<//>
       <${Button} size="sm" kind="ghost" icon="music" onClick=${() => importFiles(fileRef, { track: true, start: round(clock.time, 2) }, true)}
         title="在播放頭位置加入音樂或旁白">加入音訊<//>
       <input ref=${fileRef} type="file" accept=${ACCEPT_AUDIO} multiple hidden onChange=${pickAudio} />
@@ -712,11 +716,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
           <div class="tl-label tl-corner"></div>
           <${Ruler} width=${contentW} pps=${pps} onScrub=${scrub} markers=${project.markers || []} range=${editRange} />
         </div>
-        ${row("captions", CAPTION_H, html`
-          ${label("captions", "字幕", eyeBtn(!!tracks.captionsHidden,
-            () => setTrack("captionsHidden", tracks.captionsHidden ? "顯示字幕軌" : "隱藏字幕軌")))}
-          ${lane("tl-lane-caption", html`<${CaptionTrack} project=${project} ctx=${ctx} editSel=${editSel} />`)}`,
-          { hidden: !!tracks.captionsHidden })}
+        ${captionRows({ project, ctx, editSel, tracks, row, label, lane, eyeBtn, setTrack })}
         ${(adjustments.length > 0 || adjGhost) && row("adjust", ADJUST_H, html`
           ${label("palette", "調整圖層", eyeBtn(!!tracks.adjustHidden,
             () => setTrack("adjustHidden", tracks.adjustHidden ? "顯示調整圖層軌" : "隱藏調整圖層軌")))}

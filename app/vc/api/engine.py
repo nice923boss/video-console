@@ -6,9 +6,10 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from .. import providers
+from ..comfy.export import comfy_json, comfy_zip, file_names
 from ..providers.base import duration_seconds
 from ..providers.catalog import UNUSABLE, model_status, same_line
-from ..server import Request, Router
+from ..server import Request, Response, Router
 from ..util import AppError
 
 if TYPE_CHECKING:
@@ -155,9 +156,21 @@ def register(router: Router, app: App) -> None:
         tpl, warnings = app.workflows.import_data(data.get("data"), str(data.get("name") or ""), info)
         return {"workflow": tpl, "warnings": warnings}
 
+    @router.route("GET", "/api/workflows/comfyui.zip")
+    def workflow_comfy_zip(req: Request) -> Response:
+        """Every template as API-format JSON for the user's own ComfyUI, plus a readme of the models each needs."""
+        templates = [app.workflows.get(t["id"]) for t in app.workflows.list()]
+        return Response(comfy_zip(templates), "application/zip", download_name="Video Console ComfyUI 工作流程.zip")
+
     @router.route("GET", "/api/workflows/{wid}")
     def workflow_get(req: Request) -> dict:
         return app.workflows.get(req.params["wid"])
+
+    @router.route("GET", "/api/workflows/{wid}/comfyui.json")
+    def workflow_comfy_json(req: Request) -> Response:
+        tpl = app.workflows.get(req.params["wid"])
+        return Response(comfy_json(tpl), "application/json; charset=utf-8",
+                        download_name=file_names([tpl])[tpl["id"]])
 
     @router.route("PUT", "/api/workflows/{wid}")
     def workflow_save(req: Request) -> dict:

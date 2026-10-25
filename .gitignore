@@ -10,6 +10,12 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# tests and feasibility spikes stay local
+tests/
+pytest.ini
+tools/spike-cp13/
+docs/spike-*.md
+
 # local tooling and notes
 .claude/
 _FOLDER_INFO.md

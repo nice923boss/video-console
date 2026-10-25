@@ -60,6 +60,7 @@ const BUILT_IN = [
   cmd("edit", "edit.meters", "顯示或隱藏音量表", ["mod+shift+8"]),
   cmd("edit", "edit.bin", "顯示或隱藏素材清單", ["mod+shift+1"]),
   cmd("edit", "edit.scopes", "顯示或隱藏示波器", ["mod+shift+7"]),
+  cmd("edit", "edit.chat", "顯示或隱藏 AI 助理", ["mod+shift+9"]),
   cmd("edit", "edit.markIn", "設定區域入點", ["i"]),
   cmd("edit", "edit.markOut", "設定區域出點", ["o"]),
   cmd("edit", "edit.rangeFromClip", "以選取片段設定區域", ["shift+x"], ["x"]),

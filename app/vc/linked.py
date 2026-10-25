@@ -90,6 +90,7 @@ def _restore_ops(project: dict, clips: list[dict]) -> list[dict]:
     deleted meanwhile stay out."""
     ops: list[dict] = []
     layers = {layer["id"] for layer in project.get("layers") or []}
+    caption_tracks = {track["id"] for track in project.get("captionTracks") or []}
     for clip in clips:
         parked = clip["shot"].get("parked")
         if not parked:
@@ -101,6 +102,8 @@ def _restore_ops(project: dict, clips: list[dict]) -> list[dict]:
                     continue
                 if key == "overlays" and (item.get("mediaId") not in project["media"] or item.get("layer") not in layers):
                     continue
+                if key == "captions" and item.get("track") and item["track"] not in caption_tracks:
+                    item = {**item, "track": None}  # its row was deleted meanwhile: back on the main row
                 ops.append({"op": f"{name}.add", "item": _moved(item, clip["start"])})
         ops.append({"op": "shot.update", "id": clip["shot"]["id"], "patch": {}, "unset": ["parked"]})
     return ops

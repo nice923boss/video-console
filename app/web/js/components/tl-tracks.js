@@ -358,7 +358,14 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
 }
 
 // ---------------------------------------------------------------- caption lane
-export function CaptionTrack({ project, ctx, editSel }) {
+// The captions on one caption row: "main" holds those whose track is missing or unknown (as vc/ops.py reads them),
+// the other rows are project.captionTracks ids (components/tl-captions.js).
+export function rowCaptions(project, track) {
+  const ids = new Set((project.captionTracks || []).map((t) => t.id));
+  return (project.captions || []).filter((c) => (track === "main" ? !ids.has(c.track) : c.track === track));
+}
+
+export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
   const [drag, setDrag] = useState(null);
   const { pps } = ctx;
   const glossaryText = useStore((s) => s.settings && s.settings.glossary);
@@ -398,7 +405,7 @@ export function CaptionTrack({ project, ctx, editSel }) {
   };
 
   const near = (cap) => (drag && drag.id === cap.id) || inView(ctx.win, Number(cap.start), Number(cap.end) - Number(cap.start));
-  return html`${(project.captions || []).filter(near).map((cap) => {
+  return html`${rowCaptions(project, track).filter(near).map((cap) => {
     const cur = drag && drag.id === cap.id ? drag : cap;
     const sel = editSel && editSel.type === "caption" && editSel.id === cap.id;
     const text = (cap.text || "").trim() || "（空白字幕）";

@@ -142,7 +142,7 @@ class ProjectStore:
         project.setdefault("schema", SCHEMA)
         for key, default in (("takes", {}), ("audio", []), ("captions", []), ("media", {}), ("notes", ""),
                              ("cast", []), ("tracks", {}), ("layers", []), ("overlays", []), ("captionStyles", []),
-                             ("adjustments", []), ("markers", [])):
+                             ("adjustments", []), ("markers", []), ("captionTracks", [])):
             project.setdefault(key, default)
         project.setdefault("style", {"prompt": "", "negative": "", "preset": ""})
         project["settings"].setdefault("fadeIn", 0.0)
@@ -279,6 +279,7 @@ class ProjectStore:
             "captionStyles": [],
             "adjustments": [],
             "markers": [],
+            "captionTracks": [],
         }
         library = self.settings.section("captionStyles") if self.settings.section("captionStylesAuto") else []
         if library:  # as if each library style were added by hand: the first becomes the default

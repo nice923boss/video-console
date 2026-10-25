@@ -241,8 +241,26 @@ class VC:
             time.sleep(every)
         raise VCError(f"工作 {jid} 超過 {timeout} 秒沒有完成")
 
-    def srt(self, pid: str) -> str:
-        return self._request("GET", f"/api/projects/{pid}/captions.srt", raw=True).decode("utf-8-sig")
+    def srt(self, pid: str, track: str = "") -> str:
+        """The captions as .srt; track="main" or a caption track id keeps that row only."""
+        query = f"?{urllib.parse.urlencode({'track': track})}" if track else ""
+        return self._request("GET", f"/api/projects/{pid}/captions.srt{query}", raw=True).decode("utf-8-sig")
+
+    def docx_text(self, path: str | Path) -> str:
+        """A Word file's paragraphs as text, e.g. a 中英對照 file for bilingual()."""
+        return self.post("/api/script/docx", Path(path).read_bytes())["text"]
+
+    def bilingual(self, pid: str, text: str, english: str = "double", start: float = 0.0, replace: bool = False,
+                  dry_run: bool = False, align: bool = False) -> dict:
+        """中英對照 text onto the 中文 and English caption tracks (docs/API.md 6.1). Returns {pairs, count, notes,
+        tracks, segments, rev?, job? | alignError?}; with align=True wait on out["job"]["id"]."""
+        return self.post(f"/api/projects/{pid}/captions/bilingual",
+                         {"text": text, "english": english, "start": start, "replace": replace,
+                          "dryRun": dry_run, "align": align})
+
+    def align(self, pid: str, track: str = "main") -> dict:
+        """Queue speech alignment of one caption row to the timeline's sound (docs/API.md 6.2); returns the job."""
+        return self.post(f"/api/projects/{pid}/captions/align", {"track": track})["job"]
 
     def export(self, pid: str, **options) -> Path:
         """Render the sequence (options: burnCaptions, clipAudio, quality, encoder); returns the file path."""

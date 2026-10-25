@@ -26,6 +26,7 @@ from .secrets import SecretStore
 from .sequence import cast_looks, compose_prompt
 from .settings import SettingsStore
 from .store import ProjectStore
+from .align import AlignJobs
 from .stt import SttClient, SttJobs
 from .takes import (TAKE_DIR, commit_takes, find_item, find_shot, item_path, linked, new_take,
                     reference_image, shot_label, stage_file)
@@ -112,6 +113,7 @@ class Runners:
         self._local = LocalJobs(store, settings, media)
         self._voice = VoiceJobs(store, Audio8Voice(settings), media, VoAI(secrets))
         self._stt = SttJobs(store, SttClient(settings), media)
+        self._align = AlignJobs(store, SttClient(settings), media)
         self._llm = LLMClient(settings, secrets)
 
     # ---------------------------------------------------------------- executor protocol
@@ -123,6 +125,8 @@ class Runners:
             return self._voice.prepare(project, payload)
         if kind == "transcribe":
             return self._stt.prepare(project, shot_id)
+        if kind == "align":
+            return self._align.prepare(project, payload)
         if kind == "upscale":
             return self._prepare_upscale(project, shot_id, payload)
         if kind == "upscalevideo":
@@ -143,6 +147,8 @@ class Runners:
             return self._voice.execute(ctl)
         if ctl.kind == "transcribe":
             return self._stt.execute(ctl)
+        if ctl.kind == "align":
+            return self._align.execute(ctl)
         work = self._store.project_dir(ctl.pid) / "media" / "cache" / f"job-{ctl.id}"
         work.mkdir(parents=True, exist_ok=True)
         try:
@@ -155,7 +161,7 @@ class Runners:
             shutil.rmtree(work, ignore_errors=True)
 
     def after_restart(self, job: dict) -> str:
-        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe"):
+        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe", "align"):
             return "restart"
         remote = job.get("remote") or {}
         if remote.get("type") == "comfy":

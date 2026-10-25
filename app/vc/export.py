@@ -21,7 +21,7 @@ from typing import Callable
 
 from .captions import ass_text as _ass_text
 from .captions import ass_time as _ass_time
-from .captions import caption_ass
+from .captions import caption_ass, shown_captions
 from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
 from .grade import build_cube, clean_grade, is_neutral
@@ -148,8 +148,8 @@ def build_ass(project: dict, clips: list[dict], opts: dict, width: int, height: 
             start, end = clip["start"], clip["start"] + clip["length"]
         events.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Slate,,0,0,0,,{text}")
     burn: list[dict] = []
-    if opts["burnCaptions"] and not tracks.get("captionsHidden"):
-        burn = [cap for cap in project.get("captions", [])
+    if opts["burnCaptions"]:
+        burn = [cap for cap in shown_captions(project)
                 if (cap.get("text") or "").strip() and float(cap.get("end", 0)) > float(cap.get("start", 0))
                 and not cap.get("disabled")]
     caption_styles, caption_events = caption_ass(project, burn, play_x, size)
@@ -747,9 +747,17 @@ def _srt_time(t: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def captions_srt(project: dict) -> str:
+def captions_srt(project: dict, track: str = "") -> str:
+    """The captions as .srt; track "main" keeps the main 字幕 row only, a caption track id that row only."""
+    rows = {t["id"] for t in project.get("captionTracks") or []}
+
+    def on_track(c: dict) -> bool:
+        row = c.get("track") if c.get("track") in rows else None
+        return not track or row == (None if track == "main" else track)
+
     caps = sorted(
-        (c for c in project.get("captions", []) if (c.get("text") or "").strip() and not c.get("disabled") and not c.get("title")),
+        (c for c in project.get("captions", []) if (c.get("text") or "").strip() and not c.get("disabled")
+         and not c.get("title") and on_track(c)),
         key=lambda c: float(c.get("start", 0)),
     )
     blocks = []

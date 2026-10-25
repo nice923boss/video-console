@@ -39,6 +39,20 @@ export function anchorOf(style, cap) {
   return null;
 }
 
+// The captions on rows that are not hidden, in drawing order (shown_captions in vc/captions.py): in the bottom
+// row the lowest timeline row ends up nearest the frame edge, in the top and middle rows the highest row does.
+// The main 字幕 row is the highest; a caption on a missing row counts as on it.
+export function shownCaptions(project) {
+  const tracks = project.captionTracks || [];
+  const rows = new Map(tracks.map((t, i) => [t.id, i + 1]));
+  const hidden = new Set(tracks.filter((t) => t.hidden).map((t) => t.id));
+  const mainHidden = !!(project.tracks && project.tracks.captionsHidden);
+  const row = (c) => rows.get(c.track) || 0;
+  const key = (c) => ((c.position || "bottom") === "bottom" ? -row(c) : row(c));
+  return (project.captions || []).filter((c) => (row(c) ? !hidden.has(c.track) : !mainHidden))
+    .sort((a, b) => key(a) - key(b));
+}
+
 export const usesStyle = (project, cap, id, legacy) => resolveStyle(project, cap, legacy).id === id;
 
 // ---------------------------------------------------------------- preview CSS

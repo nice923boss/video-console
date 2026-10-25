@@ -139,6 +139,7 @@
 - 「ComfyUI」分頁預設只有本機 `http://127.0.0.1:8000`。可以新增其他電腦（例如透過 Tailscale 連線的工作站）、停用、調整順序；路由設成「自動」時，工作會派給清單中第一台在線、而且具備範本所需模型與節點的伺服器。
 - 每台伺服器會顯示連線狀態與顯示卡記憶體，可以重新檢查、釋放顯示卡記憶體、中斷目前工作。
 - 「工作流程範本」分頁管理 workflow。內建範本：FLUX3-Klein 文生圖、版面配置海報、參考圖編輯（1 到 10 張），Z-Image Turbo 文生圖、圖生圖、像素風、LTX-Video 2B 圖轉影片、放大（UltraSharp、Z-Image 細修）。影片範本可以設定影格數規則、最多影格數、建議影格率與短邊上限。也可以匯入自己的 ComfyUI API 格式 JSON，再把提示詞、種子、尺寸、輸入圖片等欄位綁到節點上。
+- 範本也能下載到自己的 ComfyUI 用：「工作流程範本」分頁工具列「下載全部工作流程（ComfyUI 用）」下載 .zip（每個範本一個 .json，附模型清單與使用說明），或在範本卡片的「⋯」選「下載給 ComfyUI 用」只下載一個。用法見 [使用說明](docs/使用說明.md#11-下載工作流程到自己的-comfyui)。
 - FLUX3-Klein 範本來自 ComfyUI 的「FLUX3-Klein進階」工作流（FK-01 到 FK-04，FK-03 單圖編輯與 FK-04 多圖合成併成一個「參考圖編輯」範本），需要三個模型檔：`flux3-image-klein-int8-convrot.safetensors`（放 diffusion_models，約 5.8GB）、`qwen3vl_4b_int8_convrot.safetensors`（放 text_encoders，約 4.9GB）、`flux2-vae.safetensors`（放 vae，約 0.3GB）。中文提示詞直接可讀，不用翻譯。RTX 4050 Laptop 6GB 實測 1280×720：從 APP 送出，文生圖約 14 秒、參考圖編輯 2 張約 52 秒（都是模型已載入）；直接送 ComfyUI，參考圖編輯 2 張約 107 秒，10 張、參考圖解析度 0.5 約 221 秒。路由 A 要改回 Z-Image，在「路由」分頁把生圖範本換回 Z-Image 範本即可。
   - 參考圖編輯：鏡頭「生成」分頁的參考圖區可放 1 到 10 張（第 1 張是原本的參考圖，按「新增」從版本或素材庫挑其餘幾張），提示詞用「第一張圖的…」「第二張圖的…」指名要取哪個人物、物件或場景。Klein 是整張重畫，沒有參考強度，這個範本不顯示參考強度滑桿；要保留什麼請寫進提示詞。張數多時把範本參數「參考圖解析度」調低，省顯示卡記憶體與時間。改用只讀一張的範本（例如 Z-Image 圖生圖）時，參考圖區會提示其餘幾張會略過；文生圖範本則提示不使用參考圖。
   - 版面配置海報：範本參數「元素表」是 JSON，逐一指定每個文字或物件的框；提示詞用 `<obj_1>`、`<obj_2>` 對應第幾個元素。這個範本會畫字，不加「畫面不畫字」的條件，Klein 常在主標題外補上假字，出圖後請檢查。
@@ -253,7 +254,6 @@ Video Console/
   docs/                使用說明、API 說明、Claude 設置指南、改進清單
   tools/vc_client.py   API 的 Python 用戶端
   claude/skills/       Claude Code SKILL
-  tests/               自動測試（pytest，含瀏覽器測試）
   packaging/           打包執行檔的腳本與圖示
 ```
 
@@ -270,24 +270,6 @@ Video Console/
 | 輸出影片失敗 | 到「設定 › 依賴元件」確認 ffmpeg 是「就緒」，不是就按「一鍵安裝」；也可以在「設定 › 影片輸出」指定 ffmpeg 路徑 |
 | 依賴元件安裝失敗 | 卡片上會顯示原因（網路中斷、SHA-256 不符等），按「重試」，已下載的部分會接著下載；所有來源都被擋時，改把 ffmpeg 放進 PATH 再按「重新檢查」 |
 | 要換資料夾位置 | 用 `--data` 參數或設定環境變數 `VC_DATA_DIR` |
-
-## 測試
-
-```bash
-python -m pytest -q tests
-```
-
-測試只連 127.0.0.1 上的假伺服器，不會呼叫真正的雲端 API 或 ComfyUI。
-
-`tests/test_web_ui.py` 用無頭 Chromium 操作畫面（匯入音量、參考圖區、音量表），`tests/test_preview_match.py` 比對調色後的預覽畫面與輸出影格；兩個檔案都要先安裝 Playwright 與它的 Chromium，沒裝時會略過：
-
-```bash
-python -m pip install playwright
-```
-
-```bash
-python -m playwright install chromium
-```
 
 ## 自己打包執行檔
 

@@ -359,6 +359,8 @@ CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _s
                   "shot": _opt_id,  # the storyboard shot showing this text; timing stays the caption's own
                   "sttShot": _opt_id,  # added by speech-to-subtitle from this shot; a rerun replaces it
                   "title": _bool,  # a title card (GR-10): burnt in like the rest, left out of the .srt
+                  "track": _opt_id,  # one of project.captionTracks; None: the main 字幕 row
+                  "pair": _opt_id,  # the caption this one translates (bilingual import); speech alignment times both
                   "disabled": _bool}
 # Sizes and distances are pixels on a 1080-high frame, as in the burnt-in ASS script.
 CAPTION_STYLE_FIELDS = {
@@ -421,6 +423,7 @@ TRACK_FIELDS = {"videoHidden": _bool, "videoMuted": _bool, "captionsHidden": _bo
                 "speechRows": _opt_row_keys,  # rows whose every clip is voice; None: the 配音 rows (duck.py)
                 "bgmRows": _row_keys}  # music tracks that dip under voice
 LAYER_FIELDS = {"name": _str(40), "hidden": _bool, "muted": _bool}
+CAPTION_TRACK_FIELDS = {"name": _str(40), "hidden": _bool}
 OVERLAY_FIELDS = {
     "name": _str(120),
     "layer": _opt_id,

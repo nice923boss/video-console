@@ -177,7 +177,7 @@ function step(seconds) {
 }
 
 export function Player({ project, clips, hotkeys = true, meters = false, onToggleMeters = null, bin = false, onToggleBin = null,
-  scopes = false, onToggleScopes = null, onLayout = null, side = null }) {
+  scopes = false, onToggleScopes = null, onLayout = null, side = null, chat = false, onToggleChat = null }) {
   const legacy = useStore((s) => legacySize(s.settings));
   const gradeDraft = useStore((s) => s.gradeDraft);
   const maskDraft = useStore((s) => s.maskDraft);
@@ -373,6 +373,8 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
         onClick=${() => setLoop(!loop)} />
       ${onToggleScopes && html`<${IconButton} icon="activity" size=${16} active=${scopes} onClick=${onToggleScopes}
         title=${`${scopes ? "隱藏" : "顯示"}示波器（亮度波形、向量儀）${keyHint("edit.scopes")}`} />`}
+      ${onToggleChat && html`<${IconButton} icon="bot" size=${16} active=${chat} onClick=${onToggleChat}
+        title=${`${chat ? "隱藏" : "顯示"} AI 助理：用文字模型剪輯與上字幕${keyHint("edit.chat")}`} />`}
       <${IconButton} icon="frame" size=${16} active=${view.safe || view.thirds || compare} title="預覽畫面選項"
         onClick=${(e) => viewMenu(e, view, setView, cover, res, setRes, compare)} />
       <div class="pl-vol">

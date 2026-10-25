@@ -197,6 +197,30 @@ class LLMClient:
             "temperature": cfg["temperature"],
             "stream": False,
         }
+        content = self._message(cfg, body, timeout).get("content")
+        return _THINK_RE.sub("", str(content or "")).strip()
+
+    def complete(self, messages: list[dict], tools: list[dict], *, timeout: float = 300) -> dict:
+        """One turn of a tool-using conversation: {"content", "tool_calls": [{"id", "name", "arguments"}]}, where
+        arguments is the model's JSON text for the caller to parse."""
+        cfg = self._config()
+        body: dict[str, Any] = {"model": cfg["model"], "messages": messages, "tools": tools,
+                                "temperature": cfg["temperature"], "stream": False}
+        message = self._message(cfg, body, timeout)
+        calls = []
+        for k, call in enumerate(message.get("tool_calls") or []):
+            fn = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(fn, dict) or not fn.get("name"):
+                continue
+            args = fn.get("arguments")
+            calls.append({"id": str(call.get("id") or f"call_{k}"), "name": str(fn["name"]),
+                          "arguments": args if isinstance(args, str) else json.dumps(args or {}, ensure_ascii=False)})
+        content = _THINK_RE.sub("", str(message.get("content") or "")).strip()
+        return {"content": content, "tool_calls": calls}
+
+    # ---------------------------------------------------------------- helpers
+    def _message(self, cfg: dict, body: dict, timeout: float) -> dict:
+        """choices[0].message of one /chat/completions call."""
         url = cfg["baseUrl"] + "/chat/completions"
         try:
             try:
@@ -210,12 +234,13 @@ class LLMClient:
         except AppError as exc:
             raise AppError(f"LLM 呼叫失敗：{exc.message}", 502) from None
         try:
-            content = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError):
-            raise AppError("LLM 回應格式不正確（不是 OpenAI 相容格式）", 502) from None
-        return _THINK_RE.sub("", str(content or "")).strip()
+            message = None
+        if not isinstance(message, dict):
+            raise AppError("LLM 回應格式不正確（不是 OpenAI 相容格式）", 502)
+        return message
 
-    # ---------------------------------------------------------------- helpers
     def _config(self, require_enabled: bool = True) -> dict:
         cfg = self._settings.section("llm")
         if require_enabled and not cfg.get("enabled"):

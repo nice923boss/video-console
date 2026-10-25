@@ -66,6 +66,12 @@ def _prune(project: dict, restored: set[str]) -> int:
     overlays = project.get("overlays") if isinstance(project.get("overlays"), list) else []
     project["overlays"] = [o for o in overlays if isinstance(o, dict) and o.get("mediaId") in project["media"]
                            and o.get("layer") in ids]
+    tracks = project.get("captionTracks") if isinstance(project.get("captionTracks"), list) else []
+    project["captionTracks"] = [x for x in tracks if isinstance(x, dict) and x.get("id")]
+    track_ids = {x["id"] for x in project["captionTracks"]}
+    for cap in project.get("captions") or []:
+        if isinstance(cap, dict) and cap.get("track") and cap["track"] not in track_ids:
+            cap["track"] = None
     return dropped
 
 

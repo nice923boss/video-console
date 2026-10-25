@@ -7,7 +7,7 @@
 import { fileUrl } from "../lib/format.js";
 import { clipIndexAt, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
-import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged } from "../lib/caption-style.js";
+import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged, shownCaptions } from "../lib/caption-style.js";
 import { litCount, fillCaption } from "../lib/karaoke.js";
 import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
@@ -364,7 +364,7 @@ export function createEngine(host, hooks = {}) {
     const k = 1080 / height;
     const frame = caps.getBoundingClientRect();
     const probes = [];
-    (project.captions || []).forEach((c) => {
+    shownCaptions(project).forEach((c) => {
       if (!(c.text || "").trim() || !(c.end > c.start) || c.disabled) return;
       const s = resolveStyle(project, c, legacy);
       const point = anchorOf(s, c);
@@ -394,7 +394,7 @@ export function createEngine(host, hooks = {}) {
   // moved off any dragged caption shown before it.
   function drawCaptions(t) {
     if (drag || held) return;
-    const active = (project.captions || []).filter((c) => c.start <= t && t < c.end && (c.text || "").trim() && !c.disabled);
+    const active = shownCaptions(project).filter((c) => c.start <= t && t < c.end && (c.text || "").trim() && !c.disabled);
     const shifts = dragShifts();
     const looks = active.map((c) => {
       const s = resolveStyle(project, c, legacy);
@@ -713,7 +713,6 @@ export function createEngine(host, hooks = {}) {
     layers.style.opacity = flags.videoHidden ? "0" : "";
     drawOverlays(t, playing, g);
     drawGrade(t);
-    caps.style.visibility = flags.captionsHidden ? "hidden" : "";
     drawCaptions(t);
     drawAudio(t, playing, g);
     fade.style.opacity = String(1 - g);

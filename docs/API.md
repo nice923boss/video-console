@@ -14,7 +14,7 @@
 |---|---|
 | 位址 | 只聽 `127.0.0.1`，連接埠 8790；被占用時往後找到 8799 |
 | 目前連接埠 | `data/run/server.json` 的 `port` 欄位（VC 執行中才有） |
-| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.6.0", "build": "1.6.0+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
+| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.7.0", "build": "1.7.0+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
 | 必要標頭 | POST、PUT、DELETE 一律加 `X-VC: 1`，否則 403 |
 | 主機檢查 | `Host` 必須是 `127.0.0.1:<port>` 或 `localhost:<port>`，跨站請求一律 403 |
 | 資料格式 | JSON 本文，UTF-8；上傳檔案用原始位元組本文（不是 multipart） |
@@ -55,7 +55,8 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
 | `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本。影片版本與素材可能有 `preview2`、`preview4`：1/2、1/4 解析度預覽檔的路徑（`media/thumbs/<id>_p2.mp4`），由 `preview-files` 產生，只供預覽播放，輸出一律用原檔 |
-| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title}`，時間是序列上的秒數。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
+| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title, track, pair, disabled}`，時間是序列上的秒數。`track` 是所在的字幕軌（`captionTracks` 的 id；沒有或指向已不存在的軌道時算在主字幕軌）。`pair` 是這句所翻譯那句字幕的 id（雙語匯入時英文指向中文），語音對齊時兩句一起移動。`disabled: true` 時保留位置，但不顯示、不輸出、不寫進 SRT。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
+| `captionTracks` | 主字幕軌以外的字幕軌 `{id, name, hidden}`。陣列順序是時間軸上由上到下的順序，主字幕軌永遠在最上面。同時出現在畫面下方的字幕，越下面的軌道越靠近畫面底邊（雙語匯入的英文軌在中文軌下面，所以英文在最下一行、中文在上一行）；畫面上方與中間的字幕相反，越上面的軌道越靠近邊緣。`hidden: true` 的軌道預覽與輸出都不顯示；主字幕軌的開關是 `tracks.captionsHidden` |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
 | `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed` |
 | `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背 |
@@ -156,11 +157,14 @@ POST /api/projects/{pid}/ops
 | `item.derive` | `{"id": "m_...", "patch": {"wave": "media/thumbs/m_..._wave.json", "alphaCodec": "vp9"}}`：重新讀檔得到的版本或素材資料（波形檔、縮圖 `thumb`、膠卷縮圖 `strip`、透明 webm 的編碼 `vp8`／`vp9`、預覽檔 `preview2`／`preview4`），開啟專案時的補齊流程使用，一般修改不需要 |
 | `item.relink` | `{"id": "m_...", "patch": {"file": "media/...", "duration": 8.0}, "unset": ["wave"]}`：把素材或版本換成另一個檔（重新連結），用到它的鏡頭與片段不動。由 `upload?target=relink` 的工作送出，一般不直接用 |
 | `captionStyle.*`、`take.*`、`media.*`、`layer.*` | 樣式庫、版本、素材、軌道 |
+| `captionTrack.add` | `{"track": {"id": "ct_...", "name": "English", "hidden": false}, "index": 1}`：新增字幕軌，`index` 不給時加在最下面；名稱 40 字內 |
+| `captionTrack.update` | `{"id": "ct_...", "patch": {"name": "...", "hidden": true}}` |
+| `captionTrack.delete` | `{"id": "ct_..."}`：連同軌道上的字幕一起刪除，復原時一起回來 |
 | `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks", "review"}}` |
 | `batch` | `{"op": "batch", "ops": [...]}`：多個 op 包成一組 |
 | `linked` | `{"op": "linked", "ops": [...]}`：鏡頭變動時字幕、配音、上層畫面跟著移動；加 `"shift": false` 只收起、放回，不平移 |
 
-字幕文字上限 500 字。
+字幕文字上限 500 字。`caption.add`、`caption.update` 的 `track` 指向不存在的字幕軌時，整批回 400。
 
 各種 `*.update` 可以多帶 `"unset": ["欄位", ...]` 把欄位整個拿掉（例如 `{"op": "audio.update", "id": "a_...", "patch": {}, "unset": ["keyframes"]}`）；和設成 `null` 不同，拿掉後回到「沒有這個欄位」的預設行為。
 
@@ -319,6 +323,7 @@ POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
 |---|---|---|
 | `ingest` | 匯入檔案 | 由 upload 端點建立，不要直接送 |
 | `transcribe` | 語音轉字幕 | `{}`，需要 `shotId` |
+| `align` | 語音對齊字幕（6.2 節） | `{"track": "main" 或字幕軌 id}`，不需要 `shotId` |
 | `export` | 輸出影片 | 見第 7 節 |
 | `package` | 打包 ZIP | `{"includeVideos", "includeExport", "fullBackup"}` |
 | `voice` | 文字轉配音 | 依配音引擎設定 |
@@ -349,8 +354,62 @@ vc.wait(job["id"])
 - 已有字幕時新字幕會另外加入，不會取代。整批可用一次 undo 收回。
 - 引擎是另一個專案 Speech-to-subtitle（faster-whisper large-v3，選用 MFA 精準對齊）。設定在 `settings.stt`：`{"folder": "", "python": ""}`。留白時找 VC 同一層的 `Speech-to-subtitle` 資料夾，Python 用它 `pyvenv.cfg` 指向的直譯器。
 - 自我檢查：`POST /api/stt/check`（最多 180 秒），回 `{"ok", "cuda", "model", "ffmpeg", "mfa", "opencc", "folder", "python"}`，`ok` 需要 CUDA 與模型都就緒。
-- 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；不含標題字卡；沒有字幕時 409）。
+- 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；不含標題字卡與停用的字幕；沒有字幕時 409）。不加參數時，全部字幕依時間排成一份。加 `?track=main` 只取主字幕軌，加 `?track=<字幕軌 id>` 只取那一軌（例如雙語匯入後分別取中文、英文 SRT）；軌道不存在時 404。
 - 匯入 SRT：`POST /api/projects/{pid}/captions.srt`，body 是 .srt 檔原始內容（最多 10 MB），回 `{"rev", "added", "voiced"}`。字幕放在檔案記載的時間（序列秒數）加上 `?offset=` 秒數（預設 0），位置 `bottom`、不綁鏡頭；`<...>` 與 `{\...}` 標記會拿掉，多行文字保留換行（每行去頭尾空白、略過空行），超過 500 字截斷。編碼依序判斷：有 BOM 的 UTF-16、UTF-8（BOM 可有可無）、其餘當 Big5。加 `?replace=1` 先刪掉專案現有字幕（標題字卡保留），這時 `?voices=` 決定綁在舊字幕上的配音：`delete`（預設，刪掉）、`keep`（留在配音軌當一般片段）、`regen`（刪掉，新字幕沿用時間重疊最多的舊字幕的說話者，方便重新配音）；`voiced` 是有說話者的新字幕 id。整批是一個 undo 步驟（標籤「匯入 SRT」）。檔案裡沒有可用字幕時回 400 且不動現有字幕。
+
+### 6.1 匯入中英對照文字（雙語字幕）
+
+```python
+text = vc.docx_text("對照.docx")  # POST /api/script/docx：Word 檔先轉成文字；純文字可直接送
+out = vc.bilingual(pid, text, english="single", align=True)  # POST /api/projects/{pid}/captions/bilingual
+vc.wait(out["job"]["id"])                                     # align: true 時接著跑語音對齊
+```
+
+`POST /api/projects/{pid}/captions/bilingual`，本文：
+
+| 欄位 | 預設 | 說明 |
+|---|---|---|
+| `text` | 必填 | 中英對照文字（30 萬字、3000 組以內），一行中文接一行英文，或一行英文接一行中文 |
+| `english` | `double` | 英文字幕的行數：`double` 一句最多兩行，`single` 一行（太長的句子切成更多段）。其他值 400 |
+| `start` | `0` | 第一句的開始秒數（序列秒數） |
+| `replace` | `false` | 先刪掉「中文」「English」兩軌原有的字幕與綁在上面的配音，再加入 |
+| `dryRun` | `false` | 只回傳會加入什麼，不修改專案 |
+| `align` | `false` | 加入後接著送出 `align` 工作，對齊中文軌（英文跟著中文） |
+
+規則：
+
+- 配對：文件第一行是哪種語言，就以那種語言的每一行開始一組；另一種語言的下一行配進這一組，連續兩行同語言（翻譯分成兩段）時接在一起。漢字佔字母數五分之一以上的行算中文。行首的項目符號（`*`、`•`、`-` 等）會拿掉。
+- 軌道與樣式：中文放「中文」軌、套「雙語中」樣式，英文放它下面的「English」軌、套「English」樣式，兩者都在畫面下方，英文在最下一行。專案還沒有這兩條軌道或這兩個樣式時自動建立，已有同名的就沿用（使用者改過的樣式照改過的用）。
+- 切段：一組超過畫面寬度時，在標點處切成幾段（中文一行、英文依 `english` 一或兩行，中英切成相同段數，最多 8 段）；書名號、引號、括號裡的文字與數字前面盡量不切。
+- 時間：未對齊前依閱讀速度一句接一句排（中文約每秒 4 字、英文每秒 2.5 字，每句 1.2~8 秒）。每句英文的 `pair` 指向同一段的中文。
+- 整批是一個 undo 步驟（標籤「匯入雙語字幕」）。
+
+回應：
+
+```json
+{"pairs": 177, "count": 196, "notes": ["38 段超出畫面寬度，已切成較短的字幕"],
+ "tracks": {"zh": "ct_...", "en": "ct_..."},
+ "segments": [{"zh": "歡迎收看本週的旅遊特輯", "en": "Welcome to this week's travel special",
+               "split": false, "start": 0.0, "end": 3.25}],
+ "rev": 41, "job": {"id": "j_...", "kind": "align", ...}}
+```
+
+`segments` 最多回 300 段（`count` 是全部段數）。`dryRun` 時沒有 `rev`、`job`。`align: true` 但對齊工作無法開始時（例如時間軸沒有片段、Speech-to-subtitle 不在），字幕照樣加入，回應改帶 `alignError`（原因）而沒有 `job`。
+
+注意：`/api/script/docx` 遇到有表格的 Word 檔時只回表格內容（tab 分隔），左右兩欄排版的中英對照不適用，請改成上下交錯的段落再匯入。
+
+### 6.2 語音對齊字幕
+
+`POST /api/projects/{pid}/captions/align {"track": "main" 或字幕軌 id}` → `{"job": {...}}`（等同 `POST /api/jobs {"kind": "align", "pid", "payload": {"track"}}`）。
+
+- 把時間軸目前的聲音（和輸出相同的混音，不含淡入淡出）轉成 16 kHz 單聲道交給 Speech-to-subtitle 辨識一次，拿到每個字的時間，再把這一軌的字幕文字和辨識結果逐字比對（中文一個字、英文一個詞算一個單位，不分大小寫、全半形、標點）。
+- 一句字幕至少 30% 的字對得上（連續兩個字以上才算；三個字以內的短句可以單字對上），就移到那段語音的時間，開頭或結尾聽錯的字依語速往外補；字幕之間不到 0.5 秒的停頓會補滿，避免字幕閃爍。
+- 對不上的句子維持原本長度，排進前後兩句對上的字幕之間的空檔（空檔太短時等比例縮短），並設成 `disabled: true`，等人檢查。最後一句對上的字幕之後的句子排到時間軸結尾為止，放不下時同樣等比例縮短（每句至少 0.2 秒，句數太多時才會超出結尾）。對上的句子 `disabled` 設回 `false`。
+- `pair` 連在一起的字幕（雙語匯入的英文）跟著同時移動；綁在字幕上的配音（`captionId`）跟著平移，`fixed` 的不動。標題字卡不參與對齊。
+- 只用來移動既有字幕，不新增字幕（要從聲音產生新字幕請用 `transcribe`）。
+- 結果寫成一個 undo 步驟（標籤「語音對齊字幕」）；工作的 `result` 是 `{"message", "heard", "unheard"}`。聲音裡完全辨識不到語音時不修改字幕，`message` 會說明。
+- 送出時檢查：軌道不存在 404；軌道上沒有可對齊的字幕、時間軸上沒有片段、Speech-to-subtitle 找不到時 400。和 ComfyUI、語音轉字幕共用同一個執行位置。
+- 限制：比對依時間先後進行，影片內容的順序和字幕順序不同（段落對調、整段重複）時，那幾段會對錯或對不上。
 
 ## 7. 輸出
 
@@ -388,7 +447,9 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 
 `GET /api/events`，每則格式 `data: {"type": "...", "data": {...}}`。第一則是 `hello`（`{"instance", "version", "build"}`；重新連線後 `build` 和先前不同，代表 VC 已換成新版，介面會提示重新整理），緩衝溢位時送 `resync`（重新抓全部狀態），閒置時送 `: ping` 註解行。
 
-type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`notify`、`settings`、`project`、`projects`、`costs`。
+type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`notify`、`settings`、`project`、`projects`、`costs`、`chat`。
+
+`chat` 是 AI 助理（第 11 節）的進度：每執行一個工具送一則 `{"pid", "id", "step"}`，這一輪結束（不論成功、失敗或停止）送 `{"pid", "id", "done": true}`。
 
 ## 9. 端點總表
 
@@ -434,6 +495,10 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | GET | `/api/projects/{pid}/export-check` | 輸出前檢查（第 7 節） |
 | GET | `/api/projects/{pid}/captions.srt` | 字幕 SRT |
 | POST | `/api/projects/{pid}/captions.srt` | 匯入 SRT 字幕（第 6 節） |
+| POST | `/api/projects/{pid}/captions/bilingual` | 匯入中英對照文字成兩軌字幕（6.1 節） |
+| POST | `/api/projects/{pid}/captions/align` | 語音對齊一條字幕軌（6.2 節） |
+| POST | `/api/projects/{pid}/chat` | AI 助理對話一輪（第 11 節），等模型做完才回應 |
+| POST | `/api/projects/{pid}/chat/cancel` | 停止進行中的一輪 `{"id"}`，回 `{"stopped": bool}` |
 | GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |
 | GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
 | GET | `/api/projects/{pid}/review.html` | 客戶審稿網頁（SB-13）：序列中每個鏡頭的畫面（data: URI，單檔可離線開啟）、秒數、提示詞與字幕，以附件下載（檔名 `<專案>_審稿.html`）。客戶在頁面留言後下載 `{"vc": "review-comments", "version": 1, "project", "name", "by", "at", "note", "shots": [{"id", "no", "name", "text"}]}` 的 .json 檔 |
@@ -448,6 +513,8 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | | `/api/jobs...` | 背景工作（第 5 節） |
 | POST | `/api/stt/check` | 語音轉字幕自我檢查 |
 | | `/api/comfy...`、`/api/workflows...` | ComfyUI 伺服器與工作流程 |
+| GET | `/api/workflows/comfyui.zip` | 所有工作流程範本（內建與自訂）轉成 ComfyUI 的 API 格式 .json，加上 `使用說明.txt`（每個範本需要的模型、放到哪個 `models` 子資料夾、範本有附的下載網址），以附件下載（檔名 `Video Console ComfyUI 工作流程.zip`）。.json 拖進 ComfyUI 畫面即可開啟；要輸入圖片的範本放一個 `LoadImage` 節點，預設值 `example.png` 當佔位 |
+| GET | `/api/workflows/{wid}/comfyui.json` | 單一範本的 API 格式 .json，檔名取自範本名稱。找不到範本回 404 |
 | | `/api/providers...`、`/api/llm/...` | 雲端生成服務、提示詞潤飾 |
 | GET | `/api/costs` | 本月雲端預估費用（第 5 節） |
 | | `/api/styles...` | 風格庫（第 5 節） |
@@ -461,3 +528,48 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 - `/program.html` 是第二螢幕用的節目畫面，由剪輯頁的播放器開啟，透過瀏覽器的 BroadcastChannel `vc-program` 跟著主視窗播放，不出聲，也沒有自己的 API。
 - 時間都用秒（浮點數）。鏡頭的 `trimIn`／`trimOut` 是原始影片的時間，字幕的 `start`／`end` 是序列上的時間，兩者不同。
 - 長工作（ingest 4K 檔、transcribe、export）可能要數分鐘到數十分鐘，請用 `GET /api/jobs/{jid}` 輪詢或聽 SSE 的 `job` 事件。
+
+## 11. AI 助理（文字模型對話）
+
+剪輯頁的「AI 助理」面板（Ctrl+Shift+9）用的端點：使用者用一般的話交代，文字模型讀取專案、再透過和 HTTP API 相同的路由修改專案。Claude Code 這類外部程式直接呼叫前面幾節的 API 即可，不需要經過這裡。
+
+需要先設定文字模型：`PUT /api/settings {"llm": {"enabled": true, "baseUrl": "http://主機:埠/v1", "model": "qwen3.6-35b-a3b", "temperature": 0.7}}`，金鑰（有的話）用 `PUT /api/secrets` 存成 `llm.api_key`。服務要相容 OpenAI 的 `/v1/chat/completions`，並支援 `tools`（function calling）。
+
+```python
+out = vc.post(f"/api/projects/{pid}/chat", {
+    "messages": [{"role": "user", "content": "把附件匯入成中英雙語字幕，英文單行，再用語音對齊"}],
+    "attachment": {"name": "對照.docx", "text": vc.docx_text("對照.docx")},
+}, timeout=900)
+print(out["reply"])
+```
+
+`POST /api/projects/{pid}/chat`，本文：
+
+| 欄位 | 說明 |
+|---|---|
+| `id` | 這一輪的代號（英數、`_`、`-`，40 字內），停止時用；不給時自動產生 |
+| `messages` | 對話紀錄 `[{"role": "user" 或 "assistant", "content"}]`，最後一則要是使用者的話。只取最後 20 則，每則前 4000 字 |
+| `attachment` | 選填 `{"name", "text"}`：附加的文字（30 萬字內，Word 檔先用 `/api/script/docx` 轉文字）。模型會看到開頭 1500 字，`import_bilingual` 不給 `text` 時用整份附件 |
+
+回應 `{"id", "reply", "steps", "stopped"}`：
+
+- `reply` 是模型最後的回覆。`steps` 是這一輪執行過的工具 `[{"tool", "args", "ok", "error"?, "job"?}]`，`job` 是工具送出的背景工作 id。
+- `stopped`：`null` 正常結束；`"cancel"` 被停止；`"limit"` 已用完 12 輪模型呼叫。
+- 請求會等到這一輪做完才回應，慢的模型可能要好幾分鐘，請把逾時拉長；進度可聽 SSE 的 `chat` 事件。
+- 錯誤：專案不存在 404；文字模型沒開 409；模型連不上、金鑰錯誤、回傳格式不對 502；附件太長 413；`messages` 格式不對 400。
+
+模型能用的工具：
+
+| 工具 | 做什麼 |
+|---|---|
+| `project_info` | 專案名稱、尺寸、長度、鏡頭數、每條字幕軌的字幕數、字幕樣式、最近一個復原步驟 |
+| `timeline` | 鏡頭與其他軌道的片段、標記（可用 `from`、`to` 限定範圍） |
+| `list_captions` | 字幕（可指定軌道、範圍，一次最多 200 則，用 `offset` 翻頁） |
+| `apply_ops` | 送一批 ops（第 3 節），一個復原步驟，標籤自動加上「AI 助理：」 |
+| `edit` | 一個剪輯指令（3.7 節） |
+| `import_bilingual` | 匯入中英對照（6.1 節） |
+| `align_captions`、`transcribe` | 送出語音對齊、語音轉字幕工作 |
+| `job_status` | 查一個背景工作 |
+| `undo` | 復原最新一步，只限 AI 助理做的步驟（標籤以「AI 助理：」開頭，或這一輪做的剪輯指令、匯入） |
+
+`POST /api/projects/{pid}/chat/cancel {"id"}` 停止那一輪：在下一次呼叫模型前停下，已經送出的模型呼叫會等它回來。找不到進行中的那一輪時回 `{"stopped": false}`。

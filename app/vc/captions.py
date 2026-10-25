@@ -33,6 +33,24 @@ def resolve_style(project: dict, caption: dict, legacy_size: int = 52) -> dict:
     return merged
 
 
+def shown_captions(project: dict) -> list[dict]:
+    """The captions on rows that are not hidden, in drawing order: captions shown together in the bottom row
+    stack with the lowest timeline row nearest the frame edge, those in the top and middle rows with the highest
+    row first (libass keeps the first event in place and moves later ones away from the edge, as the preview's
+    rows do). The main 字幕 row is the highest; a caption on a missing row counts as on it."""
+    tracks = project.get("captionTracks") or []
+    rows = {t["id"]: i + 1 for i, t in enumerate(tracks)}
+    hidden = {t["id"] for t in tracks if t.get("hidden")}
+    main_hidden = bool((project.get("tracks") or {}).get("captionsHidden"))
+
+    def row(cap: dict) -> int:
+        return rows.get(cap.get("track"), 0)
+
+    shown = [c for c in project.get("captions") or []
+             if not (c.get("track") in hidden if row(c) else main_hidden)]
+    return sorted(shown, key=lambda c: -row(c) if (c.get("position") or "bottom") == "bottom" else row(c))
+
+
 def anchor(style: dict, caption: dict) -> tuple[float, float] | None:
     """Where a dragged caption sits (fractions of the frame); None when it follows its row."""
     for item in (caption, style):

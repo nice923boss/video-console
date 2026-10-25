@@ -63,6 +63,7 @@ const HANDLERS = {
   deps: (data) => data && setState({ deps: data }),
   system: (data) => data && setState({ system: data }),
   costs: (data) => data && setState({ costs: data }),
+  chat: (data) => data && window.dispatchEvent(new CustomEvent("vc-chat", { detail: data })), // components/chat-panel.js
 };
 
 function onMessage(e) {

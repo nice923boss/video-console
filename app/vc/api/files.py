@@ -179,7 +179,10 @@ def register(router: Router, app: App) -> None:
     @router.route("GET", "/api/projects/{pid}/captions.srt")
     def captions(req: Request) -> Response:
         project = store.get(req.params["pid"])
-        text = captions_srt(project)
+        track = req.query.get("track") or ""
+        if track and track != "main" and not any(t["id"] == track for t in project.get("captionTracks") or []):
+            raise AppError("字幕軌道不存在", 404)
+        text = captions_srt(project, track)
         if not text:
             raise AppError("這個專案還沒有字幕可以匯出", 409)
         return Response(BOM + text, content_type="application/x-subrip; charset=utf-8",

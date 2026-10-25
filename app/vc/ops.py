@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from .linked import follow_ops
 from .opfields import (
-    ADJUST_FIELDS, AUDIO_FIELDS, CAPTION_FIELDS, CAPTION_STYLE_FIELDS, CAST_FIELDS, LAYER_FIELDS, MARKER_FIELDS,
+    ADJUST_FIELDS, AUDIO_FIELDS, CAPTION_FIELDS, CAPTION_STYLE_FIELDS, CAPTION_TRACK_FIELDS, CAST_FIELDS, LAYER_FIELDS, MARKER_FIELDS,
     MAX_CAPTION_STYLES, MAX_OPS, OVERLAY_FIELDS, SETTINGS_FIELDS, SHOT_FIELDS, STYLE_FIELDS, TAKE_FIELDS,
     TRACK_FIELDS, _bool, _clean_patch, _find, _float, _int, _review, _str, _tags, _update_item, clean_caption_style,
     clean_shot, snap8, valid_id,
@@ -253,6 +253,8 @@ def _list_add(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
                 raise AppError("上層畫面只能使用素材庫裡的圖片或影片")
             if _find(p["layers"], clean.get("layer")) < 0:
                 raise AppError("畫面軌道不存在")
+        if key == "captions" and clean.get("track") and _find(p.get("captionTracks") or [], clean["track"]) < 0:
+            raise AppError("字幕軌道不存在")
         p[key].append(clean)
         p[key].sort(key=lambda it: it.get("start", 0))
         return {"op": f"{_SINGULAR[key]}.delete", "id": item["id"]}
@@ -268,6 +270,8 @@ def _list_update(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
         patch = _clean_patch(op.get("patch"), fields)
         if key == "overlays" and "layer" in patch and _find(p["layers"], patch["layer"]) < 0:
             raise AppError("畫面軌道不存在")
+        if key == "captions" and patch.get("track") and _find(p.get("captionTracks") or [], patch["track"]) < 0:
+            raise AppError("字幕軌道不存在")
         item = p[key][i]
         undo = _update_item(item, op, patch, fields)
         p[key].sort(key=lambda it: it.get("start", 0))
@@ -416,6 +420,44 @@ def _media_update(p: dict, op: dict) -> dict | None:
     return {"op": "media.update", "id": media["id"], **undo}
 
 
+def _caption_track_add(p: dict, op: dict) -> dict | None:
+    track = op.get("track")
+    if not isinstance(track, dict) or not valid_id(track.get("id")):
+        raise AppError("字幕軌道資料格式不正確")
+    tracks = p.setdefault("captionTracks", [])
+    if _find(tracks, track["id"]) >= 0:
+        return None
+    clean = {"id": track["id"], "name": "", "hidden": False,
+             **_clean_patch({k: v for k, v in track.items() if k in CAPTION_TRACK_FIELDS}, CAPTION_TRACK_FIELDS)}
+    index = op.get("index")
+    index = len(tracks) if index is None else max(0, min(len(tracks), int(index)))
+    tracks.insert(index, clean)
+    return {"op": "captionTrack.delete", "id": clean["id"]}
+
+
+def _caption_track_update(p: dict, op: dict) -> dict | None:
+    tracks = p.get("captionTracks") or []
+    i = _find(tracks, op.get("id"))
+    if i < 0:
+        return None
+    patch = _clean_patch(op.get("patch"), CAPTION_TRACK_FIELDS)
+    undo = _update_item(tracks[i], op, patch, CAPTION_TRACK_FIELDS)
+    return {"op": "captionTrack.update", "id": tracks[i]["id"], **undo}
+
+
+def _caption_track_delete(p: dict, op: dict) -> dict | None:
+    """Removes the caption row and the captions on it; undo puts both back."""
+    tracks = p.get("captionTracks") or []
+    i = _find(tracks, op.get("id"))
+    if i < 0:
+        return None
+    track = tracks.pop(i)
+    removed = [c for c in p["captions"] if c.get("track") == track["id"]]
+    p["captions"] = [c for c in p["captions"] if c.get("track") != track["id"]]
+    return {"op": "batch", "ops": [{"op": "captionTrack.add", "track": track, "index": i},
+                                   *({"op": "caption.add", "item": c} for c in removed)]}
+
+
 HANDLERS: dict[str, Callable[..., dict | None]] = {
     "project.update": _project_update,
     "project.replace": _project_replace,
@@ -431,6 +473,9 @@ HANDLERS: dict[str, Callable[..., dict | None]] = {
     "caption.add": _list_add("captions", CAPTION_FIELDS),
     "caption.update": _list_update("captions", CAPTION_FIELDS),
     "caption.delete": _list_delete("captions"),
+    "captionTrack.add": _caption_track_add,
+    "captionTrack.update": _caption_track_update,
+    "captionTrack.delete": _caption_track_delete,
     "cast.add": _list_add("cast", CAST_FIELDS),
     "cast.update": _list_update("cast", CAST_FIELDS),
     "cast.delete": _cast_delete,
