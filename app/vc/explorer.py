@@ -19,6 +19,7 @@ EXPLORER_CLASS = "CabinetWClass"
 SW_RESTORE = 9
 WAIT = 3.0  # how long to look for the window
 REUSED_AFTER = 1.0  # no new window by then: Explorer showed the folder in a window that was already open
+HOLD = 2.0  # how long to keep the window in front after bringing it there
 
 ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
@@ -87,11 +88,26 @@ def _bring_forward(user32: ctypes.WinDLL, kernel32: ctypes.WinDLL, before: set[i
         if target is None and waited >= REUSED_AFTER:
             target = next((hwnd for hwnd, title in windows.items() if shows(title, folder)), None)
         if target is not None:
-            if not _activate(user32, kernel32, target):
-                log.warning("Could not bring the Explorer window for %s to the front", folder)
+            _hold_front(user32, kernel32, target, folder)
             return
         time.sleep(0.1)
     log.warning("No Explorer window showed %s within %.0f s", folder, WAIT)
+
+
+def _hold_front(user32: ctypes.WinDLL, kernel32: ctypes.WinDLL, hwnd: int, folder: Path) -> None:
+    """Activate the window, then for HOLD seconds activate it again whenever the foreground falls back to the
+    window that had it before (the browser): now and then, about a second after a new Explorer window got the
+    foreground, Windows hands it back. A switch to any other window is left alone."""
+    previous = user32.GetForegroundWindow()
+    if not _activate(user32, kernel32, hwnd):
+        log.warning("Could not bring the Explorer window for %s to the front", folder)
+        return
+    end = time.monotonic() + HOLD
+    while time.monotonic() < end:
+        time.sleep(0.1)
+        if previous != hwnd and user32.GetForegroundWindow() == previous:
+            log.info("The foreground went back to the previous window; bringing %s forward again", folder)
+            _activate(user32, kernel32, hwnd)
 
 
 def _activate(user32: ctypes.WinDLL, kernel32: ctypes.WinDLL, hwnd: int) -> bool:
