@@ -5,7 +5,7 @@ import copy
 import shutil
 from typing import TYPE_CHECKING, Any
 
-from .. import edits
+from .. import edits, scriptsync
 from ..exportcheck import export_check
 from ..exportdir import remove_shared_exports
 from ..ops import apply_ops
@@ -164,19 +164,29 @@ def register(router: Router, app: App) -> None:
     def project_edit(req: Request) -> dict:
         """One named timeline edit (vc/edits.py), applied as one undo step; some also queue a job."""
         pid = req.params["pid"]
-        plan = edits.plan(store.get(pid), req.json_object())
+        data = req.json_object()
+        project = store.get(pid)
+        plan = edits.plan(project, data)
+        # link false (the edit page's link toggle off, or a slip) leaves the other tracks put; shots taken out of
+        # the sequence still get their items back when they return (as ops() in web/js/lib/actions.js).
+        link = data.get("link", True) is not False and plan.get("link", True)
         out: dict = {"label": plan["label"], "changed": False}
         ops = plan["ops"]
         if ops:
-            # Like the edit page with linked editing on: items on later shots follow them.
             if any(o["op"].startswith("shot.") for o in ops):
-                ops = [{"op": "linked", "ops": ops}]
-            out.update(store.apply(pid, ops, origin="user", label=plan["label"]))
+                if link:
+                    ops = [{"op": "linked", "ops": ops}]
+                elif any(s.get("parked") for s in project["shots"]):
+                    ops = [{"op": "linked", "ops": ops, "shift": False}]
+            out.update(store.apply(pid, ops, origin="user", label=plan["label"],
+                                   coalesce=_short(data.get("coalesce"), 64)))
         if plan.get("job"):
             job = plan["job"]
-            out["job"] = app.jobs.submit(job["kind"], pid, job["shotId"], job["payload"])
-        if plan.get("id"):
-            out["id"] = plan["id"]
+            payload = job["payload"] if data.get("link", True) is not False else {**job["payload"], "link": False}
+            out["job"] = app.jobs.submit(job["kind"], pid, job["shotId"], payload)
+        for key in ("id", "by", "level", "partial"):
+            if key in plan:
+                out[key] = plan[key]
         return out
 
     @router.route("POST", "/api/projects/{pid}/undo")
@@ -202,7 +212,8 @@ def register(router: Router, app: App) -> None:
     @router.route("GET", "/api/projects/{pid}/usage")
     def project_usage(req: Request) -> dict:
         info = store.usage(req.params["pid"])
-        return {"used": info["used"], "unused": info["unused"], "orphans": len(info["orphans"])}
+        return {"used": info["used"], "unused": info["unused"], "orphans": len(info["orphans"]),
+                "trashed": info["trashed"]}
 
     @router.route("GET", "/api/projects/{pid}/missing")
     def project_missing(req: Request) -> dict:
@@ -285,3 +296,27 @@ def register(router: Router, app: App) -> None:
         shot_ids = [op["shot"]["id"] for op in ops if op["op"] == "shot.add"]
         return {"rev": result["rev"], "added": len(shot_ids), "captions": sum(op["op"] == "caption.add" for op in ops),
                 "shotIds": shot_ids}
+
+    # SB-14: the storyboard as one editable script; `ids` and `text` go back with the edit as its base
+    @router.route("GET", "/api/projects/{pid}/script")
+    def script_get(req: Request) -> dict:
+        project = store.get(req.params["pid"])
+        return {"text": scriptsync.render(project), "ids": [s["id"] for s in project["shots"]],
+                "rev": project.get("rev")}
+
+    @router.route("POST", "/api/projects/{pid}/script")
+    def script_sync(req: Request) -> dict:
+        pid = req.params["pid"]
+        data = req.json_object()
+        text, base, ids = data.get("text"), data.get("base"), data.get("ids")
+        if not isinstance(text, str) or not isinstance(base, str) or len(text) > scriptsync.MAX_TEXT:
+            raise AppError("劇本內容不正確或太長")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise AppError("缺少劇本對應的鏡頭清單，請重新整理劇本")
+        project = store.get(pid)
+        ops, info = scriptsync.sync_ops(project, app.settings.section("defaults"), text, base, ids,
+                                        data.get("link", True) is not False)
+        if not ops:
+            return {**info, "rev": project.get("rev"), "changed": False}
+        result = store.apply(pid, ops, label="套用劇本")
+        return {**info, "rev": result["rev"], "changed": result["changed"]}

@@ -129,3 +129,16 @@ def test_merge_tracks_packs_tracks_that_never_play_together() -> None:
     apply_ops(p, [{"op": "audio.add", "item": a} for a in audio] + got["ops"], {})  # the server takes the ops
     got = run_js(JS / "lib" / "sequence.js", "console.log(JSON.stringify(m.mergeTracks(data)));", p)
     assert got == {"ops": [], "tracks": 2}  # already as packed as it gets
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_merge_tracks_keeps_background_music_apart() -> None:
+    """AU-02: a sound effect never joins the 背景音樂 row (it would dip under voice), nor the music a 一般 row."""
+    media = {"m_snd00000": {"id": "m_snd00000", "kind": "audio", "duration": 10.0}}
+    audio = [{"id": aid, "mediaId": "m_snd00000", "start": start, "in": 0, "out": 1}
+             for aid, start in (("a_bgm00000", 0), ("a_sfx00000", 2), ("a_sfx11111", 4), ("a_bgm11111", 6))]
+    got = run_js(JS / "lib" / "sequence.js", "console.log(JSON.stringify(m.mergeTracks(data)));",
+                 {"media": media, "audio": audio, "tracks": {"bgmRows": ["a_bgm00000", "a_bgm11111"]}})
+    assert got["tracks"] == 2
+    assert [(o["id"], o["patch"]["track"]) for o in got["ops"]] == [
+        ("a_sfx11111", "a_sfx00000"), ("a_bgm11111", "a_bgm00000")]

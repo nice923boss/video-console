@@ -483,6 +483,23 @@ class Media:
             raise self._error(proc.stderr.decode("utf-8", "replace"))
         return _envelope(proc.stdout, proc.stderr.decode("utf-8", "replace"), buckets)
 
+    def pcm16(self, src: Path, rate: int = 16000) -> bytes:
+        """The first audio stream as mono 16-bit little-endian samples at `rate` (chartimes.char_times)."""
+        exe = self.require()
+        try:
+            proc = subprocess.run(
+                [exe, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1",
+                 "-ar", str(rate), "-f", "s16le", "-"],
+                capture_output=True,
+                timeout=300,
+                creationflags=NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            raise AppError("分析配音逐字時間逾時", 500) from None
+        if proc.returncode != 0:
+            raise self._error(proc.stderr.decode("utf-8", "replace"))
+        return proc.stdout
+
     def last_frame(self, src: Path, dst: Path) -> None:
         self.run(["-sseof", "-0.5", "-i", str(src), "-an", "-vf", AS_709, "-update", "1", str(dst)], timeout=120)
         if not dst.exists():

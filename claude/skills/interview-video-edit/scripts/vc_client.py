@@ -205,7 +205,8 @@ class VC:
     def edit(self, pid: str, cmd: str, **params) -> dict:
         """One named timeline edit as one undo step, e.g. edit(pid, "split", t=12.5) or
         edit(pid, "volume", type="audio", id=aid, db=-3). Commands: split, splitAll, trim, freeze, detach,
-        restore, reverse, volume, keyframe (docs/API.md 3.7). Returns {rev, changed, label, id?, job?}."""
+        restore, reverse, volume, keyframe, roll, slip, slide (docs/API.md 3.7). Returns
+        {rev, changed, label, id?, job?, by?}."""
         return self.post(f"/api/projects/{pid}/edit", {"cmd": cmd, **params})
 
     # ------------------------------------------------------------ files and jobs

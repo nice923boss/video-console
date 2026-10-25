@@ -12,6 +12,7 @@ import { videoTake, buildSequence, shotCaptions, castInText } from "../lib/seque
 import { Field, TextArea, TextInput, useDraft, DraftText, NumberInput, Section, Chip, Button } from "./ui.js";
 import { openMenu, openModal, Modal } from "./overlay.js";
 import { toast, toastError } from "./toast.js";
+import { ReviewSection } from "./review-list.js";
 
 const NO_COLOR = { value: null, label: "無顏色" };
 // "None" plus the label colours set in settings (ui.labelColors).
@@ -237,6 +238,8 @@ export function ContentTab({ project, shot }) {
   const hasVideo = !!videoTake(project, shot);
 
   return html`
+    <${ReviewSection} id="insp-review" items=${shot.review}
+      onChange=${(review) => updateShot(shot.id, { review }, { label: "刪除客戶意見" })} />
     <${Section} title="畫面" icon="image">
       <${Field} label="鏡頭名稱">
         <${DraftText} value=${shot.name || ""} placeholder="鏡頭名稱（選填）" maxLength=${120}

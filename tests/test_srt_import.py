@@ -117,16 +117,17 @@ def added(ops: list[dict]) -> list[tuple[str, str | None]]:
     return [(op["item"]["text"], op["item"].get("speaker")) for op in ops if op["op"] == "caption.add"]
 
 
-def test_replace_deletes_the_old_voice_overs_by_default() -> None:
+def test_replace_moves_the_old_voice_overs_to_the_trash_by_default() -> None:
     ops = srt_ops(voiced_project(), SRT, replace=True)
-    assert {"op": "audio.delete", "id": "a_vo0000001"} in ops and {"op": "media.delete", "id": "m_vo0000001"} in ops
+    assert {"op": "audio.delete", "id": "a_vo0000001"} in ops
+    assert {"op": "media.update", "id": "m_vo0000001", "patch": {"trashed": True}} in ops  # AU-14
     assert added(ops) == [("港口的早晨", None), ("漁船出港\n第二行", None)]
 
 
 def test_replace_can_keep_the_voice_overs_as_plain_clips() -> None:
     ops = srt_ops(voiced_project(), SRT, replace=True, voices="keep")
     assert ops[0] == {"op": "audio.update", "id": "a_vo0000001", "patch": {"captionId": None, "track": VOICE_TRACK}}
-    assert not any(op["op"] in ("audio.delete", "media.delete") for op in ops)
+    assert not any(op["op"] in ("audio.delete", "media.delete", "media.update") for op in ops)
 
 
 def test_regen_gives_each_new_caption_the_speaker_it_overlaps_most() -> None:

@@ -87,6 +87,8 @@ def test_voice_job_puts_the_line_on_the_track_and_regenerating_replaces_it(
     assert first["source"] == {"backend": "audio8voice", "captionId": cid, "castId": "c_narrator0",
                                "voice": "dirb6edcb1a:凡萱", "voiceName": "凡萱", "text": "爸爸回來了！", "speed": 1.2}
     assert (app.store.project_dir(pid) / first["file"]).read_bytes()[:4] == b"RIFF"
+    times = first["charTimes"]  # CP-13: one start per character, none for the "！"
+    assert len(times) == 6 and times[5] is None and all(0 <= t < 1.5 for t in times[:5]) and times == sorted(times[:5]) + [None]
 
     client.json("POST", f"/api/projects/{pid}/ops",
                 {"ops": [{"op": "caption.update", "id": cid, "patch": {"text": "  我回來了  "}}]})
@@ -94,7 +96,7 @@ def test_voice_job_puts_the_line_on_the_track_and_regenerating_replaces_it(
     assert done["status"] == "done", done["error"]
     saved = client.json("GET", f"/api/projects/{pid}")["project"]
     [clip] = saved["audio"]
-    assert first["id"] not in saved["media"]
+    assert saved["media"][first["id"]]["trashed"] is True  # AU-14: in the project trash, file kept
     assert saved["media"][clip["mediaId"]]["source"]["text"] == "我回來了"
     assert not list((app.store.project_dir(pid) / "media" / "cache").glob("job-*"))
 
@@ -264,7 +266,7 @@ def test_voai_job_speaks_the_line_in_the_cloud_and_regenerating_replaces_it(
     done = run_cloud_voice(client, pid, cid)
     assert done["status"] == "done", done["error"]
     saved = client.json("GET", f"/api/projects/{pid}")["project"]
-    assert len(saved["audio"]) == 1 and first["id"] not in saved["media"]
+    assert len(saved["audio"]) == 1 and saved["media"][first["id"]]["trashed"] is True
 
 
 def test_voai_job_needs_a_key_and_explains_cloud_failures(

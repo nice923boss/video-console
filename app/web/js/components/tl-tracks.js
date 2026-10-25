@@ -10,7 +10,7 @@ import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/form
 import { buildSequence, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK } from "../lib/sequence.js";
 import { shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
-import { liftOps } from "../lib/lift.js";
+import { liftOps, dropOps } from "../lib/lift.js";
 import { parseGlossary, glossaryHits, hitText } from "../lib/glossary.js";
 import { takeFromMedia } from "../lib/media-actions.js";
 import { Icon } from "./icons.js";
@@ -18,6 +18,7 @@ import { toast } from "./toast.js";
 import { openMenu } from "./overlay.js";
 import { labelColors } from "./insp-content.js";
 import { Wave } from "./tl-wave.js";
+import { trimDown } from "./tl-roll.js";
 import { inView } from "./tl-view.js";
 
 // Row heights in CSS pixels; timeline.js uses the same numbers for the label column.
@@ -329,6 +330,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
   });
 
   const shotSel = !editSel || editSel.type === "shot";
+  const trim = ctx.tool === "trim";
   return html`${shown.filter((c) => (drag && drag.id === c.shot.id) || inView(ctx.win, c.start, c.length)).map((clip) => {
     const id = clip.shot.id;
     const geo = drag && drag.geo && drag.id === id ? drag.geo : { start: clip.start, length: clip.length, in: clip.in };
@@ -340,14 +342,14 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
       + (clip.shot.color ? `;--shot-color:${clip.shot.color}` : "")
       + (moving ? `;transform:translate(${drag.dx}px,${drag.dy || 0}px)` : "");
     return html`<div key=${id} class=${cls} style=${style} data-sel=${`shot:${id}`}
-      title=${`${label}，${clip.shot.disabled ? "已停用，" : ""}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n${clipActions(ctx, "拖曳左右邊緣修剪，拖曳中間調整順序，往上拖到上層軌變成上層片段，雙擊跳到該處，右鍵標記顏色", "雙擊跳到該處")}`}
-      onPointerDown=${(e) => beginMove(e, clip)} onDblClick=${(e) => setTime(laneTime(e, pps))}
+      title=${`${label}，${clip.shot.disabled ? "已停用，" : ""}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n${trim ? "修剪模式：拖曳左右邊緣滾動剪接點，拖曳中間滑動內容，按住 Shift 拖曳滑移鏡頭" : clipActions(ctx, "拖曳左右邊緣修剪，拖曳中間調整順序，往上拖到上層軌變成上層片段，雙擊跳到該處，右鍵標記顏色", "雙擊跳到該處")}`}
+      onPointerDown=${(e) => (trim ? trimDown(e, { clips, clip, side: null, ctx, setDrag }) : beginMove(e, clip))} onDblClick=${(e) => setTime(laneTime(e, pps))}
       onContextMenu=${(e) => clipMenu(e, clip.shot, label)}>
       <${Tiles} clip=${clip} geo=${geo} pid=${project.id} pps=${pps} ar=${ctx.ar} scale=${ctx.scale} />
       <div class="tl-clip-label"><${Icon} name=${SOURCE_ICON[clip.source]} size=${12} /><span>${label}</span></div>
       ${clip.source === "empty" && geo.length * pps > 90 && html`<span class="tl-clip-empty">尚未產生畫面</span>`}
       <span class="tl-clip-dur mono">${fmtSeconds(geo.length, 1)}</span>
-      <${Handles} onDown=${(e, side) => beginTrim(e, clip, side)} />
+      <${Handles} onDown=${(e, side) => (trim ? trimDown(e, { clips, clip, side, ctx, setDrag }) : beginTrim(e, clip, side))} />
     </div>`;
   })}
   ${marks}
@@ -662,27 +664,11 @@ function pipLaneAt(ev) {
   return target === "new-layer" || target === "video" || target.startsWith("layer:") ? { lane, target } : null;
 }
 
-// An overlay dropped on the picture lane becomes a new shot at `index` with the same piece of the
-// file; the shots after it move back by its length.
+// An overlay dropped on the picture lane becomes a new shot at `index` (dropOps keeps its placement for a lift back).
 function overlayToShot(item, media, index) {
-  const video = media.kind === "video";
-  const len = Number(item.length || MIN_ITEM);
-  const tIn = round(Number(item.in || 0), 3);
-  const out = round(tIn + len, 3);
-  const end = Number(media.duration) || 0;
-  const shot = {
-    id: newId("s"),
-    name: String(item.name || media.name || "").replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 120),
-    duration: round(clamp(len, MIN_STILL, MAX_STILL), video ? 3 : 2),
-    ...(video ? { trimIn: tIn, trimOut: end && out >= end - 1e-3 ? null : out } : {}),
-  };
-  const take = takeFromMedia(media, shot.id);
-  ops([
-    { op: "shot.add", shot, index },
-    { op: "take.add", take },
-    { op: "shot.update", id: shot.id, patch: { [video ? "activeVideo" : "activeImage"]: take.id } },
-    { op: "overlay.delete", id: item.id },
-  ], { label: "移到畫面軌" }).then((res) => {
+  const project = getState().project;
+  const { ops: list, shot } = dropOps(project, item, media, index, takeFromMedia(media, newId("s")));
+  ops(list, { label: "移到畫面軌" }).then((res) => {
     if (res) selectShot(shot.id, false);
   });
 }

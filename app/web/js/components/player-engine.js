@@ -8,11 +8,13 @@ import { fileUrl } from "../lib/format.js";
 import { clipIndexAt, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged } from "../lib/caption-style.js";
+import { litCount, fillCaption } from "../lib/karaoke.js";
 import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
 import { chromaMarkup } from "../lib/chroma.js";
 import { maskMarkup } from "../lib/masks.js";
 import { wakeMix, routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
+import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
 
 const DRIFT_PLAYING = 0.15;
 const DRIFT_PAUSED = 0.02;
@@ -193,6 +195,7 @@ export function createEngine(host, hooks = {}) {
   let level = 1;
   let muted = false;
   let solo = []; // row keys heard alone; empty: every row
+  let voice = []; // merged voice spans the 背景音樂 rows dip under (lib/duck.js)
   let scale = 1; // preview resolution: 1, 2 (half) or 4 (quarter)
   let capKey = "";
   let legacy = 52;
@@ -213,10 +216,12 @@ export function createEngine(host, hooks = {}) {
     return clamp01(g);
   }
 
+  const clipSounds = (clip) => clip && clip.source === "video" && clip.take.hasAudio && !clip.shot.disabled && !clip.shot.audioDetached;
+
   // Original sound of a video clip, with the same short fades export.py puts at each cut.
   function clipGain(i, t) {
     const clip = clips[i];
-    if (!clip || clip.source !== "video" || !clip.take.hasAudio || clip.shot.disabled || clip.shot.audioDetached) return 0;
+    if (!clipSounds(clip)) return 0;
     const local = t - clip.start;
     const len = clip.length;
     const fi = Math.max(0.03, Math.min(i > 0 ? clips[i - 1].transition.duration : 0, len / 2));
@@ -395,9 +400,9 @@ export function createEngine(host, hooks = {}) {
       const s = resolveStyle(project, c, legacy);
       const at = anchorOf(s, c);
       const point = at && { x: at.x, y: at.y + (shifts.get(c.id) || 0) / 1080 };
-      return { c, s, point, row: ZONES.includes(c.position) ? c.position : "bottom" };
+      return { c, s, point, row: ZONES.includes(c.position) ? c.position : "bottom", lit: s.highlight ? litCount(project, c, t) : null };
     });
-    const key = JSON.stringify(looks.map((k) => [k.c.id, k.row, k.c.text, k.s, k.point]));
+    const key = JSON.stringify(looks.map((k) => [k.c.id, k.row, k.c.text, k.s, k.point, k.lit]));
     if (key === capKey) return;
     capKey = key;
     ZONES.forEach((z) => zones[z].replaceChildren());
@@ -407,7 +412,7 @@ export function createEngine(host, hooks = {}) {
       node.style.cssText = blockCss(look.s, look.point);
       const text = el("span", "pl-cap-text", node);
       text.style.cssText = textCss(look.s);
-      text.textContent = look.c.text.trim();
+      fillCaption(text, look.c.text.trim(), look.lit, look.s); // lit: CP-13 karaoke
       node.addEventListener("pointerdown", (e) => startDrag(e, node, look));
     }
     ZONES.forEach((z) => {
@@ -668,6 +673,8 @@ export function createEngine(host, hooks = {}) {
 
   function drawAudio(t, playing, g) {
     const flags = project.tracks || {};
+    const bgm = bgmRows(flags);
+    const db = duckDb(project.settings);
     for (const tr of tracks.values()) {
       const { item, media, audio } = tr;
       const start = Number(item.start || 0);
@@ -684,6 +691,7 @@ export function createEngine(host, hooks = {}) {
       let gain = Number(valueAt(item, "volume", local, 1)) * g;
       if (fi > 0 && local < fi) gain *= local / fi;
       if (fo > 0 && local > len - fo) gain *= (len - local) / fo;
+      if (bgm.includes(track)) gain *= duckGain(voice, t, db);
       setGain(audio, gain, track);
       const sp = audioSpeed(item);
       const speed = Math.min(MAX_RATE, last.rate * sp);
@@ -719,6 +727,7 @@ export function createEngine(host, hooks = {}) {
       clips = nextClips;
       legacy = nextLegacy;
       total = sequenceDuration(clips);
+      voice = voiceSpans(project, clips.filter(clipSounds).map((c) => [c.start, c.start + c.length]));
       capKey = "";
       held = false;
       syncTracks();

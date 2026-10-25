@@ -16,9 +16,11 @@ import logging
 import shutil
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 from . import net
+from .chartimes import char_times
 from .jobs import JobControl
 from .media import Media
 from .secrets import SecretStore
@@ -207,8 +209,19 @@ def voice_end(project: dict, cap: dict, duration: float) -> float:
     return round(max(end, min([start + duration, *later])), 3)
 
 
+def voice_char_times(media: Media, path: Path, text: str) -> list[float | None] | None:
+    """Each character's start (seconds into the voice file) for karaoke captions (CP-13); None when the file
+    cannot be read, so the backfill tries again later instead of the line losing its voice-over."""
+    try:
+        return char_times(path, text, media.pcm16)
+    except (AppError, OSError, ValueError) as exc:
+        log.warning("逐字時間分析失敗 %s：%s", path.name, exc)
+        return None
+
+
 def replace_ops(project: dict, caption_id: str) -> list[dict]:
-    """Ops removing a caption's earlier voice-over: its clips, and generated media nothing else plays."""
+    """Ops removing a caption's earlier voice-over: its clips go, and generated media nothing else plays moves
+    to the project trash (AU-14), where the library can put it back until the trash is emptied."""
     ops: list[dict] = []
     old = [c for c in project["audio"] if c.get("captionId") == caption_id]
     for clip in old:
@@ -216,7 +229,7 @@ def replace_ops(project: dict, caption_id: str) -> list[dict]:
         media = project["media"].get(clip.get("mediaId")) or {}
         shared = any(c.get("mediaId") == media.get("id") and c not in old for c in project["audio"])
         if (media.get("source") or {}).get("backend") in (BACKEND, VOAI_BACKEND) and not shared:
-            ops.append({"op": "media.delete", "id": media["id"]})
+            ops.append({"op": "media.update", "id": media["id"], "patch": {"trashed": True}})
     return ops
 
 
@@ -272,6 +285,9 @@ class VoiceJobs:
             shutil.rmtree(work, ignore_errors=True)
         name = f"{member.get('name') or '配音'}：{text}"[:120]
         item = {**new_media(staged, name, mid), "source": source}
+        times = voice_char_times(self._media(), pdir / staged["file"], text)
+        if times is not None:
+            item["charTimes"] = times
         project = self._store.get(ctl.pid)
         if not any(c.get("id") == caption_id for c in project["captions"]):
             raise AppError("字幕在配音期間被刪除了，配音沒有加入音軌", 410)

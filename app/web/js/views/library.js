@@ -5,7 +5,7 @@ import { html, useState, useEffect, useMemo, useRef } from "../lib/h.js";
 import { useStore, setState, getState } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { ops, undo, navigate, focusShot, revealInFolder } from "../lib/actions.js";
-import { uploadFiles, relinkFile } from "../lib/jobs-actions.js";
+import { uploadFiles, importFiles, relinkFile } from "../lib/jobs-actions.js";
 import { clock } from "../lib/clock.js";
 import { useKeymap, keyLabel, undoKeyText, confirmKeyText } from "../lib/keymap.js";
 import { usePref } from "../lib/prefs.js";
@@ -13,6 +13,7 @@ import { fileUrl, fmtBytes, fmtDuration, fmtTime, newId, round, shotLabel, ACCEP
   from "../lib/format.js";
 import { shotCover, newOverlay } from "../lib/sequence.js";
 import { takeFromMedia, shotOps, placeMedia, mediaMatches } from "../lib/media-actions.js";
+import { restoreVoiceOps } from "../lib/voice.js";
 import { Button, IconButton, Chip, Select, Tabs, Empty, Spinner, Progress, Badge } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 import { Thumb, mediaEntry, openLightbox } from "../components/media.js";
@@ -30,7 +31,10 @@ const FILTERS = [
   { id: "audio", label: "音訊", icon: "music", test: (m) => m.kind === "audio" },
   { id: "favorite", label: "最愛", icon: "star", test: (m) => !!m.favorite },
   { id: "unused", label: "沒用到", icon: "inbox", test: (m, unused) => unused.has(m.id) },
+  { id: "trash", label: "垃圾桶", icon: "trash", test: () => true },
 ];
+// The project trash (AU-14) holds replaced voice-overs; they show under its chip only.
+const shows = (f, m, unused) => (f.id === "trash") === !!m.trashed && f.test(m, unused);
 const SORTS = [
   { value: "new", label: "最新匯入" },
   { value: "old", label: "最早匯入" },
@@ -258,7 +262,24 @@ function download(pid, media) {
   a.click();
 }
 
+// A replaced voice-over in the project trash (AU-14): back on its line, back in the library, or deleted.
+function trashMenu(e, ctx, media) {
+  const { project, uses, preview } = ctx;
+  const cap = (project.captions || []).find((c) => c.id === (media.source || {}).captionId);
+  const back = (list, label) => ops(list, { label }).then((res) => res && toast(`已${label}`, { action: { label: "復原", fn: undo } }));
+  openMenu(e, [
+    { header: media.name || KIND_NAME[media.kind] },
+    { label: "預覽", icon: "eye", hint: keyLabel("library.preview"), onClick: () => preview(media) },
+    { divider: true },
+    cap && { label: "換回這句字幕的配音", icon: "swap", onClick: () => back(restoreVoiceOps(project, media, cap), "換回舊配音") },
+    { label: "移回素材庫", icon: "inbox", onClick: () => back([{ op: "media.update", id: media.id, patch: { trashed: false } }], "移回素材庫") },
+    { divider: true },
+    { label: "刪除", icon: "trash", danger: true, hint: keyLabel("library.delete"), onClick: () => removeMedia(media, uses(media)) },
+  ]);
+}
+
 function mediaMenu(e, ctx, media) {
+  if (media.trashed) return trashMenu(e, ctx, media);
   const { project, uses, preview } = ctx;
   const focusIndex = project.shots.findIndex((s) => s.id === getState().focus);
   const focus = focusIndex >= 0 ? project.shots[focusIndex] : null;
@@ -370,13 +391,14 @@ function UsageBar({ pid, rev }) {
   const purge = async () => {
     const ok = await confirmDialog({ title: "清除未使用的檔案", danger: true, confirmLabel: "永久清除",
       message: `會永久刪除 ${info.orphans} 個沒有任何版本或素材使用的檔案與一天以上的暫存檔（約 ${fmtBytes(info.unused)}），`
+        + (info.trashed ? `清空素材垃圾桶裡的 ${info.trashed} 個舊配音，` : "")
         + "並清空這個專案的復原紀錄，已刪除的版本之後就無法再救回。最近 5 分鐘內產生的檔案不受影響。" });
     if (!ok) return;
     setBusy(true);
     try {
       const res = await api.post(`/api/projects/${enc(pid)}/purge`);
       toast(`已清除 ${fmtBytes(res.freed)}`, { level: "success" });
-      setInfo({ ...info, unused: 0, orphans: 0 });
+      setInfo({ ...info, unused: 0, orphans: 0, trashed: 0 });
     } catch (err) {
       toastError(err, "清除失敗");
     } finally {
@@ -386,8 +408,8 @@ function UsageBar({ pid, rev }) {
   return html`<div class="lib-usage">
     <${Icon} name="drive" size=${15} />
     <span>專案媒體 <b>${fmtBytes(info.used + info.unused)}</b></span>
-    ${info.orphans > 0
-      ? html`<span class="dim">其中 ${fmtBytes(info.unused)} 是已刪除的版本、素材與暫存檔（${info.orphans} 個）</span>
+    ${info.orphans > 0 || info.trashed > 0
+      ? html`<span class="dim">其中 ${fmtBytes(info.unused)} 是已刪除的版本、素材、垃圾桶裡的舊配音與暫存檔（${info.orphans} 個）</span>
           <${Button} size="sm" kind="ghost" icon="trash" busy=${busy} onClick=${purge}>清除<//>`
       : html`<span class="dim">沒有多餘的檔案</span>`}
   </div>`;
@@ -426,14 +448,14 @@ function MediaPane({ project }) {
       alive = false;
     };
   }, [pid, files]);
-  const counts = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.id, all.filter((m) => f.test(m, unused)).length])),
+  const counts = useMemo(() => Object.fromEntries(FILTERS.map((f) => [f.id, all.filter((m) => shows(f, m, unused)).length])),
     [all, unused]);
   const allTags = useMemo(() => [...new Set(all.flatMap((m) => m.tags || []))].sort((a, b) => a.localeCompare(b, "zh-Hant")),
     [all]);
   const list = useMemo(() => {
     const f = FILTERS.find((x) => x.id === filter) || FILTERS[0];
     const q = query.trim().toLowerCase();
-    return all.filter((m) => f.test(m, unused) && mediaMatches(m, q) && (!tag || (m.tags || []).includes(tag)))
+    return all.filter((m) => shows(f, m, unused) && mediaMatches(m, q) && (!tag || (m.tags || []).includes(tag)))
       .sort(SORT_FN[sort]);
   }, [all, unused, filter, query, sort, tag]);
   useEffect(() => {
@@ -534,7 +556,9 @@ function MediaPane({ project }) {
   return html`<div class="lib-pane">
     <div class="lib-toolbar">
       <div class="chips">
-        ${FILTERS.map((f) => html`<${Chip} key=${f.id} active=${filter === f.id} icon=${f.icon} onClick=${() => setFilter(f.id)}>
+        ${FILTERS.filter((f) => f.id !== "trash" || counts.trash || filter === "trash").map((f) => html`<${Chip} key=${f.id}
+          active=${filter === f.id} icon=${f.icon} onClick=${() => setFilter(f.id)}
+          title=${f.id === "trash" ? "重新生成後被換下的舊配音，右鍵可換回；按下方「清除」會永久刪除" : undefined}>
           ${f.label}<span class="count">${counts[f.id]}</span><//>`)}
       </div>
       <label class="search-box">
@@ -549,7 +573,7 @@ function MediaPane({ project }) {
       ${filter === "unused" && list.length > 0 && html`<${Button} kind="danger-ghost" icon="trash"
         onClick=${() => removeUnused(list)}>移除這 ${list.length} 個<//>`}
       <input ref=${fileRef} type="file" multiple accept=${ACCEPT_ALL} hidden onChange=${pickFiles} />
-      <${Button} kind="primary" icon="upload" onClick=${() => fileRef.current.click()}>匯入檔案<//>
+      <${Button} kind="primary" icon="upload" onClick=${() => importFiles(fileRef, { target: "library" })}>匯入檔案<//>
     </div>
     ${bulk && html`<div class="lib-bulk" role="toolbar" aria-label="批次操作">
       <b>已選 ${bulk.length} 個</b>
@@ -565,7 +589,7 @@ function MediaPane({ project }) {
     <div class=${`lib-scroll ${dropping ? "drop-files" : ""}`} ...${drop}>
       ${empty
         ? html`<${Empty} icon="images" title="素材庫是空的" class="lib-empty"
-            actions=${html`<${Button} kind="primary" icon="upload" onClick=${() => fileRef.current.click()}>匯入檔案<//>`}>
+            actions=${html`<${Button} kind="primary" icon="upload" onClick=${() => importFiles(fileRef, { target: "library" })}>匯入檔案<//>`}>
             把圖片、影片或音樂拖進這裡。圖片和影片可以設為鏡頭畫面或參考圖，音樂可以放到剪輯頁的音軌。
           <//>`
         : !list.length && !pending.length
@@ -600,7 +624,7 @@ export function LibraryView() {
   const busyExports = jobs.filter((j) => j.pid === project.id && (j.kind === "export" || j.kind === "package")
     && (j.status === "queued" || j.status === "running")).length;
   const tabs = [
-    { id: "media", label: "素材", icon: "images", badge: Object.keys(project.media || {}).length },
+    { id: "media", label: "素材", icon: "images", badge: Object.values(project.media || {}).filter((m) => !m.trashed).length },
     { id: "exports", label: "輸出成品", icon: "package", badge: busyExports ? `${busyExports} 進行中` : null },
   ];
   return html`<div class="view view-library">

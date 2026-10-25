@@ -15,6 +15,7 @@ import { Thumb, mediaEntry, openLightbox } from "../components/media.js";
 import { openMenu, promptDialog } from "../components/overlay.js";
 import { toast } from "../components/toast.js";
 import { Inspector } from "../components/inspector.js";
+import { ScriptPanel } from "../components/script-panel.js";
 import { openScriptImport } from "../dialogs/script-import.js";
 import { printBoard } from "./board-print.js";
 
@@ -23,6 +24,10 @@ const DENSITIES = [
   { value: "sm", icon: "grid", title: "小卡片" },
   { value: "md", icon: "panel", title: "中卡片" },
   { value: "lg", icon: "rows", title: "大卡片" },
+];
+const MODES = [
+  { value: "cards", icon: "grid", label: "卡片", title: "每個鏡頭一張卡片" },
+  { value: "script", icon: "book", label: "劇本", title: "整份分鏡當成一份劇本編輯，套用後寫回鏡頭" },
 ];
 const FILTERS = [
   { id: "all", label: "全部", test: () => true },
@@ -192,6 +197,10 @@ function ShotCard({ row, ctx, drop, handlers }) {
         <${Badge} tone="danger" title=${`找不到範本「${lost.join("」「")}」，可能已被刪除，請在鏡頭的生成設定改選其他範本`}>
           <${Icon} name="alert" size=${11} />找不到範本<//>
       </div>`}
+      ${(shot.review || []).length > 0 && html`<div class="sc-meta">
+        <${Badge} tone="warn" title=${shot.review.map((c) => `${c.by}：${c.text}`).join("\n")}>
+          <${Icon} name="message" size=${11} />客戶意見 ${shot.review.length}<//>
+      </div>`}
       ${(shot.camera || shot.motion) && html`<div class="sc-meta">
         ${shot.camera && html`<${Badge} tone="blue"><${Icon} name="camera" size=${11} />${shot.camera}<//>`}
         ${shot.motion && html`<span class="dim" title=${shot.motion}><${Icon} name="move" size=${11} />${shot.motion}</span>`}
@@ -200,21 +209,23 @@ function ShotCard({ row, ctx, drop, handlers }) {
   </div>`;
 }
 
-function Toolbar({ project, stats, filter, setFilter, density, setDensity, total, onPrint }) {
+function Toolbar({ project, stats, filter, setFilter, density, setDensity, mode, setMode, total, onPrint }) {
+  const cards = mode === "cards";
   return html`<div class="board-toolbar">
     <div class="bt-title">
       <h2 title=${project.name}>${project.name}</h2>
       <span class="dim">${project.shots.length} 個鏡頭<i></i>序列 ${fmtDuration(total)}</span>
     </div>
-    <div class="chips" role="group" aria-label="篩選鏡頭">
+    ${cards && html`<div class="chips" role="group" aria-label="篩選鏡頭">
       ${FILTERS.map((f) => html`<${Chip} key=${f.id} icon=${f.icon} active=${filter === f.id}
           disabled=${f.id !== "all" && !stats[f.id] && filter !== f.id} onClick=${() => setFilter(f.id)}>
         ${f.label}${f.id === "all" ? "" : ` ${stats[f.id]}`}
       <//>`)}
-    </div>
+    </div>`}
     <span class="grow"></span>
-    <${Segmented} size="sm" value=${density} onChange=${setDensity}
-      options=${DENSITIES.map((d) => ({ ...d, label: "" }))} />
+    <${Segmented} size="sm" value=${mode} onChange=${setMode} options=${MODES} />
+    ${cards && html`<${Segmented} size="sm" value=${density} onChange=${setDensity}
+      options=${DENSITIES.map((d) => ({ ...d, label: "" }))} />`}
     <${Button} icon="settings" title="在右側面板設定風格、畫面尺寸與影格率"
       onClick=${() => setState({ selected: [], focus: null })}>專案設定<//>
     <${Button} icon="printer" title="列印目前篩選出的鏡頭，附空白審稿意見欄；列印對話框可選「另存為 PDF」" onClick=${onPrint}>列印<//>
@@ -246,6 +257,7 @@ export function BoardView() {
   }));
   const [filter, setFilter] = useState("all");
   const [density, setDensity] = usePref("vc.board.density", "md", (v) => DENSITIES.some((d) => d.value === v));
+  const [mode, setMode] = usePref("vc.board.mode", "cards", (v) => MODES.some((m) => m.value === v));
   const [drop, setDrop] = useState(null);
   const [gridDrop, setGridDrop] = useState(false);
   const gridRef = useRef(null);
@@ -478,7 +490,9 @@ export function BoardView() {
   return html`<div class="view view-board">
     <section class="board-main">
       <${Toolbar} project=${project} stats=${stats} filter=${filter} setFilter=${setFilter}
-        density=${density} setDensity=${setDensity} total=${total} onPrint=${() => printBoard(project, pid, visible, total)} />
+        density=${density} setDensity=${setDensity} mode=${mode} setMode=${setMode} total=${total}
+        onPrint=${() => printBoard(project, pid, visible, total)} />
+      ${mode === "script" ? html`<${ScriptPanel} key=${pid} />` : html`
       ${selected.length > 1 && html`<${SelectionBar} project=${project} ids=${selected} clear=${clearSelection} />`}
       <div class=${`board-scroll ${gridDrop ? "drop-files" : ""}`} onDragOver=${gridDragOver}
           onDragLeave=${(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setGridDrop(false); }} onDrop=${gridDrop_}
@@ -489,7 +503,7 @@ export function BoardView() {
         <span>拖曳卡片調整順序</span><i></i><span>Ctrl / Shift 多選</span><i></i>
         <span>G 生圖，V 生影片，Space 預覽</span><i></i><span>把圖片或影片拖到卡片上直接使用</span><i></i>
         <span>點卡片左側的 + 插入空白鏡頭</span>
-      </div>
+      </div>`}
     </section>
     <${Inspector} />
   </div>`;

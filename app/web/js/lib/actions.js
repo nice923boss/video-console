@@ -233,6 +233,24 @@ export function updateProject(patch, { label = "修改專案", coalesce = null }
   return ops([{ op: "project.update", patch }], { label, coalesce });
 }
 
+// A named edit (POST /edit, app/vc/edits.py): the server works out the ops, the same ones Claude's edits get.
+// Resolves to the response ({label, changed, by, id, level, partial, job}) or null once the failure is shown;
+// an edit the server refuses (playhead too near an edge, a clip with no sound...) shows as a warning.
+export async function editCmd(data, { coalesce = null } = {}) {
+  const { pid } = getState();
+  if (!pid || watchRefuses()) return null;
+  try {
+    const link = readPref(LINK_PREF, true, (v) => typeof v === "boolean");
+    const res = await api.post(`/api/projects/${enc(pid)}/edit`, { ...data, link, coalesce });
+    if (res && res.changed) ensureRev(pid, res.rev);
+    return res;
+  } catch (err) {
+    if (err && err.status === 400) toast(err.message, { level: "warn" });
+    else toastError(err, "變更沒有儲存");
+    return null;
+  }
+}
+
 async function step(kind) {
   const { pid, undo: u } = getState();
   if (!pid || watchRefuses()) return;

@@ -139,3 +139,16 @@
 .mask-card { display: flex; flex-direction: column; gap: 6px; align-self: stretch; padding: 8px 10px; border-radius: var(--r-input); background: var(--surface-2); border: 1px solid var(--border); }
 .mask-head { display: flex; align-items: center; gap: 8px; }
 .mask-name { flex: 1; min-width: 0; font-size: calc(12.5px * var(--text-scale)); color: var(--text-2); }
+
+/* Scopes beside the preview (components/scopes.js): the canvases stay dark in both themes, as monitors are */
+
+.scopes { display: flex; flex-direction: column; flex: none; gap: 6px; width: 260px; min-height: 0; padding: 8px 10px; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface-1); }
+.scopes-head { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+.scope-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 12px; }
+.scope-label > span { color: var(--muted); font-size: 11px; }
+.scope-wave,
+.scope-vector { display: block; flex: none; width: 100%; border-radius: var(--r-sm); background: #0b0c0e; }
+.scope-wave { height: 150px; }
+.scope-vector { aspect-ratio: 1; }
+.scope-note { margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.scope-note.is-error { color: var(--danger); }

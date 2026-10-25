@@ -1,8 +1,9 @@
 """Fill in what older imports lack, on a background thread when a project is opened: the waveform drawn under
 video clips (only made at import before), the alpha marker that keeps see-through WebM clips see-through in
-the export (only recorded at import before), and the thumbnail and filmstrip of files imported while ffmpeg was
-missing or could not read them (PF-03; the browser then decodes the full file on every open). What is made is
-saved in media/thumbs, so it is made once. Each item is tried once per run, so a file ffmpeg cannot read is
+the export (only recorded at import before), the thumbnail and filmstrip of files imported while ffmpeg was
+missing or could not read them (PF-03; the browser then decodes the full file on every open), and the
+per-character times karaoke captions follow in voice-overs made before CP-13. What is made is saved in
+media/thumbs or the project, so it is made once. Each item is tried once per run, so a file ffmpeg cannot read is
 not read again on every open."""
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from .chartimes import char_times
 from .media import Media
 from .store import ProjectStore
 from .takes import THUMB_DIR
@@ -30,13 +32,23 @@ def _no_thumb(item: dict) -> bool:
     return not item.get("thumb") or (float(item.get("duration") or 0) > 0 and not item.get("strip"))
 
 
+def _no_char_times(item: dict) -> bool:
+    """A voice-over (voice.py) without its per-character times."""
+    source = item.get("source") or {}
+    return (item.get("kind") == "audio" and source.get("backend") in ("audio8voice", "voai")
+            and bool(source.get("text")) and "charTimes" not in item)
+
+
 def missing(project: dict) -> list[str]:
     """Video takes and media items without a waveform although they have sound, WebM files without an
-    alpha marker (which may simply mean they are not see-through), and images and videos without their
-    thumbnail or filmstrip."""
+    alpha marker (which may simply mean they are not see-through), images and videos without their
+    thumbnail or filmstrip, and voice-overs without per-character times."""
     ids = []
     for group in ("takes", "media"):
         for item in project.get(group, {}).values():
+            if _no_char_times(item) and item.get("file"):
+                ids.append(item["id"])
+                continue
             if item.get("kind") not in ("video", "image") or not item.get("file"):
                 continue
             if item["kind"] == "image":
@@ -101,6 +113,8 @@ class Backfill:
             return
         media = self._media()
         patch = {}
+        if _no_char_times(item):
+            patch["charTimes"] = char_times(path, item["source"]["text"], media.pcm16)
         if path.suffix.lower() == ".webm" and not item.get("alphaCodec"):
             probe = media.probe(path)
             if probe.get("alpha"):

@@ -1,8 +1,9 @@
 """Timeline edits by name, for scripts and Claude (GET /timeline, POST /edit in api/projects.py).
 
-Each command reads the project and returns the ops the edit page's keys would send
-(web/js/components/tl-edit.js and tl-commands.js), so one call is one undo step. Times are timeline
-seconds unless a name says otherwise; "type" is shot, overlay, audio, caption or adjust.
+Each command reads the project and returns the ops of one edit, so one call is one undo step. The edit page's
+keys send these same commands (web/js/components/tl-edit.js, tl-commands.js and tl-roll.js pick the clip and
+call POST /edit), so the keys and Claude share this one implementation. Times are timeline seconds unless a
+name says otherwise; "type" is shot, overlay, audio, caption or adjust.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from .util import AppError, new_id
 
 LISTS = {"overlay": "overlays", "audio": "audio", "caption": "captions", "adjust": "adjustments"}
 MIN_VIDEO, MIN_STILL, MIN_ITEM = 0.1, 0.2, 0.1
+MAX_STILL = 600.0
 VOLUME_MAX = 4.0
 RAMP = 0.1  # seconds a range's volume takes to rise or fall to its level
 FREEZE_LEN = 2.0
@@ -279,6 +281,101 @@ def trim(project: dict, t: float, side: str, kind: str = "shot", item_id: str | 
     return {"ops": [{"op": f"{kind}.update", "id": item["id"], "patch": patch}], "label": label}
 
 
+# ---------------------------------------------------------------- roll, slip and slide (mirror of lib/roll.js)
+def _seq_index(clips: list[dict], shot_id: str | None) -> int:
+    i = next((k for k, c in enumerate(clips) if c["shot"]["id"] == shot_id), -1)
+    if i < 0:
+        raise AppError("找不到這個鏡頭，或它不在剪輯序列裡")
+    return i
+
+
+def _end_room(clip: dict) -> tuple[float, float]:
+    """How far (timeline seconds) a clip's end can move earlier and later while its first frame stays."""
+    if clip["source"] == "video":
+        return clip["length"] - MIN_VIDEO / clip["speed"], (float(clip["take"]["duration"]) - clip["out"]) / clip["speed"]
+    return clip["length"] - MIN_STILL, MAX_STILL - clip["length"]
+
+
+def _head_room(clip: dict) -> tuple[float, float]:
+    """How far a clip's first frame can move later and earlier while its last frame stays."""
+    if clip["source"] == "video":
+        return clip["length"] - MIN_VIDEO / clip["speed"], clip["in"] / clip["speed"]
+    return clip["length"] - MIN_STILL, MAX_STILL - clip["length"]
+
+
+def cut_range(before: dict, after: dict) -> tuple[float, float]:
+    """How far the cut between two clips can move earlier (negative) and later."""
+    return -max(0.0, min(_end_room(before)[0], _head_room(after)[1])), max(0.0, min(_end_room(before)[1], _head_room(after)[0]))
+
+
+def slip_range(clip: dict) -> tuple[float, float]:
+    """How far a video clip's footage can slip (timeline seconds, positive shows later footage)."""
+    return -clip["in"] / clip["speed"], max(0.0, (float(clip["take"]["duration"]) - clip["out"]) / clip["speed"])
+
+
+def _limit(by: float, span: tuple[float, float]) -> float:
+    d = min(max(by, span[0]), span[1])
+    if abs(d) < 1e-3:
+        raise AppError("已經到底了：素材沒有多的畫面，或片段已經是最短")
+    return d
+
+
+def _end_patch(clip: dict, d: float) -> dict:
+    if clip["source"] != "video":
+        return {"duration": r3(clip["length"] + d)}
+    out = clip["out"] + d * clip["speed"]
+    return {"trimOut": None if out >= float(clip["take"]["duration"]) - 1e-3 else r3(out)}
+
+
+def _head_patch(clip: dict, d: float) -> dict:
+    if clip["source"] != "video":
+        return {"duration": r3(clip["length"] - d)}
+    return {"trimIn": r3(clip["in"] + d * clip["speed"])}
+
+
+def _move_cut(before: dict, after: dict, by: float) -> tuple[list[dict], float]:
+    d = _limit(by, cut_range(before, after))
+    return [{"op": "shot.update", "id": before["shot"]["id"], "patch": _end_patch(before, d)},
+            {"op": "shot.update", "id": after["shot"]["id"], "patch": _head_patch(after, d)}], r3(d)
+
+
+def roll(project: dict, shot_id: str | None, by: float) -> dict:
+    """Move the cut after a shot `by` seconds: it ends later and the next shot starts later in its footage (or
+    both earlier), so the total length and everything past the two shots stay put."""
+    clips = _clips(project)
+    i = _seq_index(clips, shot_id)
+    if i + 1 >= len(clips):
+        raise AppError("這是最後一個鏡頭，後面沒有剪接點可以滾動")
+    ops, d = _move_cut(clips[i], clips[i + 1], by)
+    return {"ops": ops, "label": "滾動剪接點", "by": d}
+
+
+def slip(project: dict, shot_id: str | None, by: float) -> dict:
+    """Show other footage in the same slot: in and out points both move `by` seconds (positive shows later
+    footage). The clip keeps its place and length, and nothing else moves."""
+    clips = _clips(project)
+    clip = clips[_seq_index(clips, shot_id)]
+    if clip["source"] != "video":
+        raise AppError("滑動內容只能用在影片鏡頭")
+    d = _limit(by, slip_range(clip))
+    s = d * clip["speed"]
+    out = clip["out"] + s
+    patch = {"trimIn": r3(clip["in"] + s), "trimOut": None if out >= float(clip["take"]["duration"]) - 1e-3 else r3(out)}
+    return {"ops": [{"op": "shot.update", "id": clip["shot"]["id"], "patch": patch}], "label": "滑動內容",
+            "by": r3(d), "link": False}
+
+
+def slide(project: dict, shot_id: str | None, by: float) -> dict:
+    """Move a shot `by` seconds between its neighbours, unchanged: the one before ends later and the one after
+    starts later in its footage (or both earlier), so the total length stays."""
+    clips = _clips(project)
+    i = _seq_index(clips, shot_id)
+    if i == 0 or i + 1 >= len(clips):
+        raise AppError("滑移鏡頭要前後都有鏡頭")
+    ops, d = _move_cut(clips[i - 1], clips[i + 1], by)
+    return {"ops": ops, "label": "滑移鏡頭", "by": d}
+
+
 # ---------------------------------------------------------------- picture and sound
 def freeze(project: dict, t: float) -> dict:
     """Cut the video clip at t and put a FREEZE_LEN still of that frame in between (before or after at an edge)."""
@@ -398,8 +495,9 @@ def reverse(project: dict, shot_id: str | None = None, t: float | None = None) -
 
 
 def volume(project: dict, kind: str, item_id: str, db: float, t_in: float | None = None,
-           t_out: float | None = None) -> dict:
-    """Change an audio or upper-track clip's volume by db; with t_in..t_out, only inside that range."""
+           t_out: float | None = None, t: float | None = None) -> dict:
+    """Change an audio or upper-track clip's volume by db; with t_in..t_out, only inside that range. "level" is
+    the new volume: at the range's start, else at t (default the clip's start) when the volume is keyed."""
     if kind == "shot":
         raise AppError("鏡頭的原聲要先分離成音訊片段（cmd: detach），才能調整音量")
     if kind not in ("audio", "overlay"):
@@ -424,21 +522,25 @@ def volume(project: dict, kind: str, item_id: str, db: float, t_in: float | None
     if b - a < 0.01:
         raise AppError("區域沒有蓋到這個片段")
     keys = item.get("keyframes") or []
-    if a > 1e-3 or b < length - 1e-3:
+    partial = a > 1e-3 or b < length - 1e-3
+    if partial:
         work = {"keyframes": [{**k, "volume": scale(k["volume"])} if "volume" in k and a - 1e-3 <= k["t"] <= b + 1e-3 else k
                               for k in keys]}
         if a > 1e-3:
             work["keyframes"] = with_key(work, max(0.0, a - RAMP), {"volume": base(max(0.0, a - RAMP))})
         if b < length - 1e-3:
             work["keyframes"] = with_key(work, min(length, b + RAMP), {"volume": base(min(length, b + RAMP))})
-        work["keyframes"] = with_key(work, a, {"volume": scale(base(a))})
+        level = scale(base(a))
+        work["keyframes"] = with_key(work, a, {"volume": level})
         patch = {"keyframes": with_key(work, b, {"volume": scale(base(b))})}
     elif any("volume" in k for k in keys):
         patch = {"keyframes": [{**k, "volume": scale(k["volume"])} if "volume" in k else k for k in keys]}
+        level = scale(base(min(max((g["start"] if t is None else t) - g["start"], 0.0), length)))
     else:
-        patch = {"volume": scale(item.get("volume", 1.0))}
+        level = scale(item.get("volume", 1.0))
+        patch = {"volume": level}
     return {"ops": [{"op": f"{kind}.update", "id": item["id"], "patch": patch}],
-            "label": "調高音量" if db > 0 else "調低音量"}
+            "label": "調高音量" if db > 0 else "調低音量", "level": level, "partial": partial}
 
 
 KEY_FIELDS = {"audio": {"volume": 1.0}, "overlay": {"x": 0.0, "y": 0.0, "w": 0.35, "opacity": 1.0, "volume": 1.0},
@@ -485,7 +587,7 @@ def _id(data: dict, key: str = "id") -> str | None:
 
 
 def plan(project: dict, data: dict) -> dict:
-    """{ops, label, job?, id?} for one command: data is {"cmd": ..., parameters}."""
+    """{ops, label, job?, id?, level?} for one command: data is {"cmd": ..., parameters}."""
     cmd = data.get("cmd")
     kind = str(data.get("type") or "shot")
     if cmd == "split":
@@ -507,7 +609,8 @@ def plan(project: dict, data: dict) -> dict:
     if cmd == "volume":
         if not _id(data):
             raise AppError("volume 要給片段 id")
-        return volume(project, kind, _id(data), _num(data, "db"), _num(data, "in", False), _num(data, "out", False))
+        return volume(project, kind, _id(data), _num(data, "db"), _num(data, "in", False), _num(data, "out", False),
+                      _num(data, "t", False))
     if cmd == "keyframe":
         values = data.get("values")
         if values is not None and not isinstance(values, dict):
@@ -515,4 +618,9 @@ def plan(project: dict, data: dict) -> dict:
         if not _id(data):
             raise AppError("keyframe 要給片段 id")
         return keyframe(project, kind, _id(data), _num(data, "t"), values)
-    raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、volume、keyframe")
+    if cmd in ("roll", "slip", "slide"):
+        if not _id(data):
+            raise AppError(f"{cmd} 要給鏡頭 id")
+        return {"roll": roll, "slip": slip, "slide": slide}[cmd](project, _id(data), _num(data, "by"))
+    raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、volume、keyframe、"
+                   "roll、slip、slide")

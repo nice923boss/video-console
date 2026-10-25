@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
+from . import karaoke
 from .fontmetrics import measurer, registry_fonts
 from .opfields import DEFAULT_CAPTION_STYLE
 
@@ -214,8 +215,17 @@ def caption_ass(project: dict, captions: list[dict], play_x: int, legacy_size: i
             events.append(f"Dialogue: 1,{times},{key}B,,0,0,0,,{{{place}}}{text}")
         if s["shadow"]:
             events.append(f"Dialogue: 2,{times},{key}S,,0,0,0,,{{{place}{_shadow_tags(s)}}}{text}")
+        if s.get("highlight"):  # CP-13: lit as the voice-over says each character
+            lit = _fill_tags(1, s["highlightColor"], s["opacity"]) + _fill_tags(2, s["color"], s["opacity"])
+            text = karaoke.karaoke_text(project, cap, lines, lit) or text
         events.append(f"Dialogue: 3,{times},{key}T,,0,0,0,,{{{place}}}{text}")
     return styles, events
+
+
+def _fill_tags(n: int, hex_rgb: str, opacity: float) -> str:
+    r"""\1c\1a (primary) or \2c\2a (secondary) override tags for a fill colour."""
+    c = _colour(hex_rgb, opacity)
+    return f"\\{n}c&H{c[4:]}&\\{n}a&H{c[2:4]}&"
 
 
 # ---------------------------------------------------------------- installed fonts

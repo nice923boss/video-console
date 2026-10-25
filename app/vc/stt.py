@@ -238,11 +238,11 @@ def srt_text(raw: bytes) -> str:
 def srt_ops(project: dict, text: str, replace: bool, offset: float = 0.0, voices: str = "delete") -> list[dict]:
     """caption.add ops putting an .srt's subtitles on the sequence, offset seconds after their own times.
 
-    replace drops the old captions first; voices says what happens to voice-overs bound to them:
+    replace drops the old captions first (title cards stay); voices says what happens to voice-overs bound to them:
     "delete" removes them, "keep" leaves them on the voice rows as ordinary clips, "regen" removes them and
     gives each new caption the speaker of the old caption it overlaps most, so its voice-over can be redone.
     """
-    old = project["captions"] if replace else []
+    old = [c for c in project["captions"] if not c.get("title")] if replace else []
     ops: list[dict] = []
     for cap in old:
         if voices == "keep":

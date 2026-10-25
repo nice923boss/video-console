@@ -14,6 +14,9 @@ import { openTour } from "./dialogs/tour.js";
 import { openHistory } from "./dialogs/history-dialog.js";
 import { openScriptImport } from "./dialogs/script-import.js";
 import { openCastDialog } from "./dialogs/cast-dialog.js";
+import { openCaptionCondense } from "./dialogs/caption-condense.js";
+import { openTitleDialog } from "./dialogs/title-dialog.js";
+import { downloadReviewPage, pickReviewFile } from "./lib/review.js";
 import { generateMissing } from "./lib/voice.js";
 import { defineCommands, keysOf } from "./lib/keymap.js";
 
@@ -118,10 +121,18 @@ function appCommands(s, commands) {
     s.project && { id: "export:video", group: "輸出", label: "輸出影片…", icon: "film", run: commands.export },
     s.project && { id: "export:package", group: "輸出", label: "打包專案…", icon: "package", keywords: "zip 備份",
       run: () => openExportDialog("package") },
+    s.project && { id: "review:page", group: "輸出", label: "下載客戶審稿網頁", icon: "message",
+      keywords: "審稿 客戶 意見 留言 review comment html", run: () => downloadReviewPage() },
+    s.project && { id: "review:import", group: "輸出", label: "匯入審稿意見…", icon: "upload",
+      keywords: "審稿 客戶 意見 留言 review comment json", run: () => pickReviewFile() },
     s.project && { id: "voice:cast", group: "配音", label: "人物表…", icon: "users", keywords: "cast 人物 角色 聲音 audio8voice voai",
       run: () => openCastDialog() },
     s.project && { id: "voice:generate", group: "配音", label: "生成缺少或過期的配音", icon: "mic", keywords: "tts 語音 字幕 audio8voice voai",
       run: () => generateMissing() },
+    s.project && { id: "captions:condense", group: "字幕", label: "濃縮過長的字幕…", icon: "captions",
+      keywords: "字幕 濃縮 太長 每秒 閱讀 ai llm", run: () => openCaptionCondense() },
+    s.project && { id: "captions:title", group: "字幕", label: "加入標題字卡…", icon: "type",
+      keywords: "標題 字卡 片頭 下標 章節 lower third title 範本", run: () => openTitleDialog() },
     { id: "queue:pause", group: "佇列", label: paused ? "繼續佇列" : "暫停佇列", icon: paused ? "play" : "pause",
       run: () => pauseQueue(!paused) },
     { id: "theme:flip", group: "外觀", label: dark ? "切換成淺色主題" : "切換成深色主題", icon: dark ? "sun" : "moon",

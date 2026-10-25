@@ -25,7 +25,7 @@ export function MediaBin({ project }) {
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return Object.values(project.media || {}).filter((m) => (kind === "all" || m.kind === kind) && mediaMatches(m, q))
+    return Object.values(project.media || {}).filter((m) => !m.trashed && (kind === "all" || m.kind === kind) && mediaMatches(m, q))
       .sort((a, b) => (b.created || 0) - (a.created || 0));
   }, [project.media, kind, query]);
   useEffect(() => {

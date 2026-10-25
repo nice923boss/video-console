@@ -14,7 +14,7 @@ from .linked import follow_ops
 from .opfields import (
     ADJUST_FIELDS, AUDIO_FIELDS, CAPTION_FIELDS, CAPTION_STYLE_FIELDS, CAST_FIELDS, LAYER_FIELDS, MARKER_FIELDS,
     MAX_CAPTION_STYLES, MAX_OPS, OVERLAY_FIELDS, SETTINGS_FIELDS, SHOT_FIELDS, STYLE_FIELDS, TAKE_FIELDS,
-    TRACK_FIELDS, _bool, _clean_patch, _find, _float, _int, _str, _tags, _update_item, clean_caption_style,
+    TRACK_FIELDS, _bool, _clean_patch, _find, _float, _int, _review, _str, _tags, _update_item, clean_caption_style,
     clean_shot, snap8, valid_id,
 )
 from .util import AppError
@@ -34,6 +34,9 @@ def _project_update(p: dict, op: dict) -> dict | None:
     if "notes" in patch:
         inverse["notes"] = p.get("notes", "")
         p["notes"] = _str(8000)(patch["notes"])
+    if "review" in patch:  # the client's comments on the whole film (review.py)
+        inverse["review"] = p.get("review", [])
+        p["review"] = _review(patch["review"])
     for key, fields in (("settings", SETTINGS_FIELDS), ("style", STYLE_FIELDS), ("tracks", TRACK_FIELDS)):
         if key in patch:
             p.setdefault(key, {})
@@ -137,8 +140,20 @@ def _alpha_codec(v: Any) -> str:
     return v
 
 
+def _char_times(v: Any) -> list:
+    """Each character's start in a voice file (chartimes.py); None for punctuation and spaces."""
+    if not isinstance(v, list) or len(v) > 1000:
+        raise AppError("逐字時間格式不正確")
+    out = []
+    for t in v:
+        if t is not None and (isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= 36000):
+            raise AppError("逐字時間格式不正確")
+        out.append(None if t is None else float(t))
+    return out
+
+
 DERIVED_FIELDS = {"wave": _media_file, "thumb": _media_file, "strip": _media_file, "alphaCodec": _alpha_codec,
-                  "preview2": _media_file, "preview4": _media_file}  # lowres.py
+                  "preview2": _media_file, "preview4": _media_file, "charTimes": _char_times}  # lowres.py, CP-13
 
 
 def _item_derive(p: dict, op: dict) -> dict | None:
@@ -394,7 +409,8 @@ def _media_update(p: dict, op: dict) -> dict | None:
     media = p["media"].get(op.get("id"))
     if media is None:
         return None
-    fields = {"name": _str(200), "note": _str(1000), "favorite": _bool, "tags": _tags}
+    fields = {"name": _str(200), "note": _str(1000), "favorite": _bool, "tags": _tags,
+              "trashed": _bool}  # AU-14: a replaced voice-over in the project trash
     patch = _clean_patch(op.get("patch"), fields)
     undo = _update_item(media, op, patch, fields)
     return {"op": "media.update", "id": media["id"], **undo}

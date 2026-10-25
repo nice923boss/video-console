@@ -163,6 +163,7 @@ class DepInstaller:
         target = self._tools / pkg.dir
         ok = False
         keep_part = False
+        error = ""
         try:
             downloads.mkdir(parents=True, exist_ok=True)
             for old in downloads.glob(f"{pkg.id}*.part"):
@@ -182,18 +183,22 @@ class DepInstaller:
             if target.exists():
                 shutil.rmtree(target)
             staging.rename(target)
-            self._update(pkg.id, state="done")
             ok = True
             log.info("Installed %s into %s", pkg.name, target)
         except AppError as exc:
             keep_part = isinstance(exc, DownloadInterrupted)
-            self._fail(pkg, exc.message)
+            error = exc.message
         except (OSError, zipfile.BadZipFile) as exc:
-            self._fail(pkg, _describe(exc))
+            error = _describe(exc)
         finally:
             if not keep_part:
                 part.unlink(missing_ok=True)
             shutil.rmtree(staging, ignore_errors=True)
+            # The final state goes out after the cleanup, so whoever sees it also sees the files as they stay.
+            if ok:
+                self._update(pkg.id, state="done")
+            elif error:
+                self._fail(pkg, error)
             self._on_change(pkg.id, ok)
 
     def _fail(self, pkg: Package, message: str) -> None:

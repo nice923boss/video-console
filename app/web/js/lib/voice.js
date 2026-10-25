@@ -4,6 +4,8 @@
 import { api } from "./api.js";
 import { getState, setState } from "./store.js";
 import { submitJob, submitBatch } from "./jobs-actions.js";
+import { newId } from "./format.js";
+import { dbToGain } from "../dialogs/import-gain.js";
 import { toast, toastError } from "../components/toast.js";
 
 export const VOICE_STATES = {
@@ -47,6 +49,31 @@ export const voiceClip = (project, capId) => (project.audio || []).find((a) => a
 export function voiceEnd(project, cap, length) {
   const later = (project.captions || []).filter((c) => c.id !== cap.id && c.start >= cap.start).map((c) => c.start);
   return Math.round(Math.max(cap.end, Math.min(cap.start + length, ...later)) * 1000) / 1000;
+}
+
+// AU-14: ops putting a voice-over from the project trash back on its caption, as a voice job would; the one
+// it replaces goes to the trash (voice.py replace_ops). It keeps the replaced clip's volume, or takes the
+// speaker's (VoAI 6 dB up) when the line has none.
+export function restoreVoiceOps(project, media, cap) {
+  const audio = project.audio || [];
+  const old = audio.filter((a) => a.captionId === cap.id);
+  const out = [];
+  for (const clip of old) {
+    out.push({ op: "audio.delete", id: clip.id });
+    const m = (project.media || {})[clip.mediaId] || {};
+    const shared = audio.some((a) => a.mediaId === m.id && !old.includes(a));
+    if (["audio8voice", "voai"].includes((m.source || {}).backend) && !shared) {
+      out.push({ op: "media.update", id: m.id, patch: { trashed: true } });
+    }
+  }
+  const member = castMember(project, (media.source || {}).castId) || {};
+  const own = Number(member.volume ?? 1) * ((media.source || {}).backend === "voai" ? dbToGain(6) : 1);
+  const volume = old.length ? Number(old[0].volume ?? 1) : Math.round(Math.min(4, own) * 10000) / 10000;
+  out.push({ op: "media.update", id: media.id, patch: { trashed: false } },
+    { op: "audio.add", item: { id: newId("a"), mediaId: media.id, name: media.name, start: cap.start, volume, captionId: cap.id } });
+  const end = voiceEnd(project, cap, Number(media.duration || 0));
+  if (end > cap.end + 1e-3) out.push({ op: "caption.update", id: cap.id, patch: { end } });
+  return out;
 }
 
 const isActive = (j) => j.status === "queued" || j.status === "running";

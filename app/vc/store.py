@@ -616,12 +616,13 @@ class ProjectStore:
         return count
 
     def usage(self, pid: str) -> dict[str, Any]:
-        """Disk usage of a project, split into referenced and unreferenced media files (stale cache and
-        interrupted-save leftovers count as unreferenced)."""
+        """Disk usage of a project, split into referenced and unreferenced media files (stale cache,
+        interrupted-save leftovers and media in the project trash count as unreferenced)."""
         project = self.get(pid)
         root = self.project_dir(pid)
         referenced: set[str] = set()
-        for item in list(project["takes"].values()) + list(project["media"].values()):
+        kept = [m for m in project["media"].values() if not m.get("trashed")]
+        for item in list(project["takes"].values()) + kept:
             for key in ("file", "thumb", "strip", "wave", "preview2", "preview4"):
                 if item.get(key):
                     referenced.add(item[key])
@@ -647,12 +648,17 @@ class ProjectStore:
                 files = [x for x in f.rglob("*") if x.is_file()] if f.is_dir() else [f]
                 unused += sum(x.stat().st_size for x in files)
                 orphans.append(f.relative_to(root).as_posix())
-        return {"used": used, "unused": unused, "orphans": orphans}
+        return {"used": used, "unused": unused, "orphans": orphans,
+                "trashed": len(project["media"]) - len(kept)}
 
     def purge_orphans(self, pid: str) -> int:
-        """Delete media files no take/media entry references (deleted takes stay undoable until this)."""
+        """Delete media files no take/media entry references (deleted takes stay undoable until this), and
+        empty the project trash."""
         entry = self._entry(pid)
         with entry.lock:
+            trashed = [m["id"] for m in entry.project["media"].values() if m.get("trashed")]
+            if trashed:
+                self.apply(pid, [{"op": "media.delete", "id": mid} for mid in trashed], origin="purge", undoable=False)
             info = self.usage(pid)
             root = self.project_dir(pid)
             for rel in info["orphans"]:

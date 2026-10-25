@@ -61,6 +61,7 @@
 .gain-hint { font-weight: 450; opacity: .78; }
 .gain-custom { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--text-2); }
 .gain-custom .num { width: 110px; }
+.gain-remember { margin-top: 14px; }
 
 /* Context menu */
 

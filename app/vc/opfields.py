@@ -113,6 +113,19 @@ def _track_order(v: Any) -> list[str]:
     return list(dict.fromkeys(_opt_id(x) for x in v if x))[:500]
 
 
+def _row_keys(v: Any) -> list[str]:
+    """Audio rows by key: a music track (see audio_track), "voice" for the 配音 rows, "source" for 原聲."""
+    if v is None:
+        return []
+    if not isinstance(v, list):
+        raise AppError("音軌設定格式不正確")
+    return list(dict.fromkeys(x if x in ("voice", "source") else _opt_id(x) for x in v if x))[:500]
+
+
+def _opt_row_keys(v: Any) -> list[str] | None:
+    return None if v is None else _row_keys(v)
+
+
 MAX_REFS = 10  # reference pictures one job may read (FLUX3-Klein): the shot's ref plus nine extras
 
 
@@ -213,6 +226,19 @@ MAX_OPS = 2000  # ops per batch level; longer lists are nested (apply_ops)
 MAX_PARKED = 500
 
 
+PIP_KEYS = ("x", "y", "w", "opacity", "volume", "chroma", "keyframes")
+
+
+def _pip(v: Any) -> dict | None:
+    """Where an upper-track clip sat before it became this shot (ED-16, lift.js dropOps): lifting the shot back
+    restores it. Stored only; the picture lane still plays the shot full frame."""
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise AppError("上層位置格式不正確")
+    return _clean_patch({k: x for k, x in v.items() if k in PIP_KEYS}, {k: OVERLAY_FIELDS[k] for k in PIP_KEYS})
+
+
 def _parked(v: Any) -> dict:
     """Items a shot took along when it left the sequence (linked.py), timed from the shot's start."""
     lists = {"captions": CAPTION_FIELDS, "audio": AUDIO_FIELDS, "overlays": OVERLAY_FIELDS, "adjustments": ADJUST_FIELDS}
@@ -250,6 +276,25 @@ def _keyframes(fields: dict[str, Callable[[Any], Any]]) -> Callable[[Any], list]
     return conv
 
 
+MAX_REVIEW = 200
+
+
+def _review(v: Any) -> list[dict]:
+    """Client review comments (SB-13, review.py): [{by, at, text}], oldest first; one with no text is dropped."""
+    if v is None:
+        return []
+    if not isinstance(v, list) or len(v) > MAX_REVIEW:
+        raise AppError(f"審稿意見格式不正確（最多 {MAX_REVIEW} 則）")
+    out = []
+    for c in v:
+        if not isinstance(c, dict):
+            raise AppError("審稿意見格式不正確")
+        text = _str(2000)(c.get("text")).strip()
+        if text:
+            out.append({"by": _str(60)(c.get("by")).strip(), "at": _str(40)(c.get("at")), "text": text})
+    return out
+
+
 SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "name": _str(120),
     "prompt": _str(8000),
@@ -278,12 +323,14 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "grade": clean_grade,  # colour grade of this shot's picture alone, under any adjustment layer (GR-01)
     "masks": _masks,  # blur or mosaic boxes over the shot's picture, to hide a face or a logo (GR-12)
     "notes": _str(4000),
+    "review": _review,  # comments a client wrote on the review page (review.py)
     "color": _opt_str(20),
     "imageWorkflow": _str(80),
     "videoWorkflow": _str(80),
     "imageParams": _params,
     "videoParams": _params,
     "parked": _parked,  # set while the shot is out of the sequence: its captions, sounds and clips (linked.py)
+    "pip": _pip,  # place, size, opacity, keying and volume it had as an upper-track clip (ED-16)
 }
 TAKE_FIELDS = {"favorite": _bool, "rating": _int(0, 5), "note": _str(1000), "label": _str(120)}
 AUDIO_FIELDS = {
@@ -302,6 +349,7 @@ AUDIO_FIELDS = {
     "keyframes": _keyframes({"volume": _float(0, 4)}),
     "fixed": _bool,  # stays at its time when linked shot edits move everything else
     "speed": _float(0.25, 4),  # set on the detached sound of a sped-up shot: source seconds per timeline second
+    "speech": _bool,  # counts as voice: music on the 背景音樂 rows dips under it (duck.py)
 }
 CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _str(500), "position": _str(10),
                   "speaker": _opt_id,
@@ -310,6 +358,7 @@ CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _s
                   "y": _opt_float(0, 1),
                   "shot": _opt_id,  # the storyboard shot showing this text; timing stays the caption's own
                   "sttShot": _opt_id,  # added by speech-to-subtitle from this shot; a rerun replaces it
+                  "title": _bool,  # a title card (GR-10): burnt in like the rest, left out of the .srt
                   "disabled": _bool}
 # Sizes and distances are pixels on a 1080-high frame, as in the burnt-in ASS script.
 CAPTION_STYLE_FIELDS = {
@@ -338,6 +387,8 @@ CAPTION_STYLE_FIELDS = {
     "marginH": _float(0, 600),
     "x": _opt_float(0, 1),  # dragged anchor for every caption of the style; None: the caption's top/middle/bottom row
     "y": _opt_float(0, 1),
+    "highlight": _bool,  # CP-13: each character turns highlightColor as the caption's voice-over says it
+    "highlightColor": _hex,
 }
 # The look captions had before styles existed.
 DEFAULT_CAPTION_STYLE = {
@@ -345,7 +396,7 @@ DEFAULT_CAPTION_STYLE = {
     "italic": False, "spacing": 0.0, "outline": True, "outlineColor": "#000000", "outlineWidth": 4.0,
     "shadow": True, "shadowColor": "#000000", "shadowOpacity": 0.4, "shadowDistance": 1.0, "shadowBlur": 0.0,
     "box": False, "boxColor": "#000000", "boxOpacity": 0.6, "boxPadding": 12.0, "align": "center",
-    "marginV": 65.0, "marginH": 80.0, "x": None, "y": None,
+    "marginV": 65.0, "marginH": 80.0, "x": None, "y": None, "highlight": False, "highlightColor": "#ffd400",
 }
 MAX_CAPTION_STYLES = 50
 CAST_FIELDS = {"name": _str(40), "voice": _str(200), "voiceName": _str(80), "speed": _float(0.5, 2.0),
@@ -361,11 +412,14 @@ SETTINGS_FIELDS = {
     "captionStyle": _opt_id,  # default caption style; None: DEFAULT_CAPTION_STYLE
     "fit": _choice("contain", "cover"),  # framing of clips whose aspect differs; preview and export share it
     "gradeCaptions": _bool,  # captions are burnt in before the adjustment layers, so they get graded too
+    "duckDb": _opt_float(0, 24),  # how far the 背景音樂 rows dip under voice; None: duck.DEFAULT_DB
 }
 STYLE_FIELDS = {"prompt": _str(4000), "negative": _str(4000), "preset": _str(40)}
 # Switches on the fixed timeline rows; picture-in-picture tracks carry their own in project["layers"].
 TRACK_FIELDS = {"videoHidden": _bool, "videoMuted": _bool, "captionsHidden": _bool, "voiceMuted": _bool,
-                "musicMuted": _bool, "adjustHidden": _bool, "musicOrder": _track_order}
+                "musicMuted": _bool, "adjustHidden": _bool, "musicOrder": _track_order,
+                "speechRows": _opt_row_keys,  # rows whose every clip is voice; None: the 配音 rows (duck.py)
+                "bgmRows": _row_keys}  # music tracks that dip under voice
 LAYER_FIELDS = {"name": _str(40), "hidden": _bool, "muted": _bool}
 OVERLAY_FIELDS = {
     "name": _str(120),

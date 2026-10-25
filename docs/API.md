@@ -55,13 +55,14 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
 | `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本。影片版本與素材可能有 `preview2`、`preview4`：1/2、1/4 解析度預覽檔的路徑（`media/thumbs/<id>_p2.mp4`），由 `preview-files` 產生，只供預覽播放，輸出一律用原檔 |
-| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot}`，時間是序列上的秒數。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
+| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title}`，時間是序列上的秒數。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
 | `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed` |
 | `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背 |
 | `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用）；`musicOrder` 是音樂軌由上到下的代號（片段的 `track`，沒有 `track` 的用片段 id），沒列到的排在後面，只影響顯示 |
 | `markers` | 時間軸標記陣列 `{id, start, color, name}`，`start` 是序列秒數；color 可用 `blue`、`red`、`orange`、`yellow`、`green`、`purple` |
+| `review` | 整體的客戶意見，格式同鏡頭的 `review`；客戶寫的整體意見與已刪除鏡頭的意見放在這裡，用 `project.update` 的 `patch.review` 整組取代 |
 | `media` | 素材庫。`tags` 是標籤陣列（每個最多 30 字、每個素材最多 20 個，重複的只留一個），用 `media.update` 的 `patch.tags` 整組取代 |
 
 鏡頭常用欄位：
@@ -75,6 +76,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `transition` | `{"type": "cut", "duration": 0.5}`；type 可用 `cut`、`crossfade`、`fade_black`、`fade_white`、`wipe_left`、`slide_left`，長度 0.1~5 秒 |
 | `color` | 標籤顏色，時間軸片段整段染色；見下表 |
 | `notes` | 備註（4000 字內），滑鼠停在片段上會顯示 |
+| `review` | 客戶審稿意見陣列 `{by, at, text}`（SB-13）：留言者（60 字內）、留言時間（ISO 字串）、意見（2000 字內）；最多 200 則，沒有文字的略過。由 `POST /review` 加入，用 `shot.update` 的 `patch.review` 整組取代 |
 | `duration` | 只有圖片或空白鏡頭時使用的長度 |
 | `speed` | 影片播放速度 0.25~4（預設 1），聲音一起變速；時間軸上的長度是 `(trimOut - trimIn) / speed` |
 | `disabled` | `true` 時保留位置，預覽與輸出都是黑畫面加靜音 |
@@ -154,7 +156,7 @@ POST /api/projects/{pid}/ops
 | `item.derive` | `{"id": "m_...", "patch": {"wave": "media/thumbs/m_..._wave.json", "alphaCodec": "vp9"}}`：重新讀檔得到的版本或素材資料（波形檔、縮圖 `thumb`、膠卷縮圖 `strip`、透明 webm 的編碼 `vp8`／`vp9`、預覽檔 `preview2`／`preview4`），開啟專案時的補齊流程使用，一般修改不需要 |
 | `item.relink` | `{"id": "m_...", "patch": {"file": "media/...", "duration": 8.0}, "unset": ["wave"]}`：把素材或版本換成另一個檔（重新連結），用到它的鏡頭與片段不動。由 `upload?target=relink` 的工作送出，一般不直接用 |
 | `captionStyle.*`、`take.*`、`media.*`、`layer.*` | 樣式庫、版本、素材、軌道 |
-| `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks"}}` |
+| `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks", "review"}}` |
 | `batch` | `{"op": "batch", "ops": [...]}`：多個 op 包成一組 |
 | `linked` | `{"op": "linked", "ops": [...]}`：鏡頭變動時字幕、配音、上層畫面跟著移動；加 `"shift": false` 只收起、放回，不平移 |
 
@@ -207,7 +209,7 @@ vc.ops(pid, [{"op": "linked", "ops": [{"op": "shot.delete", "id": sid}]}], label
 
 ### 3.7 剪輯指令：/timeline 與 /edit
 
-剪輯頁的快捷鍵功能（分割、裁剪、定格、分離原聲、倒放、音量、關鍵幀）都有對應的指令。指令用時間軸上的秒數指定位置，伺服器算出和按快捷鍵完全相同的 op 再送出：鏡頭變動一律用 `linked` 包起來（字幕、音訊、上方畫面跟著移動），一次呼叫是一個復原步驟。
+剪輯頁的快捷鍵功能（分割、裁剪、定格、分離原聲、倒放、音量、關鍵幀、修剪模式）本身就是送這些指令，按鍵與 Claude 共用 `vc/edits.py` 這一份實作。指令用時間軸上的秒數指定位置，伺服器算出 op 再送出：鏡頭變動預設用 `linked` 包起來（字幕、音訊、上方畫面跟著移動），一次呼叫是一個復原步驟。
 
 先讀時間軸，知道每個片段在哪裡：
 
@@ -230,7 +232,7 @@ POST /api/projects/{pid}/edit
 → {"label": "分割鏡頭", "changed": [...], "rev": 13, "id": "s_..."}
 ```
 
-共用參數：`t` 是序列秒數；`type` 是片段種類 `shot`（預設）、`overlay`、`audio`、`caption`、`adjust`；`id` 是片段 id。沒給 `id` 時取 `t` 下方的片段（鏡頭取畫面軌，其他種類取第一個蓋到 `t` 的片段）。
+共用參數：`t` 是序列秒數；`type` 是片段種類 `shot`（預設）、`overlay`、`audio`、`caption`、`adjust`；`id` 是片段 id。沒給 `id` 時取 `t` 下方的片段（鏡頭取畫面軌，其他種類取第一個蓋到 `t` 的片段）。可選 `link: false`（剪輯頁「連動」關閉時送）讓鏡頭變動不帶動其他軌，一起送出的工作也帶 `payload.link: false`；可選 `coalesce`，用法同 3 節的本文欄位，只拿來合併改同一批欄位的連續指令（合併後復原只還原第一次修改前的那些欄位，剪輯頁連按音量鍵時依「整段」或「區域」分開）。
 
 | cmd | 參數 | 作用 | 回傳的 `id` |
 |---|---|---|---|
@@ -241,7 +243,10 @@ POST /api/projects/{pid}/edit
 | `detach` | `id` 或 `t` | 把鏡頭原聲拆成音訊片段，鏡頭改成無聲 | 新的音訊片段 |
 | `restore` | `id`（鏡頭或它的原聲片段） | 刪掉原聲片段，鏡頭恢復有聲 | |
 | `reverse` | `id` 或 `t` | 第一次送出 `reverse` 工作產生倒放影片（不改專案，回傳 `job`）；已有倒放版本時在正放、倒放之間切換，修剪範圍跟著鏡像 | |
-| `volume` | `type`、`id`、`db`，可選 `in`、`out` | 音量加減 `db`（例如 1 或 -1）；給 `in`、`out`（序列秒數）時只調區域內，兩端自動加關鍵幀，前後各 0.1 秒漸變 | |
+| `roll` | `id`（剪接點前的鏡頭）、`by` | 把這個鏡頭與下一個鏡頭之間的剪接點移動 `by` 秒（正數往後）：前一個鏡頭的出點、後一個的入點一起改，總長度與其他鏡頭不變；素材或鏡頭長度不夠時移到能移的最遠處，回傳實際的 `by` | |
+| `slip` | `id`、`by` | 影片鏡頭的入點、出點一起移動 `by` 秒（正數換成較晚的畫面），位置與長度不變；不連動字幕與上層片段 | |
+| `slide` | `id`、`by` | 鏡頭內容不變，跟前後兩個剪接點一起移動 `by` 秒：前一個鏡頭變長、後一個變短（或反過來） | |
+| `volume` | `type`、`id`、`db`，可選 `in`、`out`、`t` | 音量加減 `db`（例如 1 或 -1）；給 `in`、`out`（序列秒數）時只調區域內，兩端自動加關鍵幀，前後各 0.1 秒漸變。另回 `level`（調整後的音量：有區域時是區域起點的值；片段有音量關鍵幀時是 `t` 處的值，沒給 `t` 用片段起點）與 `partial`（是否只調了區域內） | |
 | `keyframe` | `type`、`id`、`t`，可選 `values` | 在 `t` 記下片段目前的值當關鍵幀；`values` 例如 `{"opacity": 0}` 覆蓋要記的值 | |
 
 限制（違反時回 400 與中文說明）：
@@ -252,6 +257,7 @@ POST /api/projects/{pid}/edit
 - 已分離原聲的鏡頭可 `freeze`：跨過定格點的原聲在該處切開，後段與之後同素材的原聲一律後移定格長度（不看連動開關）。
 - 已分離原聲的鏡頭可 `reverse`：只換畫面，原聲照常順向播放；`restore` 以素材檔比對，倒放版本視同原始素材。
 - `freeze`、`reverse` 只能用在影片鏡頭。
+- `roll`、`slip`、`slide` 只作用在畫面軌，`by` 以時間軸秒數計（變速鏡頭的素材移動量是 `by` 乘速度）。`roll` 不能用在最後一個鏡頭，`slip` 只能用在影片鏡頭，`slide` 要前後都有鏡頭；已經移到底時回 400「已經到底了」。分離出來的原聲不跟著移動。
 - 切點離片段邊緣太近（0.1 秒內，圖片 0.2 秒內）時不能 `split`、`trim`。
 
 範例：把第 20 到 25 秒的配樂降 6dB，再讓上方圖片在 29 到 30 秒淡出。`in` 是 Python 保留字，要用 `**{...}` 傳。
@@ -343,8 +349,8 @@ vc.wait(job["id"])
 - 已有字幕時新字幕會另外加入，不會取代。整批可用一次 undo 收回。
 - 引擎是另一個專案 Speech-to-subtitle（faster-whisper large-v3，選用 MFA 精準對齊）。設定在 `settings.stt`：`{"folder": "", "python": ""}`。留白時找 VC 同一層的 `Speech-to-subtitle` 資料夾，Python 用它 `pyvenv.cfg` 指向的直譯器。
 - 自我檢查：`POST /api/stt/check`（最多 180 秒），回 `{"ok", "cuda", "model", "ffmpeg", "mfa", "opencc", "folder", "python"}`，`ok` 需要 CUDA 與模型都就緒。
-- 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；沒有字幕時 409）。
-- 匯入 SRT：`POST /api/projects/{pid}/captions.srt`，body 是 .srt 檔原始內容（最多 10 MB），回 `{"rev", "added", "voiced"}`。字幕放在檔案記載的時間（序列秒數）加上 `?offset=` 秒數（預設 0），位置 `bottom`、不綁鏡頭；`<...>` 與 `{\...}` 標記會拿掉，多行文字保留換行（每行去頭尾空白、略過空行），超過 500 字截斷。編碼依序判斷：有 BOM 的 UTF-16、UTF-8（BOM 可有可無）、其餘當 Big5。加 `?replace=1` 先刪掉專案現有字幕，這時 `?voices=` 決定綁在舊字幕上的配音：`delete`（預設，刪掉）、`keep`（留在配音軌當一般片段）、`regen`（刪掉，新字幕沿用時間重疊最多的舊字幕的說話者，方便重新配音）；`voiced` 是有說話者的新字幕 id。整批是一個 undo 步驟（標籤「匯入 SRT」）。檔案裡沒有可用字幕時回 400 且不動現有字幕。
+- 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；不含標題字卡；沒有字幕時 409）。
+- 匯入 SRT：`POST /api/projects/{pid}/captions.srt`，body 是 .srt 檔原始內容（最多 10 MB），回 `{"rev", "added", "voiced"}`。字幕放在檔案記載的時間（序列秒數）加上 `?offset=` 秒數（預設 0），位置 `bottom`、不綁鏡頭；`<...>` 與 `{\...}` 標記會拿掉，多行文字保留換行（每行去頭尾空白、略過空行），超過 500 字截斷。編碼依序判斷：有 BOM 的 UTF-16、UTF-8（BOM 可有可無）、其餘當 Big5。加 `?replace=1` 先刪掉專案現有字幕（標題字卡保留），這時 `?voices=` 決定綁在舊字幕上的配音：`delete`（預設，刪掉）、`keep`（留在配音軌當一般片段）、`regen`（刪掉，新字幕沿用時間重疊最多的舊字幕的說話者，方便重新配音）；`voiced` 是有說話者的新字幕 id。整批是一個 undo 步驟（標籤「匯入 SRT」）。檔案裡沒有可用字幕時回 400 且不動現有字幕。
 
 ## 7. 輸出
 
@@ -430,6 +436,8 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/captions.srt` | 匯入 SRT 字幕（第 6 節） |
 | GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |
 | GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
+| GET | `/api/projects/{pid}/review.html` | 客戶審稿網頁（SB-13）：序列中每個鏡頭的畫面（data: URI，單檔可離線開啟）、秒數、提示詞與字幕，以附件下載（檔名 `<專案>_審稿.html`）。客戶在頁面留言後下載 `{"vc": "review-comments", "version": 1, "project", "name", "by", "at", "note", "shots": [{"id", "no", "name", "text"}]}` 的 .json 檔 |
+| POST | `/api/projects/{pid}/review` | 匯入審稿意見檔（body 是 .json 原始內容，最多 2 MB，可有 BOM）：鏡頭意見加到該鏡頭的 `review`，`note` 與已刪除鏡頭的意見加到專案的 `review`，整批一個 undo 步驟（標籤「匯入審稿意見：<留言者>」）。回 `{"rev", "by", "shots", "general", "missing", "duplicate"}`（`duplicate` 是留言者、時間、文字都相同而略過的則數）。不是意見檔、屬於別的專案、全部已匯入過或沒有任何意見時回 400 |
 | POST | `/api/projects/{pid}/reveal` | 在檔案總管開啟專案資料夾 |
 | GET | `/api/projects/{pid}/usage` | 檔案使用量 `{"used", "unused", "orphans"}`（位元組；`orphans` 是沒用到的檔案相對路徑，含過期的暫存與中斷存檔留下的檔） |
 | POST | `/api/projects/{pid}/purge` | 刪除 `orphans` 並清空復原堆疊，回 `{"freed"}` |

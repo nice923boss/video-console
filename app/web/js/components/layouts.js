@@ -5,7 +5,7 @@ import { openMenu, promptDialog } from "./overlay.js";
 import { toast } from "./toast.js";
 
 // The panel prefs a layout holds, with the values the panels start from.
-const DEFAULTS = { "vc.edit.tlh": 280, "vc.edit.meters": true, "vc.edit.metersW": 88, "vc.edit.bin": false };
+const DEFAULTS = { "vc.edit.tlh": 280, "vc.edit.meters": true, "vc.edit.metersW": 88, "vc.edit.bin": false, "vc.edit.scopes": false };
 const BUILT_IN = [
   { name: "標準", hint: "時間軸中等、音量表開", prefs: DEFAULTS },
   { name: "剪輯", hint: "時間軸加大、素材清單開", prefs: { ...DEFAULTS, "vc.edit.tlh": 400, "vc.edit.bin": true } },
@@ -18,7 +18,7 @@ const MAX_NAME = 20;
 const validList = (v) => Array.isArray(v) && v.every((l) => l && typeof l.name === "string" && l.prefs && typeof l.prefs === "object");
 const savedLayouts = () => readPref(LIST_KEY, [], validList);
 const current = () => Object.fromEntries(Object.entries(DEFAULTS).map(([k, d]) => [k, readPref(k, d, (v) => v != null)]));
-const matches = (prefs, now) => Object.keys(DEFAULTS).every((k) => prefs[k] === now[k]);
+const matches = (prefs, now) => Object.keys(DEFAULTS).every((k) => (k in prefs ? prefs[k] : DEFAULTS[k]) === now[k]);
 
 function apply(prefs) {
   for (const k of Object.keys(DEFAULTS)) if (k in prefs) writePref(k, prefs[k]);
@@ -27,7 +27,7 @@ function apply(prefs) {
 async function saveCurrent() {
   const saved = savedLayouts();
   const name = await promptDialog({ title: "儲存目前版面", label: "版面名稱", value: `我的版面 ${saved.length + 1}`,
-    confirmLabel: "儲存", hint: "記下時間軸高度、音量表、素材清單；同名的版面會被取代",
+    confirmLabel: "儲存", hint: "記下時間軸高度、音量表、素材清單、示波器；同名的版面會被取代",
     validate: (v) => {
       const n = v.trim();
       if (!n) return "請輸入名稱";

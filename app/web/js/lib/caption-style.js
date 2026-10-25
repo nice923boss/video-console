@@ -11,7 +11,7 @@ export const DEFAULT_STYLE = {
   italic: false, spacing: 0, outline: true, outlineColor: "#000000", outlineWidth: 4,
   shadow: true, shadowColor: "#000000", shadowOpacity: 0.4, shadowDistance: 1, shadowBlur: 0,
   box: false, boxColor: "#000000", boxOpacity: 0.6, boxPadding: 12, align: "center",
-  marginV: 65, marginH: 80, x: null, y: null,
+  marginV: 65, marginH: 80, x: null, y: null, highlight: false, highlightColor: "#ffd400",
 };
 export const MAX_STYLES = 50;
 
@@ -44,7 +44,7 @@ export const usesStyle = (project, cap, id, legacy) => resolveStyle(project, cap
 // ---------------------------------------------------------------- preview CSS
 const u = (px) => `${round(Number(px) / 10.8, 3)}cqh`;
 
-function rgba(hex, alpha = 1) {
+export function rgba(hex, alpha = 1) {
   const n = parseInt(String(hex).slice(1), 16) || 0;
   return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${round(alpha, 3)})`;
 }
@@ -188,7 +188,7 @@ export function editStyleOps(styleId, patch, legacy) {
 }
 
 // A name already in the project gets the next free number ("標題" becomes "標題 2"), so no two styles look alike.
-function uniqueName(project, name) {
+export function uniqueName(project, name) {
   const taken = new Set((project.captionStyles || []).map((s) => s.name));
   if (!taken.has(name)) return name;
   let n = 2;

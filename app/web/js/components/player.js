@@ -177,7 +177,7 @@ function step(seconds) {
 }
 
 export function Player({ project, clips, hotkeys = true, meters = false, onToggleMeters = null, bin = false, onToggleBin = null,
-  onLayout = null }) {
+  scopes = false, onToggleScopes = null, onLayout = null, side = null }) {
   const legacy = useStore((s) => legacySize(s.settings));
   const gradeDraft = useStore((s) => s.gradeDraft);
   const maskDraft = useStore((s) => s.maskDraft);
@@ -332,6 +332,7 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   const muted = volume.muted || volume.level === 0;
 
   return html`<div class=${`player ${full ? "is-full" : ""}`} ref=${rootRef}>
+    <div class="pl-view">
     <div class="pl-screen" onDblClick=${toggleFull}>
       <div class=${stageCls} style=${stageStyle} onClick=${() => clips.length && togglePlay()}>
         <div class="pl-host" ref=${hostRef}></div>
@@ -345,6 +346,8 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
           <span>到分鏡頁新增鏡頭，或在鏡頭的「剪輯」分頁勾選「放入輸出序列」</span>
         </div>`}
       </div>
+    </div>
+    ${side}
     </div>
     <div class="pl-bar">
       ${onToggleBin && html`<${IconButton} icon="images" size=${16} active=${bin} onClick=${onToggleBin}
@@ -368,6 +371,8 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
       <${IconButton} icon="refresh" size=${16} active=${loop}
         title=${`${loop ? "循環播放：開" : "循環播放：關"}，播放區域${keyHint("edit.playRange")}時只在入點與出點之間循環`}
         onClick=${() => setLoop(!loop)} />
+      ${onToggleScopes && html`<${IconButton} icon="activity" size=${16} active=${scopes} onClick=${onToggleScopes}
+        title=${`${scopes ? "隱藏" : "顯示"}示波器（亮度波形、向量儀）${keyHint("edit.scopes")}`} />`}
       <${IconButton} icon="frame" size=${16} active=${view.safe || view.thirds || compare} title="預覽畫面選項"
         onClick=${(e) => viewMenu(e, view, setView, cover, res, setRes, compare)} />
       <div class="pl-vol">

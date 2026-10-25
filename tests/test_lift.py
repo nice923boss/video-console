@@ -77,3 +77,69 @@ def test_undo_puts_the_shot_back() -> None:
     inverse = apply_ops(p, lift(p, first["id"], "layer:l_top00000", 0)["ops"], {})
     apply_ops(p, inverse, {})
     assert p["shots"][0]["id"] == first["id"] and p["overlays"] == [] and len(p["media"]) == 0
+
+
+# ---------------------------------------------------------------- drop (ED-16)
+def drop(p: dict, item: dict, media: dict, index: int, take: dict) -> dict:
+    body = "console.log(JSON.stringify(m.dropOps(data.p, data.item, data.media, data.index, data.take)));"
+    return run_js(JS / "lib" / "lift.js", body, {"p": p, "item": item, "media": media, "index": index, "take": take})
+
+
+def upper_clip(p: dict, volume: float) -> tuple[dict, dict, dict]:
+    media = {"id": "m_clip00001", "kind": "video", "file": "media/import/clip.mp4", "duration": 8.0, "hasAudio": True,
+             "width": 320, "height": 180}
+    p["media"][media["id"]] = media
+    item = {"id": "o_clip00001", "mediaId": media["id"], "layer": "l_top00000", "name": "clip.mp4", "start": 1.0,
+            "in": 2.0, "length": 3.0, "x": 0.6, "y": 0.1, "w": 0.3, "opacity": 0.5, "volume": volume,
+            "chroma": {"on": True, "color": "#00ff00", "similarity": 0.3, "blend": 0.1},
+            "keyframes": [{"t": 1.0, "opacity": 1.0}]}
+    p["overlays"].append(item)
+    take = {"id": "t_drop00001", "shot": "s_drop00001", "kind": "video", "file": media["file"], "duration": 8.0,
+            "hasAudio": True, "width": 320, "height": 180}
+    return item, media, take
+
+
+def test_a_dropped_clip_keeps_its_place_for_a_lift_back() -> None:
+    p = project()
+    item, media, take = upper_clip(p, 1.0)
+    got = drop(p, item, media, 1, take)
+    apply_ops(p, got["ops"], {})
+    shot = p["shots"][1]
+    assert shot["id"] == "s_drop00001" and shot["activeVideo"] == take["id"] and p["overlays"] == []
+    assert (shot["trimIn"], shot["trimOut"]) == (2.0, 5.0) and not shot.get("audioDetached") and p["audio"] == []
+    assert shot["pip"] == {"x": 0.6, "y": 0.1, "w": 0.3, "opacity": 0.5, "volume": 1.0, "chroma": item["chroma"],
+                           "keyframes": [{"t": 1.0, "opacity": 1.0}]}
+
+    back = lift(p, shot["id"], "layer:l_top00000", 6.0)
+    apply_ops(p, back["ops"], {})
+    over = p["overlays"][0]
+    assert {k: over[k] for k in ("x", "y", "w", "opacity", "volume", "in", "length")} == {
+        "x": 0.6, "y": 0.1, "w": 0.3, "opacity": 0.5, "volume": 1.0, "in": 2.0, "length": 3.0}
+    assert over["chroma"]["on"] and over["keyframes"] == [{"t": 1.0, "opacity": 1.0}]
+
+
+def test_a_quieter_clip_stays_quieter_on_its_detached_sound() -> None:
+    p = project()
+    item, media, take = upper_clip(p, 0.5)
+    apply_ops(p, drop(p, item, media, 1, take)["ops"], {})
+    shot = p["shots"][1]
+    [sound] = p["audio"]
+    assert shot["audioDetached"] and shot["pip"]["volume"] == 0.5
+    # The first shot plays 0..6, so the dropped one starts at 6 with its 2..5 piece of the file.
+    assert (sound["takeId"], sound["shotId"], sound["start"], sound["in"], sound["out"], sound["volume"]) == (
+        take["id"], shot["id"], 6.0, 2.0, 5.0, 0.5)
+
+    # A lift back takes that sound with it, at the volume it has by then; a moved sound has to be restored first.
+    sound["start"] = 6.5
+    assert "error" in lift(p, shot["id"], "layer:l_top00000", 6.0)
+    sound["start"], sound["volume"] = 6.0, 0.4
+    apply_ops(p, lift(p, shot["id"], "layer:l_top00000", 6.0)["ops"], {})
+    assert p["audio"] == [] and p["overlays"][0]["volume"] == 0.4 and p["overlays"][0]["opacity"] == 0.5
+
+
+def test_pip_is_checked_like_an_upper_clip() -> None:
+    p = project()
+    apply_ops(p, [{"op": "shot.update", "id": p["shots"][0]["id"], "patch": {"pip": {"x": 0.2, "junk": 1}}}], {})
+    assert p["shots"][0]["pip"] == {"x": 0.2}
+    apply_ops(p, [{"op": "shot.update", "id": p["shots"][0]["id"], "patch": {"pip": {"opacity": 3}}}], {})
+    assert p["shots"][0]["pip"] == {"opacity": 1.0}  # clamped like an upper clip's opacity

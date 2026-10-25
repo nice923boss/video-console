@@ -16,6 +16,7 @@ import { keyHint } from "../lib/keymap.js";
 import { reverseClip, detachAudio, isReverse } from "./tl-commands.js";
 import { GradeEditor } from "./grade-panel.js";
 import { MaskEditor } from "./mask-panel.js";
+import { ReviewSection } from "./review-list.js";
 import { fullGrade, isNeutral } from "../lib/grade.js";
 
 const NONE = [];
@@ -253,6 +254,8 @@ export function EditTab({ project, shot, busy = NONE }) {
     <${SourceInfo} vid=${vid} img=${img} />
     <${SequenceSection} shot=${shot} clip=${clip} position=${pos + 1} total=${clips.length} />
     <${MarkSection} shot=${shot} />
+    <${ReviewSection} id="insp-review" items=${shot.review}
+      onChange=${(review) => updateShot(shot.id, { review }, { label: "刪除客戶意見" })} />
     ${vid
       ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />
         <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`

@@ -168,6 +168,11 @@ function Editor({ s, off, edit, fonts, text, row, ratio }) {
       ${pct("boxOpacity", "底框不透明度")}
       ${num("boxPadding", "內距", { min: 0, max: 60, label: "字幕底框內距", disabled: !s.box })}
     <//>
+    <${Section} toggle=${html`<${Toggle} checked=${s.highlight} disabled=${off} label="逐字高亮"
+      hint="有配音的字幕跟著配音逐字變色"
+      onChange=${(highlight) => edit({ highlight }, "字幕逐字高亮")} />`}>
+      ${color("highlightColor", "唸到的字")}
+    <//>
     <${Section} title="位置">
       <${Field} label="對齊" class="cs-span2">
         <${Segmented} value=${s.align} options=${ALIGNS} size="sm" disabled=${off} onChange=${(align) => edit({ align }, "字幕對齊")} /><//>

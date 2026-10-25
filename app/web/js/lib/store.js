@@ -38,7 +38,7 @@ const INITIAL = {
   clipMarks: null,          // {pid, times}: where the preview mix went over 0 dB while playing (audio-meter.js)
   solo: null,               // {pid, keys}: timeline rows heard alone in the preview; never saved or exported (MX-03)
   audioSel: null,           // audio clip ids Ctrl+clicked together; counts only while it holds editSel (tl-tracks.js)
-  editTool: "select",       // timeline click tool: "select" | "blade"
+  editTool: "select",       // timeline click tool: "select" | "trim" | "blade"
   keyPanel: false,          // the keyframe list in the edit properties panel is open
   watch: false,             // watch mode (lib/watch.js): this window only shows the open project
 };

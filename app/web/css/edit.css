@@ -41,7 +41,9 @@
 
 .player { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg); }
 .player.is-full { background: var(--stage-bg); }
-.pl-screen { position: relative; display: grid; place-items: center; flex: 1; min-height: 0; padding: 14px 18px; overflow: hidden; container-type: size; }
+.pl-view { display: flex; flex: 1; min-height: 0; }
+.player.is-full .pl-view > :not(.pl-screen) { display: none; }
+.pl-screen { position: relative; display: grid; place-items: center; flex: 1; min-width: 0; min-height: 0; padding: 14px 18px; overflow: hidden; container-type: size; }
 .player.is-full .pl-screen { padding: 0; }
 
 .pl-stage {
@@ -318,6 +320,13 @@
 .tl-label > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-label > .icon-btn { width: 24px; height: 24px; }
 .tl-label > .icon-btn.is-solo { background: var(--accent-soft); color: var(--accent); }
+.tl-role {
+  display: grid; place-items: center; flex: none; width: 20px; height: 20px; margin-left: -3px; padding: 0;
+  border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer;
+}
+.tl-role:hover { background: var(--surface-3); color: var(--text); }
+.tl-role.is-speech { background: var(--accent-soft); color: var(--accent); }
+.tl-role.is-bgm { background: var(--warn-soft); color: var(--warn); }
 .tl-order { display: flex; flex-direction: column; flex: none; }
 .tl-order > button {
   display: grid; place-items: center; width: 18px; height: 12px; padding: 0;
@@ -373,6 +382,10 @@
 
 .tl-tools { display: inline-flex; gap: 2px; margin: 0 2px; padding: 0 4px; border-inline: 1px solid var(--border); }
 .timeline.is-blade [data-sel] { cursor: crosshair; }
+/* Trim tool (ED-08): a picture clip's edge rolls the cut, its middle slips the footage */
+.timeline.is-trim .tl-clip { cursor: grab; }
+.timeline.is-trim .tl-clip > .tl-handle { cursor: col-resize; }
+.timeline.is-trim .tl-trans { pointer-events: none; } /* the cut's handles sit under a transition's marker */
 /* Watch mode: clips only move the playhead and the track buttons do nothing */
 .timeline.is-watch .tl-lane * { cursor: default; }
 .timeline.is-watch .tl-label button { opacity: .45; pointer-events: none; }

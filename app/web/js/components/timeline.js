@@ -9,14 +9,16 @@ import { useKeymap, keyHint } from "../lib/keymap.js";
 import { clock, setTime, onClock } from "../lib/clock.js";
 import { ops, undo, deleteShots, LINK_PREF } from "../lib/actions.js";
 import { setWatch, watchRefuses } from "../lib/watch.js";
-import { uploadFiles } from "../lib/jobs-actions.js";
+import { uploadFiles, importFiles } from "../lib/jobs-actions.js";
 import { rippleOps } from "../lib/ripple.js";
 import { copyItem, pasteItem } from "./tl-clipboard.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
 import { sequenceDuration, audioLength, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, musicTracks, mergeTracks } from "../lib/sequence.js";
 import { generateMissing, generateVoices } from "../lib/voice.js";
+import { rowRole, roleOp, duckDb, ROLE_LABELS, DUCK_LEVELS } from "../lib/duck.js";
 import { decodeText, TEXT_ENCODINGS, encodingLabel, linesLabel } from "../lib/textfile.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
+import { openTitleDialog } from "../dialogs/title-dialog.js";
 import { copyChapters } from "../lib/chapters.js";
 import { upload } from "../lib/api.js";
 import { MEDIA_MIME, placeMedia } from "../lib/media-actions.js";
@@ -37,6 +39,7 @@ import {
 import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
 import { Minimap } from "./tl-minimap.js";
 import { useViewWindow, inView } from "./tl-view.js";
+import { ToolButtons } from "./tl-roll.js";
 
 const LABEL_W = 176;
 const RULER_H = 26;
@@ -458,6 +461,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.trimEnd": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "end"),
     "edit.toolSelect": () => setState({ editTool: "select" }),
     "edit.toolBlade": () => setState({ editTool: "blade" }),
+    "edit.toolTrim": () => setState({ editTool: "trim" }),
     "edit.toggleEnabled": on(toggleEnabled),
     "edit.addCaption": () => addCaption(),
     "edit.markerAdd": on(markerAdd),
@@ -614,7 +618,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
   const total = sequenceDuration(clips);
   const nearAudio = (a) => audioOn(a.id) || inView(win, Number(a.start || 0), audioLength(a, audioMedia(project, a)));
   const lane = (cls, body) => html`<div class=${`tl-lane ${cls}`} style=${`width:${contentW}px`} onPointerDown=${onLaneDown}>${body}</div>`;
-  const label = (icon, text, extra = null) => html`<div class="tl-label"><${Icon} name=${icon} size=${14} /><span>${text}</span>${extra}</div>`;
+  const label = (icon, text, extra = null) => html`<div class="tl-label">${typeof icon === "string"
+    ? html`<${Icon} name=${icon} size=${14} />` : icon}<span>${text}</span>${extra}</div>`;
   const row = (key, height, body, { drop: target = null, hidden = false, muted = false } = {}) => html`<div key=${key}
     class=${["tl-row", hidden && "is-hidden", muted && "is-muted", target && drop && drop.row === target && "is-drop-target"].filter(Boolean).join(" ")}
     style=${`height:${Math.round(height * scale)}px`} data-drop=${target}>${body}</div>`;
@@ -634,6 +639,26 @@ export function Timeline({ project, clips, hotkeys = true }) {
     title=${hidden ? "顯示這條軌道" : "隱藏這條軌道（預覽與輸出都不顯示）"} onClick=${onClick} />`;
   const muteBtn = (muted, onClick, what = "這條軌道") => html`<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
     active=${muted} title=${muted ? "取消靜音" : `${what}靜音`} onClick=${onClick} />`;
+  // A sound row's leading icon sets what the row is for (AU-02): music on the 背景音樂 rows dips while a 人聲 row
+  // (or a clip switched to 人聲) plays. Only music tracks can be 背景音樂, so sound effects keep their level.
+  const db = duckDb(project.settings);
+  const roleBtn = (key, icon, music = false) => {
+    const role = rowRole(tracks, key);
+    const set = (r) => r !== role && ops([roleOp(tracks, key, r)], { label: `音軌用途：${ROLE_LABELS[r]}` });
+    const setDb = (d) => d !== db && ops([{ op: "project.update", patch: { settings: { duckDb: d } } }],
+      { label: `背景音樂降低 ${d} dB` });
+    return html`<button type="button" class=${`tl-role${role ? ` is-${role}` : ""}`}
+      title=${`音軌用途：${ROLE_LABELS[role]}${role === "bgm" ? `，遇到人聲降低 ${db} dB` : ""}（點一下更改）`}
+      onClick=${(e) => openMenu(e, [
+        { header: "音軌用途" },
+        { label: "一般", checked: !role, onClick: () => set("") },
+        { label: "人聲", icon: "mic", hint: "背景音樂軌在這條出聲時自動降低", checked: role === "speech", onClick: () => set("speech") },
+        music && { label: "背景音樂", icon: "music", hint: "遇到人聲自動降低，說完再拉回", checked: role === "bgm", onClick: () => set("bgm") },
+        music && role === "bgm" && { divider: true },
+        music && role === "bgm" && { header: "遇到人聲降低（整個專案共用）" },
+        ...(music && role === "bgm" ? DUCK_LEVELS.map((d) => ({ label: `${d} dB`, checked: db === d, onClick: () => setDb(d) })) : []),
+      ])}><${Icon} name=${role === "speech" ? "mic" : icon} size=${14} /></button>`;
+  };
   // Solo (MX-03): only the soloed rows sound in the preview; several can be on. Not saved, not exported.
   const soloKeys = solo || [];
   const soloBtn = (track, what = "這條軌道") => {
@@ -644,16 +669,18 @@ export function Timeline({ project, clips, hotkeys = true }) {
       onClick=${() => setState({ solo: keys.length ? { pid: project.id, keys } : null })} />`;
   };
 
-  return html`<div class=${`timeline ${drop ? "is-drop" : ""} ${!watch && editTool === "blade" ? "is-blade" : ""} ${watch ? "is-watch" : ""}`}
+  return html`<div class=${`timeline ${drop ? "is-drop" : ""} ${!watch && editTool !== "select" ? `is-${editTool}` : ""} ${watch ? "is-watch" : ""}`}
     onDragOver=${onDragOver} onDragLeave=${onDragLeave} onDrop=${onDrop}>
     <div class="tl-toolbar">
       ${watch ? html`<span class="tl-watch-note"><${Icon} name="eye" size=${14} />觀看模式：只能看，不會修改專案</span>
         <${Button} size="sm" icon="x" onClick=${() => setWatch(false)}>結束觀看<//>` : html`
       <${Button} size="sm" kind="ghost" icon="captions" onClick=${addCaption} title=${`在播放頭位置新增 2 秒字幕${keyHint("edit.addCaption")}`}>新增字幕<//>
+      <${Button} size="sm" kind="ghost" icon="type" onClick=${() => openTitleDialog()}
+        title="片頭標題、下標字卡等範本，可改字與顏色，加在播放頭位置">標題字卡<//>
       <${Button} size="sm" kind="ghost" icon="upload" onClick=${() => srtRef.current && srtRef.current.click()}
         title="匯入 SRT 字幕檔，字幕放在檔案記載的時間；也可以把 .srt 拖進時間軸">匯入 SRT<//>
       <input ref=${srtRef} type="file" accept=".srt" hidden onChange=${pickSrt} />
-      <${Button} size="sm" kind="ghost" icon="music" onClick=${() => fileRef.current && fileRef.current.click()}
+      <${Button} size="sm" kind="ghost" icon="music" onClick=${() => importFiles(fileRef, { track: true, start: round(clock.time, 2) }, true)}
         title="在播放頭位置加入音樂或旁白">加入音訊<//>
       <input ref=${fileRef} type="file" accept=${ACCEPT_AUDIO} multiple hidden onChange=${pickAudio} />
       <${Button} size="sm" kind="ghost" icon="users" onClick=${openCastDialog} title="人物與 Audio8Voice 配音聲音">人物表<//>
@@ -661,12 +688,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
         title="替已指定人物、還沒配音或內容已改的字幕生成配音">生成配音<//>
       <${Button} size="sm" kind="ghost" icon="rows" onClick=${() => mergeAudioTracks(project)} disabled=${music.length < 2}
         title="把不會同時出聲的音軌併成同一條，同時出聲的才分開放">合併音軌<//>
-      <span class="tl-tools">
-        <${IconButton} icon="pointer" size=${16} active=${editTool !== "blade"} title=${`選擇模式${keyHint("edit.toolSelect")}`}
-          onClick=${() => setState({ editTool: "select" })} />
-        <${IconButton} icon="blade" size=${16} active=${editTool === "blade"} title=${`分割模式：點片段就在點的位置切開${keyHint("edit.toolBlade")}`}
-          onClick=${() => setState({ editTool: "blade" })} />
-      </span>
+      <${ToolButtons} tool=${editTool} />
       <${IconButton} icon="scissors" size=${16} title=${`在播放頭分割選取的軌道，沒有選取時分割畫面軌${keyHint("edit.split")}`}
         disabled=${!clips.length && !(editSel && editSel.type !== "shot")} onClick=${() => splitAtPlayhead(project, clips, editSel)} />
       <${IconButton} icon="magnet" size=${16} active=${snapOn}
@@ -733,13 +755,13 @@ export function Timeline({ project, clips, hotkeys = true }) {
             ${drop && drop.row === "video" && drop.at != null && html`<i class="tl-insert" style=${`left:${drop.at * pps}px`}></i>`}`)}`,
           { drop: "video", hidden: !!tracks.videoHidden, muted: !!tracks.videoMuted })}
         ${hasSourceAudio(clips) && row("source-audio", AUDIO_H, html`
-          ${label("volume", "原聲", html`${soloBtn(SOURCE_TRACK, "影片原聲")}${muteBtn(!!tracks.videoMuted,
+          ${label(roleBtn(SOURCE_TRACK, "volume"), "原聲", html`${soloBtn(SOURCE_TRACK, "影片原聲")}${muteBtn(!!tracks.videoMuted,
             () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲")}
             <${TrackMeter} track=${SOURCE_TRACK} />`)}
           ${lane("tl-lane-audio", html`<${SourceAudioTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} />`)}`,
           { muted: !!tracks.videoMuted })}
         ${voiceRows.map((items, i) => row(`voice-${i}`, AUDIO_H, html`
-          ${label("mic", voiceRows.length > 1 ? `配音 ${i + 1}` : "配音", html`${soloBtn(VOICE_TRACK, "所有配音")}${muteBtn(!!tracks.voiceMuted,
+          ${label(roleBtn(VOICE_TRACK, "mic"), voiceRows.length > 1 ? `配音 ${i + 1}` : "配音", html`${soloBtn(VOICE_TRACK, "所有配音")}${muteBtn(!!tracks.voiceMuted,
             () => setTrack("voiceMuted", tracks.voiceMuted ? "取消配音靜音" : "配音全部靜音"), "所有配音")}
             ${i === 0 && html`<${TrackMeter} track=${VOICE_TRACK} />`}`)}
           ${lane("tl-lane-audio", items.filter(nearAudio).map((item) => html`<${AudioClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
@@ -749,7 +771,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
           // The track counts as muted when every clip on it is; the switch sets them all alike.
           const muted = items.every((a) => a.muted);
           return row(key, AUDIO_H, html`
-            ${label("music", `音訊 ${i + 1}`, html`${orderBtns(i)}${soloBtn(key, "這條音軌")}<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
+            ${label(roleBtn(key, "music", true), `音訊 ${i + 1}`, html`${orderBtns(i)}${soloBtn(key, "這條音軌")}<${IconButton} icon=${muted ? "volume-x" : "volume"} size=${14}
               active=${muted} title=${muted ? "取消靜音" : "這條音軌靜音"}
               onClick=${() => ops(items.filter((a) => !!a.muted === muted).map((a) => ({ op: "audio.update", id: a.id, patch: { muted: !muted } })),
                 { label: muted ? "取消靜音" : "音軌靜音" })} />

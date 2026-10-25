@@ -5,11 +5,13 @@ import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round, shotLabel } from "../lib/format.js";
-import { audioLength, audioMedia, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { audioLength, audioMedia, audioTrack, VOICE_TRACK, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { rowRole, roleOp, duckDb, ROLE_LABELS, DUCK_LEVELS } from "../lib/duck.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, voiceClip, voiceEnd, generateVoices } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openCaptionStyleDialog } from "../dialogs/caption-style-dialog.js";
+import { DEFAULT_RATE, readChars, maxChars, tooLong, openCaptionCondense } from "../dialogs/caption-condense.js";
 import {
   legacySize, styleById, defaultStyleId, resolveStyle, dragScope, setDragScope, setDefaultOps, useForAllOps,
 } from "../lib/caption-style.js";
@@ -75,6 +77,11 @@ function AudioPanel({ project, item }) {
     closePanel();
     ops([{ op: "audio.delete", id: item.id }], { label: "移除音軌" });
   };
+  // Ducking (AU-02): the role is the whole row's, the 人聲 switch this clip's alone.
+  const tracks = project.tracks || {};
+  const row = audioTrack(item);
+  const role = rowRole(tracks, row);
+  const db = duckDb(project.settings);
 
   return html`<div class="insp-shot">
     <${Head} icon=${item.muted ? "volume-x" : "music"} title=${name}
@@ -119,6 +126,18 @@ function AudioPanel({ project, item }) {
       </div>
       <${Toggle} checked=${!!item.muted} label="靜音" hint="保留在時間軸上，但預覽與匯出都不播放"
         onChange=${(muted) => updateAudio(item.id, { muted }, muted ? "音軌靜音" : "取消靜音")} />
+      <${Field} label="所在音軌的用途" hint=${role === "bgm" ? "這條音軌遇到人聲自動降低，說完再拉回"
+        : role === "speech" ? "背景音樂軌在這條音軌出聲時自動降低" : "一般音軌不參與自動避讓，適合放音效"}>
+        <${Segmented} size="sm" value=${role} onChange=${(r) => ops([roleOp(tracks, row, r)], { label: `音軌用途：${ROLE_LABELS[r]}` })}
+          options=${(row === VOICE_TRACK ? ["", "speech"] : ["", "speech", "bgm"]).map((r) => ({ value: r, label: ROLE_LABELS[r] }))} />
+      <//>
+      ${role === "bgm" && html`<${Field} label="遇到人聲降低" hint="整個專案的背景音樂軌共用這個幅度">
+        <${Segmented} size="sm" value=${db} options=${DUCK_LEVELS.map((d) => ({ value: d, label: `${d} dB` }))}
+          onChange=${(d) => ops([{ op: "project.update", patch: { settings: { duckDb: d } } }], { label: `背景音樂降低 ${d} dB` })} />
+      <//>`}
+      ${!role && html`<${Toggle} checked=${!!item.speech} label="這段是人聲"
+        hint="只把這一段算成人聲：背景音樂軌遇到它會自動降低"
+        onChange=${(speech) => updateAudio(item.id, { speech }, speech ? "標成人聲" : "取消標成人聲")} />`}
       ${!item.captionId && html`<${Toggle} checked=${!!item.fixed} label="固定在時間軸"
         hint="開啟連動時，移動、刪除或修剪鏡頭也不會帶動這條音軌，適合跟著節拍剪的配樂"
         onChange=${(fixed) => updateAudio(item.id, { fixed }, fixed ? "固定音軌" : "取消固定音軌")} />`}
@@ -398,13 +417,18 @@ function CaptionPanel({ project, cap }) {
     <${Head} icon="captions" title=${text || "（空白字幕）"}
       sub=${html`${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}<i></i>長 ${fmtSeconds(len, 2)}`} />
     <div class="insp-scroll">
-      <${Field} label="字幕文字" hint="可以換行；空白字幕不會出現在預覽與匯出">
+      <${Field} label="字幕文字" hint=${cap.title ? "標題字卡：會燒進匯出的影片，不會寫進 SRT 字幕檔；改顏色按下方「編輯樣式」"
+        : "可以換行；空白字幕不會出現在預覽與匯出"}>
         <${DraftText} multiline rows=${3} value=${cap.text || ""} maxlength="500"
           onCommit=${(v) => updateCaption(cap.id, { text: v }, "修改字幕", `caption-text:${cap.id}`)} />
       <//>
       ${typos.length > 0 && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
         <span class="note-text">可能的錯字（比對設定的字幕用語詞庫）：${hitText(typos)}</span>
         <${Button} size="sm" onClick=${() => updateCaption(cap.id, { text: fixHits(cap.text, typos) }, "改正字幕錯字")}>全部改正<//>
+      </div>`}
+      ${tooLong(cap) && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
+        <span class="note-text">字幕偏長：${readChars(cap.text)} 字只顯示 ${fmtSeconds(len, 1)}，以每秒 ${DEFAULT_RATE} 字算最多 ${maxChars(cap)} 字</span>
+        <${Button} size="sm" onClick=${() => openCaptionCondense(cap.id)}>濃縮…<//>
       </div>`}
       <${VoiceField} project=${project} cap=${cap} />
       <${ShotField} project=${project} cap=${cap} />

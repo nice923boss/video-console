@@ -22,6 +22,7 @@ from typing import Callable
 from .captions import ass_text as _ass_text
 from .captions import ass_time as _ass_time
 from .captions import caption_ass
+from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
 from .grade import build_cube, clean_grade, is_neutral
 from .keyframes import expr as kf_expr
@@ -509,6 +510,9 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             f"adelay=delays={int(round(start * 1000))}:all=1,{fix_pts}[pa{idx}]"
         )
         a_labels.append(f"pa{idx}")
+    heard = opts["clipAudio"] and not tracks.get("videoMuted")
+    spans = voice_spans(project, [(c["start"], c["start"] + c["length"]) for c in clips if heard and _clip_sounds(c)])
+    bgm = set(tracks.get("bgmRows") or [])
     for k, track in enumerate(project.get("audio", [])):
         media = audio_media(project, track)
         # Voice lines are the audio clips made for a caption or dragged onto the voice rows; everything else is music.
@@ -531,6 +535,9 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         chain = [aformat, f"atrim=start={a_in:.3f}:duration={length * speed:.3f}", "asetpts=PTS-STARTPTS",
                  *([_atempo(speed).rstrip(",")] if _atempo(speed) else []),
                  f"volume='{kf_expr(track, 'volume', 't', 0.0, 1.0)}':eval=frame"]
+        duck = duck_expr(spans, start, length, duck_db(project["settings"])) if audio_track(track) in bgm else None
+        if duck:
+            chain.append(f"volume='{duck}':eval=frame")
         if fi > 0:
             chain.append(f"afade=t=in:st=0:d={fi:.3f}")
         if fo > 0:
@@ -742,7 +749,7 @@ def _srt_time(t: float) -> str:
 
 def captions_srt(project: dict) -> str:
     caps = sorted(
-        (c for c in project.get("captions", []) if (c.get("text") or "").strip() and not c.get("disabled")),
+        (c for c in project.get("captions", []) if (c.get("text") or "").strip() and not c.get("disabled") and not c.get("title")),
         key=lambda c: float(c.get("start", 0)),
     )
     blocks = []

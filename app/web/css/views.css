@@ -130,7 +130,7 @@
 .proj-name { flex: 1; min-width: 0; overflow: hidden; font-size: calc(14px * var(--text-scale)); text-overflow: ellipsis; white-space: nowrap; }
 .proj-more { margin: -4px -2px -4px 0; opacity: 0; transition: opacity var(--dur) var(--ease), background var(--dur) var(--ease); }
 .proj-meta { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 4px; color: var(--muted); font-size: calc(11.5px * var(--text-scale)); white-space: nowrap; }
-.proj-meta > i, .bt-title i, .board-hint > i, .exp-meta > i { flex: none; width: 3px; height: 3px; border-radius: var(--r-pill); background: currentColor; opacity: .7; }
+.proj-meta > i, .bt-title i, .board-hint > i, .script-hint > i, .exp-meta > i { flex: none; width: 3px; height: 3px; border-radius: var(--r-pill); background: currentColor; opacity: .7; }
 
 .proj-new {
   display: flex;
@@ -307,6 +307,16 @@
 
 .shot-new:hover { color: var(--text); }
 .board-hint { display: flex; align-items: center; gap: 10px; flex: none; height: 34px; padding: 0 20px; overflow: hidden; border-top: 1px solid var(--border); font-size: calc(11.5px * var(--text-scale)); white-space: nowrap; }
+
+/* Board: script mode (SB-14) */
+
+.script-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.script-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; flex: none; padding: 8px 20px; border-bottom: 1px solid var(--border); }
+.script-state { font-size: calc(12.5px * var(--text-scale)); }
+.script-state.dirty { color: var(--accent-text); font-weight: 600; }
+.script-stale { display: inline-flex; align-items: center; gap: 6px; color: var(--warn); font-size: calc(12px * var(--text-scale)); }
+.input.textarea.script-text { flex: 1; width: auto; min-height: 0; margin: 14px 20px; padding: 14px 16px; resize: none; line-height: 1.7; tab-size: 2; }
+.script-hint { display: flex; align-items: center; gap: 10px; flex: none; height: 34px; padding: 0 20px; overflow: hidden; border-top: 1px solid var(--border); font-size: calc(11.5px * var(--text-scale)); white-space: nowrap; }
 
 /* Library */
 
@@ -896,3 +906,17 @@ a.exp-doc:hover { border-color: var(--border-strong); background: var(--surface-
 .bx-row:hover { background: var(--surface-3); }
 .bx-row.is-off { opacity: .5; cursor: default; }
 .bx-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Condensing subtitles too long to read (dialogs/caption-condense.js, AI-04) */
+.cc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cc-list { display: flex; flex-direction: column; max-height: 52vh; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-input); background: var(--surface-2); }
+.cc-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: calc(13px * var(--text-scale)); }
+.cc-row:last-child { border-bottom: 0; }
+.cc-src, .cc-draft { display: flex; align-items: flex-start; gap: 10px; }
+.cc-src { cursor: pointer; }
+.cc-src > input, .cc-draft > input { margin-top: 3px; }
+.cc-text { min-width: 0; white-space: pre-line; }
+.cc-draft { padding-left: 22px; }
+.cc-draft > .textarea { flex: 1; min-width: 0; }
+.cc-count { flex: none; white-space: nowrap; }
+.cc-count.is-over { color: var(--warn); }

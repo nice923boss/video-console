@@ -1,4 +1,4 @@
-// Edit view: the preview player on top (with the media bin beside it when shown), the timeline below (drag
+// Edit view: the preview player on top (with the media bin and the scopes beside it when shown), the timeline below (drag
 // the divider to resize it), and the property panel for whatever is selected on the timeline (not shown in
 // watch mode, which changes nothing).
 import { html, useEffect, useMemo, useRef } from "../lib/h.js";
@@ -15,6 +15,7 @@ import { Timeline } from "../components/timeline.js";
 import { EditProps } from "../components/edit-props.js";
 import { AudioMeters } from "../components/audio-meter.js";
 import { MediaBin } from "../components/media-bin.js";
+import { Scopes } from "../components/scopes.js";
 import { layoutMenu } from "../components/layouts.js";
 
 const TL_DEFAULT = 280;
@@ -32,7 +33,9 @@ export function EditView() {
   const toggleMeters = () => setMeters(!meters);
   const [bin, setBin] = usePref("vc.edit.bin", false, isBool);
   const toggleBin = () => setBin(!bin);
-  useKeymap({ "edit.meters": toggleMeters, "edit.bin": toggleBin });
+  const [scopes, setScopes] = usePref("vc.edit.scopes", false, isBool);
+  const toggleScopes = () => setScopes(!scopes);
+  useKeymap({ "edit.meters": toggleMeters, "edit.bin": toggleBin, "edit.scopes": toggleScopes });
   const mainRef = useRef(null);
   const clips = useMemo(() => (project ? buildSequence(project) : []), [project]);
 
@@ -96,7 +99,8 @@ export function EditView() {
       <div class="edit-stage">
         ${bin && !watch && html`<${MediaBin} project=${project} />`}
         <${Player} project=${project} clips=${clips} meters=${meters} onToggleMeters=${toggleMeters}
-          bin=${bin} onToggleBin=${watch ? null : toggleBin} onLayout=${layoutMenu} />
+          bin=${bin} onToggleBin=${watch ? null : toggleBin} scopes=${scopes} onToggleScopes=${toggleScopes} onLayout=${layoutMenu}
+          side=${scopes && html`<${Scopes} onClose=${toggleScopes} />`} />
       </div>
       <div class="edit-split" role="separator" aria-orientation="horizontal" aria-label="調整時間軸高度"
           aria-valuenow=${height} tabindex="0" title="拖曳調整時間軸高度，雙擊還原"

@@ -149,7 +149,8 @@ export function musicTracks(audio, order) {
 }
 
 // 合併音軌: each music track moves onto the first track above it that plays nothing while it does, so sounds that
-// never overlap share a row and only ones that play together keep rows of their own. Returns the audio.update ops
+// never overlap share a row and only ones that play together keep rows of their own. Tracks only join one with the
+// same 用途 (lib/duck.js), so sound effects never land on a row that dips under voice. Returns the audio.update ops
 // and how many music tracks are left.
 export function mergeTracks(project) {
   const spans = (items) => items.map((a) => {
@@ -157,13 +158,15 @@ export function mergeTracks(project) {
     return [start, start + audioLength(a, audioMedia(project, a))];
   });
   const clash = (a, b) => a.some(([s, e]) => b.some(([bs, be]) => s < be - 1e-3 && bs < e - 1e-3));
+  const tracks = project.tracks || {};
+  const role = (key) => ((tracks.bgmRows || []).includes(key) ? "bgm" : (tracks.speechRows || []).includes(key) ? "speech" : "");
   const groups = [];
   const ops = [];
-  for (const { key, items } of musicTracks(project.audio || [], (project.tracks || {}).musicOrder)) {
+  for (const { key, items } of musicTracks(project.audio || [], tracks.musicOrder)) {
     const mine = spans(items);
-    const into = groups.find((g) => !clash(mine, g.spans));
+    const into = groups.find((g) => g.role === role(key) && !clash(mine, g.spans));
     if (!into) {
-      groups.push({ key, spans: mine });
+      groups.push({ key, role: role(key), spans: mine });
       continue;
     }
     into.spans.push(...mine);

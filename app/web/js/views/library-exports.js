@@ -13,6 +13,7 @@ import { toast, toastError } from "../components/toast.js";
 import { JobRow } from "../components/job-row.js";
 import { useExportFolder } from "../components/export-folder.js";
 import { openExportDialog } from "../dialogs/export-dialog.js";
+import { pickReviewFile } from "../lib/review.js";
 
 const enc = encodeURIComponent;
 const KIND_ICON = { video: "film", image: "image", audio: "music", package: "package", file: "file" };
@@ -46,6 +47,16 @@ function DocLinks({ project }) {
       <${Icon} name="list" size=${18} />
       <span><b>鏡頭清單 CSV</b><small>${project.shots.length} 個鏡頭</small></span>
       <${Icon} name="download" size=${14} class="dim" />
+    </a>
+    <a class="exp-doc" href=${`${base}/review.html`} download title="單一網頁檔，傳給客戶用瀏覽器開啟，逐鏡留言後下載意見檔傳回來">
+      <${Icon} name="message" size=${18} />
+      <span><b>客戶審稿網頁</b><small>單檔網頁，客戶逐鏡留言</small></span>
+      <${Icon} name="download" size=${14} class="dim" />
+    </a>
+    <a class="exp-doc" href="#" role="button" title="選擇客戶從審稿網頁下載的 .json 意見檔"
+        onClick=${(e) => { e.preventDefault(); pickReviewFile(); }}>
+      <${Icon} name="upload" size=${18} />
+      <span><b>匯入審稿意見</b><small>意見會出現在各鏡頭的屬性</small></span>
     </a>
   </div>`;
 }

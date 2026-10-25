@@ -19,6 +19,7 @@ import { GenerateTab, RouteChips, kenburnsFor } from "./insp-generate.js";
 import { TakesTab } from "./insp-takes.js";
 import { EditTab } from "./insp-edit.js";
 import { StyleLibrary } from "./style-library.js";
+import { ReviewSection } from "./review-list.js";
 
 const TABS = [
   { id: "content", label: "描述", icon: "pencil" },
@@ -102,6 +103,8 @@ function ProjectPanel({ project }) {
         <div class="stat"><b class="mono">${fmtTime(stats.duration, { tenths: false })}</b><span>序列長度</span></div>
       </div>
     </div>
+    <${ReviewSection} id="insp-project-review" items=${project.review}
+      onChange=${(review) => updateProject({ review }, { label: "刪除客戶意見" })} />
     <${Section} title="風格" icon="palette">
       <${Field} label="風格預設" hint=${preset ? preset.desc : "選一個預設，會帶入對應的風格描述與負向提示詞"}>
         <${Select} value=${preset ? preset.id : ""} onChange=${pickStyle}

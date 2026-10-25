@@ -55,6 +55,12 @@ export async function submitJob(kind, shotId, payload = {}, { quiet = false } = 
   }
 }
 
+// A job the server queued along with an edit (POST /edit): shown like one sent from here.
+export function showQueued(job) {
+  upsertJobs([job]);
+  toast(`已加入佇列：${job.title}`, { duration: 2200 });
+}
+
 export async function submitBatch(list) {
   if (!list.length) return null;
   try {
@@ -170,7 +176,8 @@ export async function cancelAll(pid = null) {
 // target: "library" (media library) or "shot" (a new take on `shot`). track: also add audio to the
 // soundtrack at `start` seconds, on `audioTrack` ("voice" or a music track) when given and free there.
 // Sound files first ask for their volume (+6 / 0 / -10 dB); canceling that skips only the sound files.
-export async function uploadFiles(files, { target = "library", shot = null, track = false, start = null, layer = null, audioTrack = null } = {}) {
+// `folder` (files picked in the system dialog, see importFiles) lets that ask use a volume remembered for it.
+export async function uploadFiles(files, { target = "library", shot = null, track = false, start = null, layer = null, audioTrack = null, folder = null } = {}) {
   const { pid } = getState();
   if (!pid) return [];
   const isSound = (f) => kindOfName(f.name) === "audio";
@@ -183,12 +190,13 @@ export async function uploadFiles(files, { target = "library", shot = null, trac
   const sounds = list.filter(isSound).length;
   let gain = null;
   if (sounds) {
-    const db = await pickImportGain(sounds);
+    const db = await pickImportGain(sounds, folder);
     if (db == null) list = list.filter((f) => !isSound(f));
     else gain = dbToGain(db);
   }
   if (!list.length) return [];
-  const id = toast(`正在上傳 ${list.length} 個檔案…`, { duration: 0, progress: 0 });
+  const verb = folder ? "匯入" : "上傳";
+  const id = toast(`正在${verb} ${list.length} 個檔案…`, { duration: 0, progress: 0 });
   const jobs = [];
   for (let i = 0; i < list.length; i += 1) {
     const file = list[i];
@@ -201,22 +209,50 @@ export async function uploadFiles(files, { target = "library", shot = null, trac
     if (track || audio) params.set("track", track ? "1" : "0");
     if (track && audio && audioTrack) params.set("audioTrack", audioTrack);
     if (start != null) params.set("start", String(start));
+    const progress = (p) => updateToast(id, { message: `正在${verb} ${file.name}（${i + 1}/${list.length}）`, progress: (i + p) / list.length });
     try {
-      const res = await upload(`/api/projects/${enc(pid)}/upload?${params}`, file, (p) => {
-        updateToast(id, { message: `正在上傳 ${file.name}（${i + 1}/${list.length}）`, progress: (i + p) / list.length });
-      });
+      if (file.send) progress(0);
+      const res = file.send ? await file.send(params) : await upload(`/api/projects/${enc(pid)}/upload?${params}`, file, progress);
       if (res && res.job) jobs.push(res.job);
     } catch (err) {
-      toastError(err, `${file.name} 上傳失敗`);
+      toastError(err, `${file.name} ${verb}失敗`);
     }
   }
   if (jobs.length) {
     upsertJobs(jobs);
-    updateToast(id, { message: `已上傳 ${jobs.length} 個檔案，正在處理縮圖與格式`, level: "success", progress: null, duration: 3000 });
+    updateToast(id, { message: `已${verb} ${jobs.length} 個檔案，正在處理縮圖與格式`, level: "success", progress: null, duration: 3000 });
   } else {
     dismissToast(id);
   }
   return jobs;
+}
+
+// The import buttons (AU-09). On the user's own Windows machine the server shows the system open-file dialog, so
+// the page learns the folder the files came from (the browser's file input never tells) and a volume remembered
+// for it skips the ask. Anywhere else, or when that fails to start, the browser's file input opens as before.
+const ownDesktop = () => /Windows/.test(navigator.userAgent) && ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+export async function importFiles(input, opts = {}, audio = false) {
+  const { pid } = getState();
+  if (!pid) return [];
+  let res = null;
+  if (ownDesktop()) {
+    try {
+      res = await api.post(`/api/projects/${enc(pid)}/pick-files`, { audio });
+    } catch (err) {
+      const open = err.status === 409;  // that dialog is already open
+      toastError(err, open ? "" : "無法開啟選擇檔案視窗，改用瀏覽器選檔");
+      if (open) return [];
+    }
+  }
+  if (!res) {
+    if (input.current) input.current.click();
+    return [];
+  }
+  if (res.skipped) toast(`略過 ${res.skipped} 個不支援的檔案`, { level: "warn" });
+  if (!res.files.length) return [];
+  const base = `/api/projects/${enc(pid)}/import-picked?token=${enc(res.token)}`;
+  const files = res.files.map((f, i) => ({ name: f.name, send: (params) => api.post(`${base}&index=${i}&${params}`) }));
+  return uploadFiles(files, { ...opts, folder: res.folder });
 }
 
 // Relink (LB-09): `file` replaces a library item's file under the same id, so everything using it follows.

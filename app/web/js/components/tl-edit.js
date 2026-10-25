@@ -1,17 +1,13 @@
 // Playhead edits on the edit timeline: split the clip under the playhead in two, or trim away the part
 // before or after it. The selection picks the track (the picture lane when nothing or a shot is
 // selected) and the playhead picks the clip on that track. On the picture lane the shots after a trimmed
-// one close up, on the other tracks the trimmed edge moves to the playhead.
-import { ops } from "../lib/actions.js";
+// one close up, on the other tracks the trimmed edge moves to the playhead. The server works out the
+// edit (POST /edit, vc/edits.py), the same one Claude's edits get, and refuses a playhead too near an edge.
+import { editCmd } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
-import { newId, round } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioSpeed, audioMedia, audioTrack } from "../lib/sequence.js";
-import { splitKeys, shiftKeys, keyPatch } from "../lib/keyframes.js";
+import { round } from "../lib/format.js";
+import { clipIndexAt, audioLength, audioMedia, audioTrack } from "../lib/sequence.js";
 import { toast } from "./toast.js";
-
-const MIN_VIDEO = 0.1;
-const MIN_STILL = 0.2;
-const MIN_ITEM = 0.1;
 
 const inside = (start, length, t) => t > start && t < start + length;
 
@@ -21,198 +17,56 @@ function pick(items, sel, span, t) {
   return hits.find((it) => it.id === sel.id) || hits[0] || null;
 }
 
-// The clip a playhead edit acts on: {type, item, start, length, min, ...}, or {missing: text}.
+// The clip a playhead edit acts on: {type, id, start}, or {missing: text}.
 function targetAt(project, clips, sel, t) {
-  const media = project.media || {};
   const overlay = sel && sel.type === "overlay" && (project.overlays || []).find((o) => o.id === sel.id);
   const audio = sel && sel.type === "audio" && (project.audio || []).find((a) => a.id === sel.id);
   const caption = sel && sel.type === "caption" && (project.captions || []).some((c) => c.id === sel.id);
   const adjust = sel && sel.type === "adjust" && (project.adjustments || []).some((j) => j.id === sel.id);
-  const missing = { missing: "選取的軌道在播放頭位置沒有片段" };
+  let item = null;
   if (overlay) {
-    const span = (o) => [Number(o.start || 0), Number(o.length || MIN_ITEM)];
-    const item = pick((project.overlays || []).filter((o) => o.layer === overlay.layer), sel, span, t);
-    if (!item) return missing;
-    const still = (media[item.mediaId] || {}).kind === "image";
-    const [start, length] = span(item);
-    return { type: "overlay", item, start, length, still, min: still ? MIN_STILL : MIN_ITEM };
-  }
-  if (audio) {
+    const span = (o) => [Number(o.start || 0), Number(o.length || 0.1)];
+    item = pick((project.overlays || []).filter((o) => o.layer === overlay.layer), sel, span, t);
+  } else if (audio) {
     const span = (a) => [Number(a.start || 0), audioLength(a, audioMedia(project, a))];
-    const track = (project.audio || []).filter((a) => audioTrack(a) === audioTrack(audio));
-    const item = pick(track, sel, span, t);
-    if (!item) return missing;
-    const [start, length] = span(item);
-    return { type: "audio", item, start, length, min: MIN_ITEM };
+    item = pick((project.audio || []).filter((a) => audioTrack(a) === audioTrack(audio)), sel, span, t);
+  } else if (caption) {
+    item = pick(project.captions || [], sel, (c) => [Number(c.start || 0), Number(c.end || 0) - Number(c.start || 0)], t);
+  } else if (adjust) {
+    item = pick(project.adjustments || [], sel, (j) => [Number(j.start || 0), Number(j.length || 0.1)], t);
+  } else {
+    const clip = clips[clipIndexAt(clips, t)];
+    if (!clip) return { missing: "播放頭下方沒有片段" };
+    return { type: "shot", id: clip.shot.id, start: clip.start };
   }
-  if (caption) {
-    const span = (c) => [Number(c.start || 0), Number(c.end || 0) - Number(c.start || 0)];
-    const item = pick(project.captions || [], sel, span, t);
-    if (!item) return missing;
-    const [start, length] = span(item);
-    return { type: "caption", item, start, length, min: MIN_ITEM };
-  }
-  if (adjust) {
-    const span = (j) => [Number(j.start || 0), Number(j.length || MIN_ITEM)];
-    const item = pick(project.adjustments || [], sel, span, t);
-    if (!item) return missing;
-    const [start, length] = span(item);
-    return { type: "adjust", item, start, length, min: MIN_ITEM };
-  }
-  const clip = clips[clipIndexAt(clips, t)];
-  if (!clip) return { missing: "播放頭下方沒有片段" };
-  return { type: "shot", clip, start: clip.start, length: clip.length, min: clip.source === "video" ? MIN_VIDEO : MIN_STILL };
+  return item ? { type: sel.type, id: item.id } : { missing: "選取的軌道在播放頭位置沒有片段" };
 }
 
-// The target and the playhead's offset into it, or null after telling the viewer why not.
+// The target, or null after telling the viewer why there is none.
 function resolve(project, clips, sel) {
-  const t = clock.time;
-  const target = targetAt(project, clips, sel, t);
-  if (target.missing) {
-    toast(target.missing, { level: "warn" });
-    return null;
-  }
-  const local = t - target.start;
-  if (local < target.min || target.length - local < target.min) {
-    toast("播放頭太靠近片段邊緣，無法在這裡剪", { level: "warn" });
-    return null;
-  }
-  return { ...target, t: round(t, 3), local };
+  const target = targetAt(project, clips, sel, clock.time);
+  if (!target.missing) return target;
+  toast(target.missing, { level: "warn" });
+  return null;
 }
-
-// The tail gets copies of the shot's versions (same files, ids of its own), so each half switches and
-// regenerates on its own. A copy keeps its pairing (a reversed copy's parent) and the active picks follow.
-function tailVersions(project, shot, tailId) {
-  const takes = (project && project.takes) || {};
-  const own = Object.values(takes).filter((t) => t.shot === shot.id);
-  for (const key of ["activeVideo", "activeImage"]) {
-    const t = takes[shot[key]];
-    if (t && !own.includes(t)) own.push(t); // a half cut before versions were copied
-  }
-  const ids = Object.fromEntries(own.map((t) => [t.id, newId("t")]));
-  const list = own.map((t) => ({ op: "take.add", take: { ...t, id: ids[t.id], shot: tailId, ...(ids[t.parent] ? { parent: ids[t.parent] } : {}) } }));
-  const patch = {};
-  for (const key of ["activeVideo", "activeImage"]) if (ids[shot[key]]) patch[key] = ids[shot[key]];
-  return { list, patch };
-}
-
-// The ops that cut a resolved target in two at the playhead.
-export function splitOps(g, project) {
-  const { item, t, local } = g;
-  if (g.type === "shot") {
-    const { clip } = g;
-    const { shot } = clip;
-    const trans = shot.transition || { type: "cut", duration: 0.5 };
-    const at = round(clip.in + local * (clip.speed || 1), 3);
-    const head = clip.source === "video" ? { trimOut: at } : { duration: round(local, 2) };
-    const tail = clip.source === "video" ? { trimIn: at, trimOut: shot.trimOut ?? null } : { duration: round(clip.length - local, 2) };
-    const id = newId("s");
-    const copies = tailVersions(project, shot, id);
-    return [
-      { op: "shot.update", id: shot.id, patch: { ...head, transition: { ...trans, type: "cut" } } },
-      ...copies.list,
-      { op: "shot.add", shot: { ...shot, ...tail, ...copies.patch, id }, index: clip.index + 1 },
-    ];
-  }
-  const [head, tail] = splitKeys(item || {}, local);
-  if (g.type === "overlay") {
-    const rest = { ...item, id: newId("o"), start: t, in: g.still ? item.in : round(Number(item.in || 0) + local, 3),
-      length: round(g.length - local, 3), ...keyPatch(item, tail) };
-    return [{ op: "overlay.update", id: item.id, patch: { length: round(local, 3), ...keyPatch(item, head) } },
-      { op: "overlay.add", item: rest }];
-  }
-  if (g.type === "audio") {
-    const cut = round(Number(item.in || 0) + local * audioSpeed(item), 3);
-    return [
-      { op: "audio.update", id: item.id, patch: { out: cut, fadeOut: 0, ...keyPatch(item, head) } },
-      // The second half stays on the same track instead of opening one of its own.
-      { op: "audio.add", item: { ...item, id: newId("a"), track: audioTrack(item), start: t, in: cut, fadeIn: 0, ...keyPatch(item, tail) } },
-    ];
-  }
-  if (g.type === "adjust") {
-    return [
-      { op: "adjust.update", id: item.id, patch: { length: round(local, 3), ...keyPatch(item, head) } },
-      { op: "adjust.add", item: { ...item, id: newId("adj"), start: t, length: round(g.length - local, 3), ...keyPatch(item, tail) } },
-    ];
-  }
-  return [
-    { op: "caption.update", id: item.id, patch: { end: t } },
-    { op: "caption.add", item: { ...item, id: newId("c"), start: t, shot: null } },
-  ];
-}
-
-const SPLIT_LABEL = { shot: "分割鏡頭", overlay: "分割片段", audio: "分割音軌", adjust: "分割調整圖層", caption: "分割字幕" };
 
 export function splitAtPlayhead(project, clips, sel) {
   const g = resolve(project, clips, sel);
-  if (g) ops(splitOps(g, project), { label: SPLIT_LABEL[g.type] });
+  if (g) editCmd({ cmd: "split", t: round(clock.time, 3), type: g.type, id: g.id });
 }
 
 // Cut every clip on every track that the playhead crosses, as one undo step. Clips too close to an
 // edge at the playhead are left whole.
-export function splitAllAtPlayhead(project, clips) {
-  const t = clock.time;
-  const media = project.media || {};
-  const targets = [];
-  const clip = clips[clipIndexAt(clips, t)];
-  if (clip) targets.push({ type: "shot", clip, start: clip.start, length: clip.length, min: clip.source === "video" ? MIN_VIDEO : MIN_STILL });
-  for (const o of project.overlays || []) {
-    const still = (media[o.mediaId] || {}).kind === "image";
-    targets.push({ type: "overlay", item: o, start: Number(o.start || 0), length: Number(o.length || MIN_ITEM), still, min: still ? MIN_STILL : MIN_ITEM });
-  }
-  for (const a of project.audio || []) {
-    targets.push({ type: "audio", item: a, start: Number(a.start || 0), length: audioLength(a, audioMedia(project, a)), min: MIN_ITEM });
-  }
-  for (const c of project.captions || []) {
-    targets.push({ type: "caption", item: c, start: Number(c.start || 0), length: Number(c.end || 0) - Number(c.start || 0), min: MIN_ITEM });
-  }
-  for (const j of project.adjustments || []) {
-    targets.push({ type: "adjust", item: j, start: Number(j.start || 0), length: Number(j.length || MIN_ITEM), min: MIN_ITEM });
-  }
-  const list = [];
-  for (const g of targets) {
-    const local = t - g.start;
-    if (local >= g.min && g.length - local >= g.min) list.push(...splitOps({ ...g, t: round(t, 3), local }, project));
-  }
-  if (!list.length) {
-    toast("播放頭位置沒有可以分割的片段", { level: "warn" });
-    return;
-  }
-  ops(list, { label: "分割所有軌道" });
+export function splitAllAtPlayhead() {
+  editCmd({ cmd: "splitAll", t: round(clock.time, 3) });
 }
 
 // side "start" removes the part before the playhead, "end" the part after it.
 export function trimAtPlayhead(project, clips, sel, side) {
   const g = resolve(project, clips, sel);
   if (!g) return;
-  const { item, t, local } = g;
-  const left = side === "start";
-  const label = left ? "向左裁剪" : "向右裁剪";
-  if (g.type === "shot") {
-    const { clip } = g;
-    let patch;
-    const at = round(clip.in + local * (clip.speed || 1), 3);
-    if (clip.source === "video") patch = left ? { trimIn: at } : { trimOut: at };
-    else patch = { duration: round(left ? clip.length - local : local, 2) };
+  editCmd({ cmd: "trim", t: round(clock.time, 3), side, type: g.type, id: g.id }).then((res) => {
     // The shots after it move up, so the playhead goes to where the kept part now starts.
-    ops([{ op: "shot.update", id: clip.shot.id, patch }], { label }).then((res) => {
-      if (res && left) setTime(clip.start);
-    });
-    return;
-  }
-  let patch;
-  if (g.type === "overlay") {
-    const tIn = g.still ? item.in : round(Number(item.in || 0) + local, 3);
-    patch = left ? { start: t, in: tIn, length: round(g.length - local, 3), ...keyPatch(item, shiftKeys(item, local)) }
-      : { length: round(local, 3) };
-  } else if (g.type === "audio") {
-    const cut = round(Number(item.in || 0) + local * audioSpeed(item), 3);
-    patch = left ? { start: t, in: cut, ...keyPatch(item, shiftKeys(item, local)) } : { out: cut };
-  } else if (g.type === "adjust") {
-    patch = left ? { start: t, length: round(g.length - local, 3), ...keyPatch(item, shiftKeys(item, local)) }
-      : { length: round(local, 3) };
-  } else {
-    patch = left ? { start: t } : { end: t };
-  }
-  ops([{ op: `${g.type}.update`, id: item.id, patch }], { label });
+    if (res && g.type === "shot" && side === "start") setTime(g.start);
+  });
 }

@@ -642,6 +642,13 @@
 .star.on { color: var(--warn); }
 .star.on > svg.icon { fill: currentColor; }
 
+/* Client review comments (review-list.js) */
+.review-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.review-item { padding: 8px 10px; border-left: 3px solid var(--warn); border-radius: var(--r-input); background: var(--warn-soft); }
+.review-head { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--text-scale)); }
+.review-head > .dim { flex: 1; }
+.review-text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+
 /* Tones: shared by tone-*, badge-*, dot-*, note-*, chip-*, progress-*. Keep this block last. */
 
 .tone-neutral, .badge-neutral, .dot-neutral, .note-neutral, .chip-neutral, .progress-neutral {

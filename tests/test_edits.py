@@ -170,6 +170,21 @@ def test_volume_steps_in_db_and_ranges_use_keyframes() -> None:
             edits.plan(p, {"cmd": "volume", "db": 1, **data})
 
 
+def test_volume_reports_the_new_level() -> None:
+    """The edit page's volume keys (QA-02) show "level" and "partial" from the reply."""
+    p = with_audio(with_video(make_project()), volume=0.5)
+    plan, _ = run(p, {"cmd": "volume", "type": "audio", "id": "a_aaaaaaaa", "db": 6})
+    assert plan["level"] == p["audio"][0]["volume"] == 0.9976 and plan["partial"] is False
+    plan, _ = run(p, {"cmd": "volume", "type": "audio", "id": "a_aaaaaaaa", "db": -6, "in": 2, "out": 4})
+    keys = p["audio"][0]["keyframes"]
+    assert plan["partial"] is True and plan["level"] == keys[1]["volume"] and keys[1]["t"] == 2.0  # at the range's start
+    plan, _ = run(p, {"cmd": "volume", "type": "audio", "id": "a_aaaaaaaa", "db": 1, "t": 3})
+    keys = p["audio"][0]["keyframes"]
+    assert plan["partial"] is False and plan["level"] == keys[1]["volume"] == keys[2]["volume"]  # keyed: at t
+    plan, _ = run(p, {"cmd": "volume", "type": "audio", "id": "a_aaaaaaaa", "db": 1})
+    assert plan["level"] == p["audio"][0]["keyframes"][0]["volume"]  # no t: at the clip's start
+
+
 def test_keyframe_records_the_current_values() -> None:
     p = with_picture(with_audio(with_video(make_project()), volume=0.5))
     run(p, {"cmd": "keyframe", "type": "audio", "id": "a_aaaaaaaa", "t": 1})
@@ -216,3 +231,28 @@ def test_edit_endpoint_is_one_undo_step_and_items_follow(client: Client, project
     assert len(client.json("GET", f"/api/projects/{pid}/timeline")["clips"]) == 2
     err = client.json("POST", f"/api/projects/{pid}/edit", {"cmd": "freeze", "t": 1}, status=400)
     assert "影片鏡頭" in err["error"]
+
+
+def test_edit_endpoint_link_off_and_coalesced_nudges(client: Client, project: dict) -> None:  # noqa: F811
+    """The edit page sends its link toggle and a coalesce key (QA-02): link off leaves the other tracks put,
+    and quick volume nudges on one clip undo as one step."""
+    pid = project["id"]
+    first = client.json("GET", f"/api/projects/{pid}/timeline")["clips"][0]
+    late = first["length"] + 1
+    client.json("POST", f"/api/projects/{pid}/ops", {"ops": [
+        {"op": "shot.add", "shot": {"id": "s_second00a", "duration": 4.0}, "index": 1},
+        {"op": "caption.add", "item": {"id": "c_late00000", "start": late, "end": late + 1, "text": "後面"}},
+        {"op": "media.add", "media": {"id": "m_vol000000", "name": "配音.mp3", "kind": "audio", "file": "media/a.mp3"}},
+        {"op": "audio.add", "item": {"id": "a_vol000000", "mediaId": "m_vol000000", "start": 0, "in": 0, "out": 3}}]})
+    client.json("POST", f"/api/projects/{pid}/edit", {"cmd": "trim", "t": 1, "side": "start", "link": False})
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    assert saved["captions"][0]["start"] == pytest.approx(late)  # stays where it was
+    nudge = {"cmd": "volume", "type": "audio", "id": "a_vol000000", "db": 1, "coalesce": "a_vol000000:nudge-volume"}
+    client.json("POST", f"/api/projects/{pid}/edit", nudge)
+    out = client.json("POST", f"/api/projects/{pid}/edit", nudge)
+    assert out["level"] == pytest.approx(10 ** (2 / 20), abs=1e-3) and out["partial"] is False
+    client.json("POST", f"/api/projects/{pid}/undo")
+    saved = client.json("GET", f"/api/projects/{pid}")["project"]
+    assert saved["audio"][0].get("volume", 1.0) == 1.0  # both nudges went in one step; the trim stays
+    assert saved["shots"][0]["duration"] == pytest.approx(first["length"] - 1)
+    assert saved["captions"][0]["start"] == pytest.approx(late)
