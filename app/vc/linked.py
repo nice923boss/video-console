@@ -2,19 +2,22 @@
 
 Before a batch of shot edits each item is pinned to the clip under its start (the later clip inside a
 transition overlap), at a point in that clip's source. Afterwards the item moves by however far that
-point moved. Items on a deleted shot keep their offset from where that shot used to begin. Items the
-batch itself changed, and soundtrack clips fixed to the timeline, are left alone.
+point moved. A deleted shot takes the stretch of sound, upper-track picture and adjustment over it along
+(what runs on past it is cut there and closes up, so clips on one track never end up overlapping).
+Items the batch itself changed, and soundtrack clips fixed to the timeline, are left alone.
 
 A shot taken out of the sequence takes the items lying wholly on it along: they leave the project's
 lists and wait in the shot's "parked" field, timed from the shot's start, until it comes back.
 """
 from __future__ import annotations
 
-from .edits import audio_length
-from .sequence import build_sequence
+from .edits import MIN_ITEM, audio_length, r3, shift_keys, split_keys
+from .sequence import audio_track, build_sequence
+from .util import new_id
 
 EPS = 1e-4
 LISTS = (("captions", "caption"), ("audio", "audio"), ("overlays", "overlay"), ("adjustments", "adjust"))
+ID_PREFIX = {"audio": "a", "overlays": "o", "adjustments": "adj"}  # as split_ops in edits.py names new pieces
 
 
 def _clip_at(clips: list[dict], t: float) -> int:
@@ -78,6 +81,74 @@ def _end(project: dict, key: str, item: dict) -> float:
     return start + float(item.get("length") or 0.0)
 
 
+def _gone(clips: list[dict], shots: set[str]) -> list[tuple[float, float]]:
+    """The stretches of the sequence the clips of `shots` held (a transition belongs to the later clip)."""
+    out = []
+    for i, clip in enumerate(clips):
+        if clip["shot"]["id"] in shots:
+            end = clips[i + 1]["start"] if i + 1 < len(clips) else clip["start"] + clip["length"]
+            out.append((clip["start"], end))
+    return out
+
+
+def _left(start: float, end: float, gone: list[tuple[float, float]]) -> list[tuple[float, float, float]]:
+    """The parts of start..end outside the `gone` stretches, as (from, to, anchor): anchor is where the part
+    is pinned, the start of the stretch it closes up to. Slivers shorter than an item can be are dropped."""
+    parts, at, anchor = [], start, start
+    for a, b in gone:
+        if b <= at or a >= end:
+            continue
+        if a > at:
+            parts.append((at, a, anchor))
+        at, anchor = max(at, b), a
+    if at < end:
+        parts.append((at, end, anchor))
+    return [p for p in parts if p[1] - p[0] >= MIN_ITEM]
+
+
+def _piece(project: dict, key: str, item: dict, offset: float, length: float, full: float) -> dict:
+    """The part of an item from `offset` seconds into it, `length` long."""
+    tail_cut = offset + length < full - 1e-3
+    out = {**item, "start": r3(float(item.get("start") or 0.0) + offset)}
+    if item.get("keyframes"):
+        keys = shift_keys(item, offset)
+        out["keyframes"] = split_keys({**item, "keyframes": keys}, length)[0] if tail_cut else keys
+    if key == "audio":
+        speed = float(item.get("speed") or 1.0)
+        t_in = float(item.get("in") or 0.0)
+        out["in"] = r3(t_in + offset * speed)
+        if offset > 0:
+            out["fadeIn"] = 0
+        if tail_cut:
+            out["out"], out["fadeOut"] = r3(t_in + (offset + length) * speed), 0
+        return out
+    still = (project.get("media") or {}).get(item.get("mediaId"), {}).get("kind") == "image"
+    if key == "overlays" and not still:
+        out["in"] = r3(float(item.get("in") or 0.0) + offset)
+    out["length"] = r3(length)
+    return out
+
+
+def _cut_ops(project: dict, key: str, name: str, item: dict, parts: list[tuple[float, float, float]],
+             old_clips: list[dict], new_clips: list[dict]) -> list[dict]:
+    """Ops that leave only `parts` of an item, each closed up to where its anchor lands; with none left it goes."""
+    if not parts:
+        return [{"op": f"{name}.delete", "id": item["id"]}]
+    start = float(item.get("start") or 0.0)
+    full = _end(project, key, item) - start
+    ops = []
+    for i, (a, b, anchor) in enumerate(parts):
+        piece = _piece(project, key, item, a - start, b - a, full)
+        piece["start"] = round(max(0.0, anchor + _shift(old_clips, new_clips, anchor)), 3)
+        if i == 0:
+            patch = {k: v for k, v in piece.items() if item.get(k) != v}
+            ops.append({"op": f"{name}.update", "id": item["id"], "patch": patch})
+        else:
+            track = {"track": audio_track(item)} if key == "audio" else {}  # keep the pieces on one row
+            ops.append({"op": f"{name}.add", "item": {**piece, "id": new_id(ID_PREFIX[key]), **track}})
+    return ops
+
+
 def _moved(item: dict, d: float) -> dict:
     out = {**item, "start": round(max(0.0, float(item.get("start") or 0.0) + d), 3)}
     if "end" in item:
@@ -113,8 +184,9 @@ def follow_ops(before: dict, after: dict, shift: bool = True) -> list[dict]:
     """Update ops that move the items of `after` to follow its shots, compared with `before`.
 
     Captions lying wholly on a deleted shot go with it (and so do their voice-overs), the way a ripple
-    delete clears the linked tracks. A shot taken out of the sequence parks the items lying wholly on
-    it, and puts them back when it returns. With shift False only that putting back happens.
+    delete clears the linked tracks; on the other tracks the stretch over it is cut out. A shot taken out
+    of the sequence parks the items lying wholly on it, and puts them back when it returns. With shift
+    False only that putting back happens.
     """
     new_clips = build_sequence(after)
     ops = _restore_ops(after, new_clips)
@@ -156,6 +228,7 @@ def follow_ops(before: dict, after: dict, shift: bool = True) -> list[dict]:
                     "patch": {"start": new_start, "end": round(new_start + end - start, 3)}})
 
     by_shot = {c["shot"]["id"]: c for c in old_clips}
+    gone = _gone(old_clips, deleted) if deleted else []
     for key, name in LISTS[1:]:
         for item in after.get(key) or []:
             start = float(item.get("start") or 0.0)
@@ -171,6 +244,11 @@ def follow_ops(before: dict, after: dict, shift: bool = True) -> list[dict]:
                 clip = _owner(old_clips, taken_out, start, _end(after, key, item))
             if clip:
                 park(clip, key, name, item)
+                continue
+            end = _end(after, key, item)
+            parts = _left(start, end, gone) if gone and cid is None else [(start, end, start)]
+            if parts != [(start, end, start)]:
+                ops += _cut_ops(after, key, name, item, parts, old_clips, new_clips)
                 continue
             d = caption_shift[cid] if cid in caption_shift else _shift(old_clips, new_clips, start)
             if abs(d) > EPS:

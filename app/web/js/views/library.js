@@ -12,6 +12,7 @@ import { usePref } from "../lib/prefs.js";
 import { fileUrl, fmtBytes, fmtDuration, fmtTime, newId, round, shotLabel, ACCEPT_ALL, ACCEPT_AUDIO, ACCEPT_IMAGE, ACCEPT_VISUAL }
   from "../lib/format.js";
 import { shotCover, newOverlay } from "../lib/sequence.js";
+import { fitStart, layerSpans } from "../lib/track-fit.js";
 import { takeFromMedia, shotOps, placeMedia, mediaMatches } from "../lib/media-actions.js";
 import { restoreVoiceOps } from "../lib/voice.js";
 import { Button, IconButton, Chip, Select, Tabs, Empty, Spinner, Progress, Badge } from "../components/ui.js";
@@ -114,7 +115,8 @@ async function insertAsShot(project, media, index) {
 
 const layerName = (layer, index) => (layer && layer.name) || `畫面 ${index + 2}`;
 
-// Puts a picture or clip on a track above the picture lane (a new one on top when layerId is null).
+// Puts a picture or clip on a track above the picture lane (a new one on top when layerId is null), in the
+// nearest free stretch of an existing track.
 async function addToLayer(project, media, layerId, start) {
   const layers = project.layers || [];
   const list = [];
@@ -123,12 +125,13 @@ async function addToLayer(project, media, layerId, start) {
     layer = newId("l");
     list.push({ op: "layer.add", layer: { id: layer } });
   }
-  const item = newOverlay(newId("o"), media, layer, start, project.settings.width, project.settings.height);
+  const placed = newOverlay(newId("o"), media, layer, start, project.settings.width, project.settings.height);
+  const item = layerId ? { ...placed, start: round(fitStart(placed.start, placed.length, layerSpans(project.overlays, layerId)), 3) } : placed;
   list.push({ op: "overlay.add", item });
   const res = await ops(list, { label: "放到畫面軌" });
   if (res) {
     const index = layerId ? layers.findIndex((l) => l.id === layerId) : layers.length;
-    toast(`已放到${layerName(layers[index], index)}，從 ${fmtTime(start)} 開始`, {
+    toast(`已放到${layerName(layers[index], index)}，從 ${fmtTime(item.start)} 開始`, {
       level: "success", action: { label: "到剪輯頁", fn: () => setState({ view: "edit", editSel: { type: "overlay", id: item.id } }) },
     });
   }

@@ -11,6 +11,7 @@ import { buildSequence, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_T
 import { shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
 import { liftOps, dropOps } from "../lib/lift.js";
+import { fitStart, edgeRoom, layerSpans } from "../lib/track-fit.js";
 import { parseGlossary, glossaryHits, hitText } from "../lib/glossary.js";
 import { takeFromMedia } from "../lib/media-actions.js";
 import { Icon } from "./icons.js";
@@ -241,11 +242,12 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
       onMove: (dx, ev) => {
         const hit = pipLaneAt(ev);
         if (hit && hit.target !== "video") {
-          const start = round(Math.max(0, snapRange(clip.start + dx / pps, clip.length, snap, ev)), 3);
+          const want = round(Math.max(0, snapRange(clip.start + dx / pps, clip.length, snap, ev)), 3);
+          const start = hit.target.startsWith("layer:") ? round(fitStart(want, clip.length, layerSpans(project.overlays, hit.target.slice(6))), 3) : want;
           lift = { target: hit.target, start };
           const dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
           const where = hit.target === "new-layer" ? "放到新的畫面軌" : "移到這條上層軌";
-          setDrag({ id, dx: (start - clip.start) * pps, dy, insert: null, tip: { t: start, text: `${where}，開始 ${start.toFixed(2)} 秒，原位留空白` } });
+          setDrag({ id, dx: (start - clip.start) * pps, dy, insert: null, tip: { t: start, text: `${where}，開始 ${start.toFixed(2)} 秒${start !== want ? "，對齊相鄰片段" : ""}，原位留空白` } });
           return;
         }
         lift = null;
@@ -374,22 +376,30 @@ export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
   const begin = (e, cap, mode) => {
     const snap = ctx.snapper({ cap: cap.id });
     const len = cap.end - cap.start;
+    // The other captions on this row: a dragged caption stops at them, unless Shift is held.
+    const taken = rowCaptions(project, track).filter((c) => c.id !== cap.id).map((c) => ({ s: c.start, e: c.end }));
+    const room = edgeRoom(cap.start, cap.end, taken);
     let next = null;
     dragPointer(e, {
       threshold: mode === "move" ? 3 : 1,
       onMove: (dx, ev) => {
         const shift = dx / pps;
+        const free = ev.shiftKey;
         let { start, end } = cap;
         if (mode === "move") {
-          start = Math.max(0, snapRange(cap.start + shift, len, snap, ev));
+          const want = Math.max(0, snapRange(cap.start + shift, len, snap, ev));
+          start = free ? want : fitStart(want, len, taken);
           end = start + len;
         } else if (mode === "l") {
-          start = clamp(snap(cap.start + shift, ev), 0, cap.end - MIN_ITEM);
+          start = clamp(snap(cap.start + shift, ev), free ? 0 : room.lo, cap.end - MIN_ITEM);
         } else {
-          end = clamp(snap(cap.end + shift, ev), cap.start + MIN_ITEM, MAX_TIME);
+          end = clamp(snap(cap.end + shift, ev), cap.start + MIN_ITEM, free ? MAX_TIME : Math.min(MAX_TIME, room.hi));
         }
         next = { start: round(start, 3), end: round(end, 3) };
-        const text = mode === "move" ? `${next.start.toFixed(2)} 到 ${next.end.toFixed(2)} 秒` : `長度 ${(next.end - next.start).toFixed(2)} 秒`;
+        let text = mode === "move" ? `${next.start.toFixed(2)} 到 ${next.end.toFixed(2)} 秒` : `長度 ${(next.end - next.start).toFixed(2)} 秒`;
+        if (!free && taken.some((sp) => Math.abs(sp.e - next.start) < 1e-3 || Math.abs(sp.s - next.end) < 1e-3)) {
+          text += "，碰到相鄰字幕（按住 Shift 可重疊）";
+        }
         setDrag({ id: cap.id, ...next, tip: { t: mode === "r" ? next.end : next.start, text } });
       },
       onEnd: (moved, ev, cancelled) => {
@@ -420,7 +430,7 @@ export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
     const typo = typos.length ? `\n可能的錯字：${hitText(typos)}` : "";
     return html`<div key=${cap.id} class=${cls} data-sel=${`caption:${cap.id}`}
       style=${`left:${cur.start * pps}px;width:${Math.max(4, (cur.end - cur.start) * pps)}px`}
-      title=${`${who}${text}\n${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}，${clipActions(ctx, "雙擊跳到開頭", "雙擊跳到開頭")}${link}${typo}`}
+      title=${`${who}${text}\n${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}，${clipActions(ctx, "拖曳碰到相鄰字幕會停住，按住 Shift 拖曳可重疊，雙擊跳到開頭", "雙擊跳到開頭")}${link}${typo}`}
       onPointerDown=${(e) => begin(e, cap, "move")} onDblClick=${() => setTime(cap.start)}>
       ${bound >= 0 && html`<${Icon} name="link" size=${11} class="tl-cap-link" />`}
       ${typos.length > 0 && html`<${Icon} name="alert" size=${11} class="tl-cap-typo" />`}
@@ -456,13 +466,10 @@ function audioLaneAt(ev) {
   return drop.startsWith("audio:") ? { lane, track: drop.slice(6) } : null;
 }
 
-// Whether another clip on music track `key` plays somewhere in [start, start + length).
-function trackBusy(project, item, key, start, length) {
-  return (project.audio || []).some((a) => {
-    if (a.id === item.id || audioTrack(a) !== key) return false;
-    const s = Number(a.start || 0);
-    return start < s + audioLength(a, audioMedia(project, a)) - 1e-3 && s < start + length - 1e-3;
-  });
+// The clips other than `item` on music track `key`, as spans { id, s, e }.
+function trackSpans(project, item, key) {
+  return (project.audio || []).filter((a) => a.id !== item.id && audioTrack(a) === key)
+    .map((a) => ({ id: a.id, s: Number(a.start || 0), e: Number(a.start || 0) + audioLength(a, audioMedia(project, a)) }));
 }
 
 export function AudioClip({ project, item, ctx, selected }) {
@@ -489,8 +496,7 @@ export function AudioClip({ project, item, ctx, selected }) {
     const vertical = mode === "move" && free;
     // An edge stops at the clips beside it on its music track; with Ctrl held it pushes them (and the ones beyond,
     // gaps kept) along instead. The voice rows pack themselves, so their edges never stop.
-    const mates = own === VOICE_TRACK ? [] : (project.audio || []).filter((a) => a.id !== item.id && audioTrack(a) === own)
-      .map((a) => ({ id: a.id, s: Number(a.start || 0), e: Number(a.start || 0) + audioLength(a, audioMedia(project, a)) }));
+    const mates = own === VOICE_TRACK ? [] : trackSpans(project, item, own);
     const after = mates.filter((m) => m.s >= base.start + span - 1e-3);
     const before = mates.filter((m) => m.e <= base.start + 1e-3);
     const nextStart = Math.min(Infinity, ...after.map((m) => m.s));
@@ -499,7 +505,6 @@ export function AudioClip({ project, item, ctx, selected }) {
     let next = null;
     let patch = null;
     let target = null;
-    let crowded = false;
     let shown = false;
     let pushed = [];
     dragPointer(e, {
@@ -510,10 +515,7 @@ export function AudioClip({ project, item, ctx, selected }) {
         let dy = 0;
         let text;
         if (mode === "move") {
-          const start = round(Math.max(0, snapRange(base.start + shift, span, snap, ev)), 3);
-          next = { ...base, start };
-          patch = { start };
-          text = `開始 ${start.toFixed(2)} 秒`;
+          const want = round(Math.max(0, snapRange(base.start + shift, span, snap, ev)), 3);
           if (vertical) {
             if (!shown) {
               shown = true;
@@ -522,14 +524,18 @@ export function AudioClip({ project, item, ctx, selected }) {
             const hit = audioLaneAt(ev);
             target = hit && hit.lane !== home && hit.track !== own ? hit.track : null;
             if (target) dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
-            // A music track that already plays something in this stretch: the clip opens a new track instead.
-            const dest = target || own;
-            crowded = dest !== VOICE_TRACK && dest !== "new" && trackBusy(project, item, dest, start, span);
-            if (crowded) text += "，這段時間已有音訊，放到新的音軌";
-            else if (target === "new") text += "，放到新的音軌";
-            else if (target === VOICE_TRACK) text += "，移到配音軌";
-            else if (target) text += "，合併到這條音軌";
           }
+          // On a music track the clip slides into a free stretch, lined up with the clip it would run into.
+          const dest = target || own;
+          const start = dest === VOICE_TRACK || dest === "new" ? want
+            : round(fitStart(want, span, dest === own ? mates : trackSpans(project, item, dest)), 3);
+          next = { ...base, start };
+          patch = { start };
+          text = `開始 ${start.toFixed(2)} 秒`;
+          if (start !== want) text += "，對齊相鄰片段";
+          if (target === "new") text += "，放到新的音軌";
+          else if (target === VOICE_TRACK) text += "，移到配音軌";
+          else if (target) text += "，合併到這條音軌";
         } else if (mode === "l") {
           const s = snap(base.start + shift, ev) - base.start;
           const floor = ev.ctrlKey ? prevEnd - earliest : prevEnd; // pushed clips go back as far as 0 s
@@ -568,7 +574,7 @@ export function AudioClip({ project, item, ctx, selected }) {
         if (cancelled || !patch) return;
         let label = mode === "move" ? "移動音軌" : mode === "l" ? "修改音軌入點" : "修改音軌出點";
         if (mode === "l") Object.assign(patch, keyPatch(item, shiftKeys(item, patch.start - base.start)));
-        if (crowded || target === "new") {
+        if (target === "new") {
           patch.track = newId("t");
           label = "移到新的音軌";
         } else if (target) {
@@ -693,6 +699,9 @@ export function OverlayClip({ project, item, ctx, selected }) {
     const snap = ctx.snapper({ overlay: item.id });
     const home = e.currentTarget.closest(".tl-lane");
     const minLen = still ? MIN_STILL : MIN_ITEM;
+    // The other clips on a picture track: a clip never overlaps them.
+    const spansOn = (layer) => layerSpans(project.overlays, layer, item.id);
+    const room = edgeRoom(base.start, base.start + base.length, spansOn(item.layer));
     let next = null;
     let target = null;
     let insert = null;
@@ -705,11 +714,14 @@ export function OverlayClip({ project, item, ctx, selected }) {
         let text;
         insert = null;
         if (mode === "move") {
-          const start = round(Math.max(0, snapRange(base.start + shift, base.length, snap, ev)), 3);
-          next = { ...base, start };
-          text = `開始 ${start.toFixed(2)} 秒`;
+          const want = round(Math.max(0, snapRange(base.start + shift, base.length, snap, ev)), 3);
           const hit = pipLaneAt(ev);
           target = hit && hit.lane !== home && (hit.target !== "video" || media) ? hit.target : null;
+          const layer = !target ? item.layer : target.startsWith("layer:") ? target.slice(6) : null;
+          const start = layer ? round(fitStart(want, base.length, spansOn(layer)), 3) : want;
+          next = { ...base, start };
+          text = `開始 ${start.toFixed(2)} 秒`;
+          if (start !== want) text += "，對齊相鄰片段";
           if (target) {
             dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
             if (target === "video") {
@@ -719,16 +731,18 @@ export function OverlayClip({ project, item, ctx, selected }) {
           }
         } else if (mode === "l") {
           const end = base.start + base.length;
-          const lo = Math.max(0, still ? end - MAX_STILL : base.start - base.in);
+          const lo = Math.max(room.lo, still ? end - MAX_STILL : base.start - base.in);
           const start = round(clamp(snap(base.start + shift, ev), lo, end - minLen), 3);
           const tIn = still ? base.in : round(base.in + start - base.start, 3);
           next = { start, in: tIn, length: round(end - start, 3) };
           text = still ? `長度 ${next.length.toFixed(2)} 秒` : `入點 ${tIn.toFixed(2)} 秒`;
+          if (room.lo > 0 && Math.abs(start - room.lo) < 1e-3) text += "，碰到相鄰片段";
         } else {
-          const hi = still ? MAX_STILL : full > 0 ? full - base.in : MAX_TIME;
+          const hi = Math.min(room.hi - base.start, still ? MAX_STILL : full > 0 ? full - base.in : MAX_TIME);
           const length = round(clamp(snap(base.start + base.length + shift, ev) - base.start, minLen, hi), 3);
           next = { ...base, length };
           text = `長度 ${length.toFixed(2)} 秒`;
+          if (Math.abs(base.start + length - room.hi) < 1e-3) text += "，碰到相鄰片段";
         }
         const t = insert ? insert.at : mode === "r" ? next.start + next.length : next.start;
         setDrag({ ...next, mode, dy, insert, tip: { t, text } });

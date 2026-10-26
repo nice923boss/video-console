@@ -304,7 +304,7 @@ export async function deleteShots(ids, { ripple = false } = {}) {
     const held = shots.some((x) => ids.includes(x.id) && x.parked);
     const ok = await confirmDialog({
       title: ids.length > 1 ? `刪除 ${ids.length} 個鏡頭？` : `刪除「${shotLabel(shots[i], i)}」？`,
-      message: `${ripple || linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕會一起刪除，" : ""}${held ? "移出序列時收起的字幕與音訊也會一起刪除，" : ""}已生成的版本會留在專案裡，${undoKeyText()}可以復原。`,
+      message: `${ripple || linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕，以及鏡頭上方的音訊與上層畫面會一起刪除，" : ""}${held ? "移出序列時收起的字幕與音訊也會一起刪除，" : ""}已生成的版本會留在專案裡，${undoKeyText()}可以復原。`,
       confirmLabel: "刪除",
       danger: true,
     });

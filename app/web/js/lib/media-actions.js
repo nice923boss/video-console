@@ -4,6 +4,7 @@
 import { ops } from "./actions.js";
 import { clamp, newId, round } from "./format.js";
 import { audioLength, audioMedia, audioTrack, newOverlay, VOICE_TRACK } from "./sequence.js";
+import { fitStart, layerSpans } from "./track-fit.js";
 
 // Library cards carry their media ids under this type while dragged (a JSON list).
 export const MEDIA_MIME = "application/x-vc-media";
@@ -58,11 +59,13 @@ function busy(audio, project, key, start, length) {
 }
 
 // Puts `list` on the timeline in one undo step. Pictures and clips become new shots from `index` on, or go
-// on upper track `layer` at `start` ("new": a new track each). Sounds start at `start` on `track` where it is
-// free there, otherwise each on a track of its own, as dropped sound files do.
+// on upper track `layer` at `start` ("new": a new track each), in the nearest free stretch of an existing
+// track. Sounds start at `start` on `track` where it is free there, otherwise each on a track of its own, as
+// dropped sound files do.
 export function placeMedia(project, list, { index, start, layer = null, track = null }, label = "放上時間軸") {
   const out = [];
   const audio = [...(project.audio || [])];
+  const overlays = [...(project.overlays || [])];
   const { width, height } = project.settings;
   let at = index;
   for (const media of list) {
@@ -72,7 +75,10 @@ export function placeMedia(project, list, { index, start, layer = null, track = 
         id = newId("l");
         out.push({ op: "layer.add", layer: { id } });
       }
-      out.push({ op: "overlay.add", item: newOverlay(newId("o"), media, id, start, width, height) });
+      const placed = newOverlay(newId("o"), media, id, start, width, height);
+      const item = layer === "new" ? placed : { ...placed, start: round(fitStart(placed.start, placed.length, layerSpans(overlays, id)), 3) };
+      overlays.push(item);
+      out.push({ op: "overlay.add", item });
     } else if (isVisualMedia(media)) {
       out.push(...shotOps(media, at).list);
       at += 1;
