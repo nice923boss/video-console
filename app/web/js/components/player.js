@@ -50,6 +50,7 @@ function createLoop(engine, loopRef) {
     if (rate > 0 && engine.isWaiting()) {
       if (!waitSince) waitSince = now;
       if (now - waitSince < WAIT_LIMIT_MS) {
+        engine.hold();
         t0 = last;
         wall0 = now;
         raf = requestAnimationFrame(tick);
@@ -197,7 +198,7 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   };
   const [volume, setVolume] = usePref("vc.player.volume", DEFAULT_VOLUME, validVolume);
   const [loop, setLoop] = usePref("vc.player.loop", false, isBool);
-  const [res, setRes] = usePref("vc.player.res", 1, validRes);
+  const [res, setRes] = usePref("vc.player.res", 2, validRes); // 1/2 unless chosen otherwise; the export uses the originals
   const [live, setLive] = useState({ playing: clock.playing, index: -1, rate: 1 });
   const [full, setFull] = useState(false);
   const rootRef = useRef(null);

@@ -15,10 +15,14 @@ import { chromaMarkup } from "../lib/chroma.js";
 import { maskMarkup } from "../lib/masks.js";
 import { wakeMix, routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
 import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
-import { release, playSafe, seekTo, voicePlay, trackElements } from "./player-media.js";
+import { release, playSafe, seekTo, voicePlay, trackElements, audioEntry } from "./player-media.js";
 
 const DRIFT_PLAYING = 0.15;
 const DRIFT_PAUSED = 0.02;
+// Seconds of timeline before an audio or picture-in-picture clip starts that its element is loaded and seeked to
+// the clip's in point. Farther ones hold no file: each loaded element keeps one of the browser's six connections
+// to the server, and with every clip loaded a seek waited seconds for a free one.
+const CUE_LEAD = 2;
 const EDGE = 0.001;
 const IDEO_SPACE = String.fromCharCode(0x3000);
 const ZONES = ["top", "middle", "bottom"];
@@ -471,15 +475,13 @@ export function createEngine(host, hooks = {}) {
       seen.add(item.id);
       let tr = tracks.get(item.id);
       if (!tr) {
-        const audio = new Audio();
-        audio.preload = "auto";
-        tr = { audio, src: "", pendingSeek: null };
+        tr = audioEntry();
         tracks.set(item.id, tr);
       }
       const src = fileUrl(project.id, media.file);
       if (tr.src !== src) {
         tr.src = src;
-        tr.audio.src = src;
+        release(tr.audio); // voicePlay loads it once the clip is near the playhead
       }
       tr.item = item;
       tr.media = media;
@@ -526,7 +528,7 @@ export function createEngine(host, hooks = {}) {
             node.alt = "";
             node.draggable = false;
           }
-          node.src = src;
+          if (!video) node.src = src; // a video loads near the playhead, see drawOverlays
           pips.set(item.id, ov);
         }
         ov.item = item;
@@ -627,14 +629,24 @@ export function createEngine(host, hooks = {}) {
       node.style.display = on && !layer.hidden ? "block" : "";
       if (on && item.keyframes && item.keyframes.length) place(ov, local);
       if (!ov.video) continue;
+      const speed = Math.min(MAX_RATE, last.rate);
       if (!on || !playing) {
         if (!node.paused) node.pause();
-        if (!on) continue;
+        if (!on) {
+          // A clip about to come on waits at its in point; any other lets go of its file (CUE_LEAD).
+          if (local < 0 && local > -CUE_LEAD * speed) {
+            if (!node.hasAttribute("src")) node.src = ov.src;
+            if (Math.abs(node.currentTime - Number(item.in || 0)) > DRIFT_PAUSED) seekTo(node, ov, Number(item.in || 0));
+          } else if (node.hasAttribute("src")) {
+            release(node);
+          }
+          continue;
+        }
       }
+      if (!node.hasAttribute("src")) node.src = ov.src;
       const target = Number(item.in || 0) + local;
       setGain(node, layer.muted ? 0 : Number(valueAt(item, "volume", local, 1)) * g, layer.id);
       if (playing) {
-        const speed = Math.min(MAX_RATE, last.rate);
         if (node.playbackRate !== speed) node.playbackRate = speed;
         if (Math.abs(node.currentTime - target) > DRIFT_PLAYING * speed) seekTo(node, ov, target);
         if (node.paused) playSafe(node);
@@ -655,8 +667,20 @@ export function createEngine(host, hooks = {}) {
       const local = t - start;
       const track = audioTrack(item);
       const off = item.muted || flags[track === VOICE_TRACK ? "voiceMuted" : "musicMuted"] || (solo.length && !solo.includes(track));
+      const sp = audioSpeed(item);
+      const speed = Math.min(MAX_RATE, last.rate * sp);
+      const mode = monitor && monitor.id === item.id ? monitor.mode : "fx";
       if (!playing || off || len <= 0.05 || local < 0 || local >= len) {
         for (const el of trackElements(tr)) if (!el.paused) el.pause();
+        // Put a clip about to start, or the one under a paused playhead, in place now: seeking into a long
+        // camera file takes a few hundred ms, heard as a gap at the cut when it happens on the clip's first frame.
+        // Any other lets go of its file (CUE_LEAD).
+        if (!off && len > 0.05 && local < len && local > -CUE_LEAD * speed) {
+          const cue = voicePlay(tr, Number(item.in || 0) + Math.max(0, local) * sp, project.id, mixOn && stems[item.id], mode);
+          if (Math.abs(cue.el.currentTime - cue.at) > DRIFT_PAUSED) seekTo(cue.el, cue.holder, cue.at);
+        } else {
+          for (const el of trackElements(tr)) if (el.hasAttribute("src")) release(el);
+        }
         continue;
       }
       const fi = Math.min(Number(item.fadeIn || 0), len / 2);
@@ -665,10 +689,7 @@ export function createEngine(host, hooks = {}) {
       if (fi > 0 && local < fi) gain *= local / fi;
       if (fo > 0 && local > len - fo) gain *= (len - local) / fo;
       if (bgm.includes(track)) gain *= duckGain(voice, t, db);
-      const sp = audioSpeed(item);
-      const speed = Math.min(MAX_RATE, last.rate * sp);
       const target = Number(item.in || 0) + local * sp;
-      const mode = monitor && monitor.id === item.id ? monitor.mode : "fx";
       const { el, holder, at, voice: fx } = voicePlay(tr, target, project.id, mixOn && stems[item.id], mode);
       setGain(el, gain, track, fx);
       if (el.playbackRate !== speed) el.playbackRate = speed;
@@ -755,6 +776,12 @@ export function createEngine(host, hooks = {}) {
         if (v.seeking) return true;
         return v.readyState < 3 && !v.ended && !(v.duration - v.currentTime < 0.25);
       });
+    },
+    // While the clock is held, sound and picture-in-picture wait with it; left playing they ran ahead and jumped
+    // back when it moved on, heard as a stutter.
+    hold() {
+      for (const tr of tracks.values()) for (const el of trackElements(tr)) if (!el.paused) el.pause();
+      for (const ov of pips.values()) if (ov.video && !ov.node.paused) ov.node.pause();
     },
     destroy() {
       if (drag) onDragEnd({ pointerId: drag.id, type: "pointercancel" });

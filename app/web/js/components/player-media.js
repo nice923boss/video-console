@@ -39,27 +39,35 @@ export function seekTo(media, holder, target) {
   }
 }
 
+// A new audio element with the record seekTo() keeps its pending seek on: a seek asked for while one is under
+// way follows when that one lands.
+export function audioEntry() {
+  const audio = new Audio();
+  audio.preload = "auto";
+  const holder = { audio, src: "", pendingSeek: null };
+  audio.addEventListener("seeked", () => holder.pendingSeek != null && seekTo(audio, holder, holder.pendingSeek));
+  return holder;
+}
+
 // Every element of an audio clip's track entry.
 export const trackElements = (tr) => (tr.fx ? [tr.audio, tr.fx.audio] : [tr.audio]);
 
 // What the clip plays at `target` (source seconds): {el, holder (its pendingSeek), at (el's time), voice (for
 // routeGain)}. Its stems when `entry` (voiceStems[id], falsy without a running mix) was made for its settings as
-// they are now and holds target; otherwise its source file as it is. The element not chosen is paused.
+// they are now and holds target; otherwise its source file as it is. The element not chosen is paused; the one
+// chosen gets its file back when release() let go of it.
 // mode: "fx" | "dry" | "delta", see audio-mix.js tuneVoice.
 export function voicePlay(tr, target, pid, entry, mode) {
   const s = entry && entry.stems;
   const use = s && entry.made === stemsParams(tr.media, tr.item) && target >= s.from && target < s.to;
   if (!use) {
     if (tr.fx && !tr.fx.audio.paused) tr.fx.audio.pause();
+    if (!tr.audio.hasAttribute("src")) tr.audio.src = tr.src;
     return { el: tr.audio, holder: tr, at: target, voice: null };
   }
-  if (!tr.fx) {
-    const audio = new Audio();
-    audio.preload = "auto";
-    tr.fx = { audio, src: "", pendingSeek: null };
-  }
+  if (!tr.fx) tr.fx = audioEntry();
   const src = fileUrl(pid, s.file);
-  if (tr.fx.src !== src) {
+  if (tr.fx.src !== src || !tr.fx.audio.hasAttribute("src")) {
     tr.fx.src = src;
     tr.fx.audio.src = src;
   }
