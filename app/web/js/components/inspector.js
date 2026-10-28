@@ -6,10 +6,10 @@ import {
   updateProject, updateShots, ops, deleteShots, duplicateShots, moveShot, focusShot, navigate,
 } from "../lib/actions.js";
 import { generate, submitBatch, activeJobsFor } from "../lib/jobs-actions.js";
-import { shotLabel, fmtTime, fmtSeconds } from "../lib/format.js";
-import { buildSequence, sequenceDuration, shotCover } from "../lib/sequence.js";
+import { shotLabel, fmtTime, fmtSeconds, round } from "../lib/format.js";
+import { buildSequence, sequenceDuration, shotCover, videoTake } from "../lib/sequence.js";
 import { Icon } from "./icons.js";
-import { Button, IconButton, Field, DraftText, NumberInput, Select, Tabs, Section, Spinner, Segmented } from "./ui.js";
+import { Button, IconButton, Field, DraftText, NumberInput, Select, Slider, Tabs, Section, Spinner, Segmented } from "./ui.js";
 import { openMenu } from "./overlay.js";
 import { toast } from "./toast.js";
 import { keyLabel } from "../lib/keymap.js";
@@ -187,6 +187,12 @@ function BatchPanel({ project, ids }) {
     op: "shot.update", id: x.id, patch: { transition: { duration: 0.5, ...(x.transition || {}), type } },
   })), { label: "批次修改轉場" });
   const clear = () => setState((s) => ({ selected: s.focus && ids.includes(s.focus) ? [s.focus] : [] }));
+  // The shots' own sound, one volume for all of them; shots without sound or with it detached are left alone.
+  const sounding = shots.filter((x) => !x.audioDetached && (videoTake(project, x) || {}).hasAudio);
+  const volumes = sounding.map((x) => Number(x.volume ?? 1));
+  const sameVolume = volumes.every((v) => v === volumes[0]) ? volumes[0] : null;
+  const setVolume = (volume) => ops(sounding.map((x) => ({ op: "shot.update", id: x.id, patch: { volume } })),
+    { label: `${sounding.length} 個鏡頭原聲音量 ${Math.round(volume * 100)}%` });
 
   return html`<div class="insp-scroll">
     <div class="insp-hero">
@@ -205,6 +211,17 @@ function BatchPanel({ project, ids }) {
         ${shots.length > BATCH_THUMBS && html`<span class="batch-more">+${shots.length - BATCH_THUMBS}</span>`}
       </div>
     </div>
+    ${sounding.length > 0 && html`<${Section} title="原聲音量" icon="volume">
+      <${Field} label=${sameVolume == null ? "音量（目前各不相同）" : "音量"}
+        hint=${`套用到 ${sounding.length} 個有原聲的鏡頭${shots.length > sounding.length ? `，略過 ${shots.length - sounding.length} 個沒有原聲或原聲已分離的鏡頭` : ""}。100% 是原始音量，最高 400%；預覽播放最高只到 100%`}>
+        <${Slider} value=${sameVolume ?? 1} min=${0} max=${4} step=${0.05} format=${(v) => `${Math.round(v * 100)}%`}
+          onCommit=${(v) => setVolume(round(v, 2))} />
+      <//>
+      <div class="row">
+        <${Button} size="sm" icon="volume-x" onClick=${() => setVolume(0)}>全部靜音<//>
+        <${Button} size="sm" icon="volume" onClick=${() => setVolume(1)}>恢復原音量<//>
+      </div>
+    <//>`}
     <${Section} title="批次生成" icon="sparkles">
       <${Field} label="每個鏡頭的份數" inline>
         <${Segmented} size="sm" value=${count} onChange=${setCount} options=${COUNT_OPTIONS} />

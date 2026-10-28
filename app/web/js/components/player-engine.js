@@ -186,9 +186,10 @@ export function createEngine(host, hooks = {}) {
     return clamp01(g);
   }
 
-  const clipSounds = (clip) => clip && clip.source === "video" && clip.take.hasAudio && !clip.shot.disabled && !clip.shot.audioDetached;
+  const clipSounds = (clip) => clip && clip.source === "video" && clip.take.hasAudio && !clip.shot.disabled && !clip.shot.audioDetached
+    && Number(clip.shot.volume ?? 1) > 0;
 
-  // Original sound of a video clip, with the same short fades export.py puts at each cut.
+  // Original sound of a video clip at the shot's volume, with the same short fades export.py puts at each cut.
   function clipGain(i, t) {
     const clip = clips[i];
     if (!clipSounds(clip)) return 0;
@@ -196,7 +197,7 @@ export function createEngine(host, hooks = {}) {
     const len = clip.length;
     const fi = Math.max(0.03, Math.min(i > 0 ? clips[i - 1].transition.duration : 0, len / 2));
     const fo = Math.max(0.03, Math.min(clip.transition.duration, len / 2));
-    return clamp01(Math.min(local / fi, (len - local) / fo));
+    return clamp01(Math.min(local / fi, (len - local) / fo)) * Number(clip.shot.volume ?? 1);
   }
 
   // Sound goes through the Web Audio mix once it runs (it plays gains above 1 and feeds the meters);

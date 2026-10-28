@@ -3,7 +3,7 @@
 // single op on release, so every drag is one undo step.
 import { html, useState, useEffect, useRef, useMemo } from "../lib/h.js";
 import { useStore, setState, getState } from "../lib/store.js";
-import { ops, updateShot, moveShot, focusShot } from "../lib/actions.js";
+import { ops, updateShot, moveShot, focusShot, clickShot } from "../lib/actions.js";
 import { setTime } from "../lib/clock.js";
 import { releaseFocus } from "../lib/keys.js";
 import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/format.js";
@@ -184,11 +184,6 @@ function commitTrim(clip, patch) {
   }
 }
 
-function selectShot(id, additive) {
-  setState({ editSel: { type: "shot", id } });
-  focusShot(id, { additive });
-}
-
 // Tiles always keep the picture's own aspect, however long the clip. Consecutive tiles that show the same
 // strip frame become one rect filled with a repeating pattern, so a long clip costs at most STRIP_FRAMES rects.
 function Tiles({ clip, geo, pid, pps, ar, scale }) {
@@ -221,7 +216,7 @@ function Tiles({ clip, geo, pid, pps, ar, scale }) {
   return html`<div class="tl-tiles" style=${`background-image:url("${fileUrl(pid, path)}");background-size:auto 100%`}></div>`;
 }
 
-export function VideoTrack({ project, clips, ctx, editSel, focus }) {
+export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
   const transitions = useStore((s) => s.presets.transitions || []);
   const [drag, setDrag] = useState(null);
   const shown = drag && drag.clips ? drag.clips : clips;
@@ -231,7 +226,6 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
     const id = clip.shot.id;
     const ci = clips.findIndex((c) => c.shot.id === id);
     const rest = clips.filter((c) => c.shot.id !== id);
-    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
     const home = e.currentTarget.closest(".tl-lane");
     const snap = ctx.snapper({ shot: id });
     let k = ci;
@@ -258,7 +252,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
       },
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
-        if (!moved) selectShot(id, additive);
+        if (!moved) clickShot(e, id, clips.map((c) => c.shot.id));
         else if (cancelled) return;
         else if (lift) liftShot(project, clip, lift);
         else if (rest.length && k !== ci) moveShot(id, moveTarget(project, id, rest, k));
@@ -337,7 +331,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus }) {
     const id = clip.shot.id;
     const geo = drag && drag.geo && drag.id === id ? drag.geo : { start: clip.start, length: clip.length, in: clip.in };
     const moving = drag && drag.dx != null && drag.id === id;
-    const cls = ["tl-clip", `is-${clip.source}`, shotSel && focus === id && "is-selected", moving && "is-dragging",
+    const cls = ["tl-clip", `is-${clip.source}`, shotSel && (focus === id || picked.includes(id)) && "is-selected", moving && "is-dragging",
       clip.shot.color && "has-color", clip.shot.disabled && "is-off"].filter(Boolean).join(" ");
     const label = shotLabel(clip.shot, clip.index);
     const style = `left:${geo.start * pps}px;width:${Math.max(2, geo.length * pps)}px`
@@ -641,29 +635,29 @@ export function AudioClip({ project, item, ctx, selected }) {
 // The picture clips' own sound, one block per clip whose video take has sound, with its waveform when the
 // take has one (takes imported before waveforms were made for videos have none). It only shows the
 // sound: trims and moves happen on the picture lane, and its mute switch silences this lane too.
-// A click selects the shot, whose edit tab holds "轉成字幕".
+// A click selects the shot (edit tab: "轉成字幕", volume); Ctrl adds or removes it and Shift selects the run
+// of sounding clips up to it, for BatchPanel's volume.
 const playsOwnSound = (c) => c.source === "video" && c.take.hasAudio && !c.shot.audioDetached;
 
 export function hasSourceAudio(clips) {
   return clips.some(playsOwnSound);
 }
 
-export function SourceAudioTrack({ project, clips, ctx, editSel }) {
+export function SourceAudioTrack({ project, clips, ctx, editSel, picked }) {
   const { pps } = ctx;
+  const sounding = clips.filter(playsOwnSound).map((c) => c.shot.id);
   return clips.filter((c) => playsOwnSound(c) && inView(ctx.win, c.start, c.length)).map((c) => {
     const width = Math.max(4, c.length * pps);
     const name = shotLabel(c.shot, c.index);
-    const sel = !!editSel && editSel.type === "shot" && editSel.id === c.shot.id;
+    const sel = (!editSel || editSel.type === "shot") && picked.includes(c.shot.id);
+    const pct = Math.round(Number(c.shot.volume ?? 1) * 100);
     return html`<div key=${c.shot.id} class=${`tl-audio tl-source${sel ? " is-selected" : ""}`} data-sel=${`shot:${c.shot.id}`}
       style=${`left:${c.start * pps}px;width:${width}px`}
-      title=${`${name} 的原聲\n${fmtSeconds(c.start, 2)} 開始，長 ${fmtSeconds(c.length, 2)}，雙擊跳到開頭`}
+      title=${`${name} 的原聲，音量 ${pct}%\n${fmtSeconds(c.start, 2)} 開始，長 ${fmtSeconds(c.length, 2)}，雙擊跳到開頭\nCtrl + 點擊逐一加選或取消，Shift + 點擊選取中間所有片段，一起調原聲音量`}
       onPointerDown=${(e) => e.stopPropagation()} onDblClick=${() => setTime(c.start)}
-      onClick=${() => {
-        setState({ editSel: { type: "shot", id: c.shot.id } });
-        focusShot(c.shot.id, { tab: "edit" });
-      }}>
-      <${Wave} pid=${project.id} media=${c.take} tIn=${c.in} len=${c.length} speed=${c.speed} width=${width} />
-      <div class="tl-audio-label"><${Icon} name="volume" size=${12} /><span>${name}</span></div>
+      onClick=${(e) => clickShot(e, c.shot.id, sounding, "edit")}>
+      <${Wave} pid=${project.id} media=${c.take} tIn=${c.in} len=${c.length} speed=${c.speed} width=${width} item=${c.shot} />
+      <div class="tl-audio-label"><${Icon} name="volume" size=${12} /><span>${name}${pct !== 100 ? ` ${pct}%` : ""}</span></div>
     </div>`;
   });
 }

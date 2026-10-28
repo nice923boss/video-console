@@ -60,7 +60,6 @@ const fmtDb = (v) => (v <= 0.0011 ? "靜音" : `${(20 * Math.log10(v)).toFixed(1
 export function nudgeVolume(project, clips, sel, dir, range) {
   const cur = current(project, clips, sel);
   if (!cur) return warn("先選取音訊或上方畫面的片段");
-  if (cur.type === "shot") return warn(`鏡頭的原聲要先分離成音訊片段${keyHint("edit.detachAudio")}，才能調整音量`);
   const span = range ? { in: range.in, out: range.out } : {};
   // Quick presses on the same span are one undo step. A whole-clip press can set the volume while a ranged one
   // sets keyframes, and a merged step only puts back what its first press changed, so each span keys its own.

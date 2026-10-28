@@ -9,7 +9,7 @@ import { clock, setTime } from "../lib/clock.js";
 import { fmtTime, fmtDuration, round } from "../lib/format.js";
 import { buildSequence, clipBounds, videoTake, imageTake } from "../lib/sequence.js";
 import { Icon } from "./icons.js";
-import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText } from "./ui.js";
+import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText, Slider } from "./ui.js";
 import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
 import { keyHint } from "../lib/keymap.js";
@@ -107,7 +107,7 @@ function TrimSection({ project, shot, vid, clip }) {
   <//>`;
 }
 
-// Speed, reverse and detached sound. The same commands sit on edit.speed, edit.reverseClip and
+// Speed, reverse, the shot's own sound volume and detached sound. The same commands sit on edit.speed, edit.reverseClip and
 // edit.detachAudio (tl-commands.js); edit.speed focuses the select here.
 function SpeedSection({ project, shot, vid, clips, busy }) {
   const speed = Number(shot.speed || 1);
@@ -132,8 +132,12 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
           onClick=${() => reverseClip(project, clips, sel)}>${rendering ? "產生中" : reversed ? "取消倒放" : "倒放"}<//>
       <//>
     </div>
+    ${vid.hasAudio && !detached && html`<${Field} label="原聲音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
+      <${Slider} value=${Number(shot.volume ?? 1)} min=${0} max=${4} step=${0.05} format=${(v) => `${Math.round(v * 100)}%`}
+        onCommit=${(v) => updateShot(shot.id, { volume: round(v, 2) }, { label: "原聲音量" })} />
+    <//>`}
     ${vid.hasAudio && html`<${Button} icon="music"
-      title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、調音量"}${keyHint("edit.detachAudio")}`}
+      title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、淡入淡出、加音量關鍵幀"}${keyHint("edit.detachAudio")}`}
       onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}
     ${vid.hasAudio && html`<${Button} icon="wand" title="降噪、去回音與選聲道都在分離出的音訊上調整；還沒分離就先分離原聲"
       onClick=${() => voiceTools(project, shot, clips, sel)}>降噪／去回音<//>`}

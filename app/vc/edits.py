@@ -445,7 +445,8 @@ def detach(project: dict, shot_id: str | None = None, t: float | None = None) ->
     # A sped shot's sound keeps its speed (the shot's speed is locked while its sound is detached).
     item = {"id": aid, "takeId": clip["take"]["id"], "shotId": shot["id"], "start": r3(clip["start"]),
             "in": r3(clip["in"]), "out": r3(clip["out"]), "name": f"{shot.get('name') or '鏡頭'} 原聲",
-            **({"speed": clip["speed"]} if clip["speed"] != 1 else {})}
+            **({"speed": clip["speed"]} if clip["speed"] != 1 else {}),
+            **({"volume": shot["volume"]} if shot.get("volume", 1) != 1 else {})}
     return {"ops": [{"op": "audio.add", "item": item}, {"op": "shot.update", "id": shot["id"], "patch": {"audioDetached": True}}],
             "label": "分離原聲", "id": aid}
 
@@ -494,12 +495,30 @@ def reverse(project: dict, shot_id: str | None = None, t: float | None = None) -
     return {"ops": [], "label": "倒放", "job": {"kind": "reverse", "shotId": shot["id"], "payload": {"source": take["id"]}}}
 
 
+def _shot_volume(project: dict, shot_id: str, db: float, t_in: float | None, t_out: float | None) -> dict:
+    """A shot's own sound has one volume for the whole clip; a range inside it needs the sound detached."""
+    clip = next((c for c in _clips(project) if c["shot"]["id"] == shot_id), None)
+    if not clip:
+        raise AppError("找不到這個鏡頭，或它不在剪輯序列裡")
+    shot = clip["shot"]
+    if shot.get("audioDetached"):
+        raise AppError("這個鏡頭的原聲已經分離，請調整分離出的音訊片段")
+    if clip["source"] != "video" or not clip["take"].get("hasAudio"):
+        raise AppError("這個鏡頭沒有聲音")
+    if (t_in is not None and t_in > clip["start"] + 1e-3) or (t_out is not None and t_out < clip["start"] + clip["length"] - 1e-3):
+        raise AppError("鏡頭原聲只能整段調音量；只調一段要先分離成音訊片段（cmd: detach）")
+    level = round(min(VOLUME_MAX, max(float(shot.get("volume", 1.0)), 0.001) * 10 ** (db / 20)), 4)
+    return {"ops": [{"op": "shot.update", "id": shot_id, "patch": {"volume": level}}],
+            "label": "調高原聲音量" if db > 0 else "調低原聲音量", "level": level, "partial": False}
+
+
 def volume(project: dict, kind: str, item_id: str, db: float, t_in: float | None = None,
            t_out: float | None = None, t: float | None = None) -> dict:
-    """Change an audio or upper-track clip's volume by db; with t_in..t_out, only inside that range. "level" is
-    the new volume: at the range's start, else at t (default the clip's start) when the volume is keyed."""
+    """Change an audio or upper-track clip's volume by db (a shot's own sound: the whole clip only); with
+    t_in..t_out, only inside that range. "level" is the new volume: at the range's start, else at t (default
+    the clip's start) when the volume is keyed."""
     if kind == "shot":
-        raise AppError("鏡頭的原聲要先分離成音訊片段（cmd: detach），才能調整音量")
+        return _shot_volume(project, item_id, db, t_in, t_out)
     if kind not in ("audio", "overlay"):
         raise AppError("只有 audio 與 overlay 片段有音量")
     g = _target(project, [], kind, item_id, 0.0)

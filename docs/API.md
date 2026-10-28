@@ -14,7 +14,7 @@
 |---|---|
 | 位址 | 只聽 `127.0.0.1`，連接埠 8790；被占用時往後找到 8799 |
 | 目前連接埠 | `data/run/server.json` 的 `port` 欄位（VC 執行中才有） |
-| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.8.2", "build": "1.8.2+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
+| 健康檢查 | `GET /api/ping` → `{"ok": true, "instance": "...", "version": "1.8.3", "build": "1.8.3+...", "running": 0, "tray": false}`（`build` 是執行中的程式碼版本，`running` 是執行中的工作數，`tray` 表示有沒有顯示托盤圖示） |
 | 必要標頭 | POST、PUT、DELETE 一律加 `X-VC: 1`，否則 403 |
 | 主機檢查 | `Host` 必須是 `127.0.0.1:<port>` 或 `localhost:<port>`，跨站請求一律 403 |
 | 資料格式 | JSON 本文，UTF-8；上傳檔案用原始位元組本文（不是 multipart） |
@@ -82,6 +82,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `speed` | 影片播放速度 0.25~4（預設 1），聲音一起變速；時間軸上的長度是 `(trimOut - trimIn) / speed` |
 | `disabled` | `true` 時保留位置，預覽與輸出都是黑畫面加靜音 |
 | `audioDetached` | `true` 時鏡頭本身無聲，原聲改由音訊軌上 `shotId` 指向它的片段播放（見 3.7 的 `detach`） |
+| `volume` | 鏡頭原聲音量 0~4（預設 1，原音量），整段同一個值；`audioDetached` 時不作用，`detach` 時帶到分離出的音訊片段 |
 | `parked` | 鏡頭移出序列時收起的項目 `{"captions", "audio", "overlays", "adjustments"}`，時間從鏡頭開頭算；放回序列時由連動放回（見 3.2） |
 | `grade` | 只套在這個鏡頭畫面的調色，格式同下方調整圖層的 `grade`，調整圖層再疊在上面；只對影片、圖片鏡頭有效 |
 | `masks` | 模糊或馬賽克框，最多 8 個：`{x, y, w, h, mode, strength}`。`x`、`y`、`w`、`h` 是佔畫面寬、高的比例（`w`、`h` 0.02~1，框被夾在畫面內），`mode` 是 `blur` 或 `mosaic`，`strength` 0.1~1 控制模糊程度或格子大小。框固定在畫面上，不蓋上層畫面與字幕 |
@@ -255,7 +256,7 @@ POST /api/projects/{pid}/edit
 
 限制（違反時回 400 與中文說明）：
 
-- `volume` 只能用在 `audio` 與上方影片（`overlay`）。鏡頭原聲要先 `detach`；圖片沒有聲音。
+- `volume` 用在 `audio`、上方影片（`overlay`）與鏡頭（`shot`，改鏡頭的 `volume`）。鏡頭原聲只能整段調，`in`、`out` 只蓋到一部分時要先 `detach`；已分離的鏡頭請調分離出的音訊片段；圖片沒有聲音。
 - `keyframe` 只能用在 `audio`、`overlay`、`adjust`，`values` 只能用 2 節關鍵幀表裡的欄位。
 - 變速中的鏡頭 `detach` 後，音訊片段帶 `speed`（來源秒數／時間軸秒數），長度與畫面一致；分離期間鏡頭速度鎖定。
 - 已分離原聲的鏡頭可 `freeze`：跨過定格點的原聲在該處切開，後段與之後同素材的原聲一律後移定格長度（不看連動開關）。

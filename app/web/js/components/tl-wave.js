@@ -20,7 +20,7 @@ function loadWave(url) {
 }
 
 // Gain a clip plays its sound at t seconds in: its volume (keyframes included) and fades, as
-// player-engine.js drawAudio applies them. A picture clip's own sound (no item) plays at 1.
+// player-engine.js drawAudio applies them. A picture clip's own sound passes its shot: only a volume.
 function playGain(item, t, len) {
   if (!item) return 1;
   const fi = Math.min(Number(item.fadeIn || 0), len / 2);

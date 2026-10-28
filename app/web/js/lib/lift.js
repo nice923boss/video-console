@@ -45,7 +45,8 @@ export function liftOps(project, clip, target, start) {
   const item = {
     id, mediaId: media.id, layer, name: shot.name || media.name || "",
     start: round(Math.max(0, start), 3), in: clip.source === "video" ? round(clip.in, 3) : 0, length: round(clip.length, 3),
-    ...place, opacity: 1, volume: 1, ...(shot.pip || {}), ...(sound ? { volume: Number(sound.volume ?? 1) } : {}),
+    ...place, opacity: 1, volume: 1, ...(shot.pip || {}),
+    ...(sound ? { volume: Number(sound.volume ?? 1) } : shot.volume != null ? { volume: Number(shot.volume) } : {}),
     ...(shot.disabled ? { disabled: true } : {}),
   };
   const gap = { id: newId("s"), name: "空白", duration: round(Math.max(0.2, clip.length), 3), transition: shot.transition };

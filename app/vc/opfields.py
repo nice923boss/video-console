@@ -321,6 +321,7 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "disabled": _bool,  # kept on the timeline but shown as black and silent
     "speed": _float(0.25, 4),  # playback speed of a video shot; its length on the timeline is (out - in) / speed
     "audioDetached": _bool,  # the shot's own sound plays from an audio clip instead (see AUDIO_FIELDS takeId)
+    "volume": _float(0, 4),  # gain of the shot's own sound while not detached; 1 = as recorded
     "grade": clean_grade,  # colour grade of this shot's picture alone, under any adjustment layer (GR-01)
     "masks": _masks,  # blur or mosaic boxes over the shot's picture, to hide a face or a logo (GR-12)
     "notes": _str(4000),

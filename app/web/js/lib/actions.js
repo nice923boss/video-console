@@ -365,13 +365,39 @@ export function navigate(view, extra = {}) {
   setState({ view, ...extra });
 }
 
-export function focusShot(id, { tab = null, view = null, additive = false } = {}) {
-  setState((s) => ({
+export function focusShot(id, { tab = null, view = null } = {}) {
+  setState({
     focus: id,
-    selected: additive ? (s.selected.includes(id) ? s.selected : [...s.selected, id]) : [id],
+    selected: [id],
     ...(tab ? { inspectorTab: tab } : {}),
     ...(view ? { view } : {}),
-  }));
+  });
+}
+
+// A click on a timeline track's shot (`ids`: that track's shots in order). A plain click selects it alone,
+// Ctrl adds or removes it, Shift selects every shot from the anchor to it: the last shot clicked without
+// Shift while it is still selected, else the focused one.
+let clickAnchor = null;
+export function clickShot(e, id, ids, tab = null) {
+  const s = getState();
+  const from = ids.indexOf(clickAnchor && s.selected.includes(clickAnchor) ? clickAnchor : s.focus);
+  const to = ids.indexOf(id);
+  const switchTab = tab ? { inspectorTab: tab } : {};
+  if (e.shiftKey && from >= 0 && to >= 0) {
+    const [a, b] = from < to ? [from, to] : [to, from];
+    setState({ editSel: { type: "shot", id }, focus: id, selected: ids.slice(a, b + 1), ...switchTab });
+    return;
+  }
+  clickAnchor = id;
+  if (e.ctrlKey || e.metaKey) {
+    const has = s.selected.includes(id);
+    const selected = has ? s.selected.filter((x) => x !== id) : [...s.selected, id];
+    const focus = has ? selected[selected.length - 1] || null : id;
+    setState({ editSel: focus ? { type: "shot", id: focus } : null, focus, selected, ...switchTab });
+    return;
+  }
+  setState({ editSel: { type: "shot", id } });
+  focusShot(id, { tab });
 }
 
 export async function revealJob(jobId) {

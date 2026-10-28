@@ -309,8 +309,8 @@ function contentSpan(project, clips) {
 }
 
 export function Timeline({ project, clips, hotkeys = true }) {
-  const { editSel, focus, editRange, editTool, watch, audioSel, solo } = useStore((s) => ({
-    editSel: s.editSel, focus: s.focus, editRange: s.editRange, editTool: s.editTool, watch: s.watch, audioSel: multiAudio(s),
+  const { editSel, focus, picked, editRange, editTool, watch, audioSel, solo } = useStore((s) => ({
+    editSel: s.editSel, focus: s.focus, picked: s.selected, editRange: s.editRange, editTool: s.editTool, watch: s.watch, audioSel: multiAudio(s),
     solo: s.solo && s.solo.pid === s.pid ? s.solo.keys : null,
   }));
   const audioOn = (id) => (audioSel ? audioSel.includes(id) : !!editSel && editSel.type === "audio" && editSel.id === id);
@@ -753,14 +753,14 @@ export function Timeline({ project, clips, hotkeys = true }) {
             <${AdjustAddButton} clips=${clips} pps=${pps} onGhost=${setAdjGhost} />
             ${eyeBtn(!!tracks.videoHidden, () => setTrack("videoHidden", tracks.videoHidden ? "顯示畫面軌" : "隱藏畫面軌"))}
             ${muteBtn(!!tracks.videoMuted, () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲")}`)}
-          ${lane("tl-lane-video", html`<${VideoTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} focus=${focus} />
+          ${lane("tl-lane-video", html`<${VideoTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} focus=${focus} picked=${picked} />
             ${drop && drop.row === "video" && drop.at != null && html`<i class="tl-insert" style=${`left:${drop.at * pps}px`}></i>`}`)}`,
           { drop: "video", hidden: !!tracks.videoHidden, muted: !!tracks.videoMuted })}
         ${hasSourceAudio(clips) && row("source-audio", AUDIO_H, html`
           ${label(roleBtn(SOURCE_TRACK, "volume"), "原聲", html`${soloBtn(SOURCE_TRACK, "影片原聲")}${muteBtn(!!tracks.videoMuted,
             () => setTrack("videoMuted", tracks.videoMuted ? "取消靜音" : "畫面軌靜音"), "影片原聲")}
             <${TrackMeter} track=${SOURCE_TRACK} />`)}
-          ${lane("tl-lane-audio", html`<${SourceAudioTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} />`)}`,
+          ${lane("tl-lane-audio", html`<${SourceAudioTrack} project=${project} clips=${laneClips} ctx=${ctx} editSel=${editSel} picked=${picked} />`)}`,
           { muted: !!tracks.videoMuted })}
         ${voiceRows.map((items, i) => row(`voice-${i}`, AUDIO_H, html`
           ${label(roleBtn(VOICE_TRACK, "mic"), voiceRows.length > 1 ? `配音 ${i + 1}` : "配音", html`${soloBtn(VOICE_TRACK, "所有配音")}${muteBtn(!!tracks.voiceMuted,

@@ -475,7 +475,7 @@ def _clip_sounds(clip: dict) -> bool:
     """Whether a picture clip's own sound goes into the mix (when clip audio is on and not muted)."""
     shot = clip["shot"]
     return (clip["source"] == "video" and bool(clip["take"].get("hasAudio")) and not shot.get("disabled")
-            and not shot.get("audioDetached"))
+            and not shot.get("audioDetached") and float(shot.get("volume", 1.0)) > 0)
 
 
 def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict, total: float,
@@ -498,8 +498,10 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             fade_in = max(0.03, min(fade_in, length / 2))
             fade_out = max(0.03, min(clip["transition"]["duration"], length / 2))
             ms = int(round(clip["start"] * 1000))
+            gain = float(clip["shot"].get("volume", 1.0))
+            gain_filter = f"volume={gain:.4f}," if gain != 1.0 else ""
             graph.append(
-                f"[{video_index[i]}:a]{aformat},{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
+                f"[{video_index[i]}:a]{aformat},{gain_filter}{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
                 f"asetpts=PTS-STARTPTS,"
                 f"afade=t=in:st=0:d={fade_in:.3f},afade=t=out:st={length - fade_out:.3f}:d={fade_out:.3f},"
                 f"adelay=delays={ms}:all=1,{fix_pts}[ca{i}]"
