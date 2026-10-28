@@ -334,7 +334,14 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "parked": _parked,  # set while the shot is out of the sequence: its captions, sounds and clips (linked.py)
     "pip": _pip,  # place, size, opacity, keying and volume it had as an upper-track clip (ED-16)
 }
-TAKE_FIELDS = {"favorite": _bool, "rating": _int(0, 5), "note": _str(1000), "label": _str(120)}
+TAKE_FIELDS = {
+    "favorite": _bool,
+    "rating": _int(0, 5),
+    "note": _str(1000),
+    "label": _str(120),
+    # gain on the file's own sound, on top of the shot volume; t is seconds into the file, so trims keep them
+    "volumeKeys": _keyframes({"volume": _float(0, 4)}),
+}
 AUDIO_FIELDS = {
     "name": _str(120),
     "start": _float(0, 36000),
@@ -431,6 +438,7 @@ LAYER_FIELDS = {"name": _str(40), "hidden": _bool, "muted": _bool}
 CAPTION_TRACK_FIELDS = {"name": _str(40), "hidden": _bool}
 OVERLAY_FIELDS = {
     "name": _str(120),
+    "mediaId": _opt_id,  # a picture or video in project["media"] (checked by overlay.add/update)
     "layer": _opt_id,
     "start": _float(0, 36000),
     "in": _float(0, 36000),  # seconds into a video file; pictures ignore it

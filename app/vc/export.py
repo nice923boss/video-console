@@ -26,6 +26,7 @@ from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
 from .grade import build_cube, clean_grade, is_neutral
 from .keyframes import expr as kf_expr
+from .keyframes import source_keys
 from .keyframes import steps as kf_steps
 from .media import ALPHA_DECODERS, AS_709, TAGS_709, TO_709, Media
 from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, total_duration
@@ -500,9 +501,11 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             ms = int(round(clip["start"] * 1000))
             gain = float(clip["shot"].get("volume", 1.0))
             gain_filter = f"volume={gain:.4f}," if gain != 1.0 else ""
+            keys = source_keys(clip["take"].get("volumeKeys") or [], clip["in"], clip.get("speed") or 1.0, length)
+            key_filter = f"volume='{kf_expr({'keyframes': keys}, 'volume', 't', 0.0, 1.0)}':eval=frame," if keys else ""
             graph.append(
                 f"[{video_index[i]}:a]{aformat},{gain_filter}{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
-                f"asetpts=PTS-STARTPTS,"
+                f"asetpts=PTS-STARTPTS,{key_filter}"
                 f"afade=t=in:st=0:d={fade_in:.3f},afade=t=out:st={length - fade_out:.3f}:d={fade_out:.3f},"
                 f"adelay=delays={ms}:all=1,{fix_pts}[ca{i}]"
             )

@@ -181,9 +181,9 @@ export function reverseClip(project, clips, sel) {
 export const isStabilized = (take) => !!(take && take.source && take.source.tool === "stabilize");
 
 // A stabilized copy of the clip's range is rendered once (a "stabilize" job); after that the box switches between
-// the two, until the clip is trimmed wider than the copy.
-export function stabilizeClip(shotId) {
-  editCmd({ cmd: "stabilize", id: shotId }).then((res) => res && res.job && showQueued(res.job));
+// the two, until the clip is trimmed wider than the copy. type "overlay": an upper-track clip (its copy is a library item).
+export function stabilizeClip(id, type = "shot") {
+  editCmd({ cmd: "stabilize", id, type }).then((res) => res && res.job && showQueued(res.job));
 }
 
 // Opens the shot's speed setting in the inspector (SpeedSection in insp-edit.js).

@@ -74,3 +74,17 @@ def steps(item: dict, field: str, start: float, end: float, fps: int, max_steps:
     if last < end:
         spans.append((last, end, pts[-1][1]))
     return spans
+
+
+def source_keys(keys: list[dict], t_in: float, speed: float, length: float) -> list[dict]:
+    """A take's volume keys (t in file seconds) as clip keyframes: t = (file seconds - t_in) / speed, cut to 0..length."""
+    if not keys:
+        return []
+    item = {"keyframes": keys}
+    out = {0.0: float(value_at(item, "volume", t_in, 1.0)),
+           round(length, 3): float(value_at(item, "volume", t_in + length * speed, 1.0))}
+    for k in keys:
+        t = round((float(k["t"]) - t_in) / speed, 3)
+        if 0 < t < round(length, 3):
+            out[t] = float(k["volume"])
+    return [{"t": t, "volume": round(v, 4)} for t, v in sorted(out.items())]

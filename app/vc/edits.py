@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .grade import clean_grade
-from .keyframes import value_at
+from .keyframes import source_keys, value_at
 from .sequence import VOICE_TRACK, audio_media, audio_track, build_sequence, total_duration, video_take
 from .util import AppError, new_id
 
@@ -443,11 +443,15 @@ def detach(project: dict, shot_id: str | None = None, t: float | None = None) ->
     if clip["source"] != "video" or not clip["take"].get("hasAudio"):
         raise AppError("這個鏡頭沒有聲音")
     aid = new_id("a")
+    # The version's volume keys (爆音 lowered) carry over as the clip's own keyframes, times the shot volume.
+    level = float(shot.get("volume", 1))
+    keys = source_keys(clip["take"].get("volumeKeys") or [], clip["in"], clip["speed"], clip["length"])
     # A sped shot's sound keeps its speed (the shot's speed is locked while its sound is detached).
     item = {"id": aid, "takeId": clip["take"]["id"], "shotId": shot["id"], "start": r3(clip["start"]),
             "in": r3(clip["in"]), "out": r3(clip["out"]), "name": f"{shot.get('name') or '鏡頭'} 原聲",
             **({"speed": clip["speed"]} if clip["speed"] != 1 else {}),
-            **({"volume": shot["volume"]} if shot.get("volume", 1) != 1 else {})}
+            **({"volume": shot["volume"]} if level != 1 else {}),
+            **({"keyframes": [{**k, "volume": round(min(VOLUME_MAX, k["volume"] * level), 4)} for k in keys]} if keys else {})}
     return {"ops": [{"op": "audio.add", "item": item}, {"op": "shot.update", "id": shot["id"], "patch": {"audioDetached": True}}],
             "label": "分離原聲", "id": aid}
 
@@ -537,6 +541,36 @@ def stabilize(project: dict, shot_id: str | None = None, t: float | None = None)
             "job": {"kind": "stabilize", "shotId": shot["id"],
                     "payload": {"source": take["id"], "from": r3(max(0.0, t_in - STAB_HANDLE)),
                                 "to": r3(min(dur, end + STAB_HANDLE))}}}
+
+
+def stabilize_overlay(project: dict, item_id: str | None = None, t: float | None = None) -> dict:
+    """stabilize for an upper-track clip: the copy is a media item (parent, source like a shot's copy) and "in"
+    shifts by its start. The length stays, so a clip that ran past the footage's end runs past the copy's."""
+    item = _target(project, [], "overlay", item_id, 0.0 if t is None else t)["item"]
+    media = project["media"].get(item.get("mediaId")) or {}
+    if media.get("kind") != "video" or not media.get("duration"):
+        raise AppError("防抖只能用在影片片段")
+    t_in = float(item.get("in") or 0.0)
+    if _is_stab(media):
+        if media.get("parent") not in project["media"]:
+            raise AppError("找不到防抖前的原始影片")
+        return {"ops": [{"op": "overlay.update", "id": item["id"], "patch": {
+            "mediaId": media["parent"], "in": r3(float(media["source"].get("start") or 0.0) + t_in)}}],
+            "label": "取消防抖"}
+    dur = float(media["duration"])
+    end = min(dur, t_in + float(item.get("length") or 0.0))
+    have = next((x for x in project["media"].values() if x.get("parent") == media["id"] and _is_stab(x)
+                 and x.get("kind") == "video" and x.get("duration")
+                 and float(x["source"].get("start") or 0.0) <= t_in + 1e-3
+                 and float(x["source"].get("end") or 0.0) >= end - 1e-3), None)
+    if have:
+        start = float(have["source"].get("start") or 0.0)
+        return {"ops": [{"op": "overlay.update", "id": item["id"],
+                         "patch": {"mediaId": have["id"], "in": r3(max(0.0, t_in - start))}}], "label": "防抖"}
+    return {"ops": [], "label": "防抖",
+            "job": {"kind": "stabilize", "shotId": None,
+                    "payload": {"overlay": item["id"], "source": media["id"],
+                                "from": r3(max(0.0, t_in - STAB_HANDLE)), "to": r3(min(dur, end + STAB_HANDLE))}}}
 
 
 def _shot_volume(project: dict, shot_id: str, db: float, t_in: float | None, t_out: float | None) -> dict:
@@ -670,6 +704,8 @@ def plan(project: dict, data: dict) -> dict:
     if cmd == "reverse":
         return reverse(project, _id(data), _num(data, "t", False))
     if cmd == "stabilize":
+        if kind == "overlay":
+            return stabilize_overlay(project, _id(data), _num(data, "t", False))
         return stabilize(project, _id(data), _num(data, "t", False))
     if cmd == "volume":
         if not _id(data):

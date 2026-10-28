@@ -270,6 +270,9 @@ def _list_update(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
         patch = _clean_patch(op.get("patch"), fields)
         if key == "overlays" and "layer" in patch and _find(p["layers"], patch["layer"]) < 0:
             raise AppError("畫面軌道不存在")
+        if key == "overlays" and ("mediaId" in patch or "mediaId" in (op.get("unset") or [])) and (
+                (p["media"].get(patch.get("mediaId")) or {}).get("kind") not in ("image", "video")):
+            raise AppError("上層畫面只能使用素材庫裡的圖片或影片")
         if key == "captions" and patch.get("track") and _find(p.get("captionTracks") or [], patch["track"]) < 0:
             raise AppError("字幕軌道不存在")
         item = p[key][i]

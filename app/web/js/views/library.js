@@ -196,8 +196,10 @@ const toggleFavorite = (media) =>
 
 // Items nothing else in the project mentions: not on a track, a layer, a shot (as picture or reference),
 // a cast member or anywhere else. Imported takes keep the media id in their file path, so they count too.
+// So does the footage of a stabilized copy: unticking 防抖 on an upper-track clip goes back to it.
 function unusedMedia(project) {
-  const rest = JSON.stringify({ ...project, media: null });
+  const stabbed = Object.values(project.media || {}).filter((m) => m.source && m.source.tool === "stabilize");
+  const rest = JSON.stringify({ ...project, media: stabbed.map((m) => m.parent) });
   return new Set(Object.keys(project.media || {}).filter((id) => !rest.includes(id)));
 }
 

@@ -231,8 +231,16 @@ class LocalJobs:
 
     # ---------------------------------------------------------------- stabilize
     def _prepare_stabilize(self, project: dict, shot_id: str | None, payload: dict) -> dict:
-        index, shot = find_shot(project, shot_id)
-        item = find_item(project, payload.get("source") or shot.get("activeVideo"))
+        # An upper-track clip (payload["overlay"]) gets a stabilized copy of its library video, a shot a version.
+        over = None
+        if payload.get("overlay"):
+            over = next((o for o in project.get("overlays") or [] if o["id"] == payload["overlay"]), None)
+            if not over:
+                raise AppError("找不到這個上層片段")
+            item = project["media"].get(payload.get("source") or over.get("mediaId"))
+        else:
+            index, shot = find_shot(project, shot_id)
+            item = find_item(project, payload.get("source") or shot.get("activeVideo"))
         if not item or item.get("kind") != "video" or not item.get("duration"):
             raise AppError("防抖需要影片")
         dur = float(item["duration"])
@@ -240,8 +248,12 @@ class LocalJobs:
         end = clamp(number(payload.get("to"), dur), 0.0, dur)
         if end - start < 0.2:
             raise AppError("防抖的範圍太短")
+        span = {"source": item["id"], "from": round(start, 3), "to": round(end, 3)}
+        if over:
+            return {"title": f"防抖：{over.get('name') or '上層片段'}", "lane": "local:ffmpeg", "shotId": None,
+                    "payload": {"overlay": over["id"], **span}}
         return {"title": f"防抖：{shot_label(index, shot)}", "lane": "local:ffmpeg", "shotId": shot["id"],
-                "payload": {"source": item["id"], "from": round(start, 3), "to": round(end, 3)}}
+                "payload": span}
 
     def _run_stabilize(self, ctl: JobControl, work: Path) -> dict:
         p = ctl.payload
@@ -257,6 +269,8 @@ class LocalJobs:
         media.stabilize(item_path(pdir, item), out, start, end - start, bool(item.get("hasAudio")),
                         cancelled=ctl.cancelled, on_progress=lambda f: ctl.progress(0.02 + f * 0.9, "防抖"))
         ctl.check()
+        if p.get("overlay"):
+            return self._stabilized_overlay(ctl, pdir, media, out, item, start, end)
         tid = new_id("t")
         staged = stage_file(media, pdir, out, TAKE_DIR, tid, cancelled=ctl.cancelled, on_progress=ctl.progress)
         take = new_take(
@@ -277,6 +291,25 @@ class LocalJobs:
         else:
             commit_takes(self._store, ctl.pid, [take], link=linked(ctl))
         return {"takeIds": [tid], "message": "防抖完成"}
+
+    def _stabilized_overlay(self, ctl: JobControl, pdir: Path, media: Media, out: Path, item: dict, start: float,
+                            end: float) -> dict:
+        """The copy joins the library; the clip switches to it with "in" shifted by start, unless it moved to
+        other footage or out of the copy's range while it rendered (then the copy just stays in the library)."""
+        mid = new_id("m")
+        staged = stage_file(media, pdir, out, IMPORT_DIR, mid, cancelled=ctl.cancelled, on_progress=ctl.progress)
+        copy = {**new_media(staged, f"{item.get('name') or '影片'}（防抖）", mid), "parent": item["id"],
+                "source": {"backend": "local", "tool": "stabilize", "from": item["id"], "start": start, "end": end}}
+        ops = [{"op": "media.add", "media": copy}]
+        with self._store.locked(ctl.pid):
+            over = next((o for o in self._store.get(ctl.pid)["overlays"] if o["id"] == ctl.payload["overlay"]), None)
+            t_in = float(over.get("in") or 0.0) if over else 0.0
+            last = min(float(item["duration"]), t_in + float(over.get("length") or 0.0)) if over else 0.0
+            if over and over.get("mediaId") == item["id"] and t_in >= start - 1e-3 and last <= end + 1e-3:
+                ops.append({"op": "overlay.update", "id": over["id"],
+                            "patch": {"mediaId": mid, "in": round(max(0.0, t_in - start), 3)}})
+            self._store.apply(ctl.pid, ops, origin="job", undoable=False)
+        return {"mediaIds": [mid], "message": "防抖完成"}
 
     # ---------------------------------------------------------------- ingest
     def _prepare_ingest(self, project: dict, shot_id: str | None, payload: dict) -> dict:

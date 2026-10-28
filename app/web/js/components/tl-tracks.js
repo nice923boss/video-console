@@ -656,7 +656,8 @@ export function SourceAudioTrack({ project, clips, ctx, editSel, picked }) {
       title=${`${name} 的原聲，音量 ${pct}%\n${fmtSeconds(c.start, 2)} 開始，長 ${fmtSeconds(c.length, 2)}，雙擊跳到開頭\nCtrl + 點擊逐一加選或取消，Shift + 點擊選取中間所有片段，一起調原聲音量`}
       onPointerDown=${(e) => e.stopPropagation()} onDblClick=${() => setTime(c.start)}
       onClick=${(e) => clickShot(e, c.shot.id, sounding, "edit")}>
-      <${Wave} pid=${project.id} media=${c.take} tIn=${c.in} len=${c.length} speed=${c.speed} width=${width} item=${c.shot} />
+      <${Wave} pid=${project.id} media=${c.take} tIn=${c.in} len=${c.length} speed=${c.speed} width=${width} item=${c.shot}
+        keys=${c.take.volumeKeys} />
       <div class="tl-audio-label"><${Icon} name="volume" size=${12} /><span>${name}${pct !== 100 ? ` ${pct}%` : ""}</span></div>
     </div>`;
   });

@@ -3,7 +3,7 @@
 // so they match what the timeline draws and what the export renders.
 import { html, useMemo } from "../lib/h.js";
 import { setState, useStore } from "../lib/store.js";
-import { updateShot } from "../lib/actions.js";
+import { ops, updateShot } from "../lib/actions.js";
 import { submitJob } from "../lib/jobs-actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { fmtTime, fmtDuration, round } from "../lib/format.js";
@@ -18,6 +18,7 @@ import { GradeEditor } from "./grade-panel.js";
 import { MaskEditor } from "./mask-panel.js";
 import { ReviewSection } from "./review-list.js";
 import { fullGrade, isNeutral } from "../lib/grade.js";
+import { findLoud } from "./tl-wave.js";
 
 const NONE = [];
 const MIN_LEN = 0.1;
@@ -107,6 +108,20 @@ function TrimSection({ project, shot, vid, clip }) {
   <//>`;
 }
 
+// 壓低爆音 on the shot's own sound: the version's volume keys (file seconds, so trims keep them) are worked out
+// afresh at the shot volume, so pressing again after moving the slider fits the dips to it.
+async function declipShot(project, shot, clip) {
+  const vid = clip.take;
+  const speed = clip.speed || 1;
+  const found = await findLoud(project.id, vid, clip.in, clip.length, speed, () => Number(shot.volume ?? 1));
+  if (!found) return toast("這段影片的波形沒有音量資料，無法偵測爆音", { level: "warn" });
+  const had = (vid.volumeKeys || []).length > 0;
+  if (!found.spans.length && !had) return toast("這段原聲沒有爆音");
+  const volumeKeys = found.keys.map((k) => ({ t: round(clip.in + k.t * speed, 3), volume: k.volume }));
+  if (!(await ops([{ op: "take.update", id: vid.id, patch: { volumeKeys } }], { label: "壓低爆音" }))) return;
+  toast(found.spans.length ? `已壓低 ${found.spans.length} 段爆音` : "目前的音量不會爆音，已移除先前的壓低");
+}
+
 // Speed, reverse, the shot's own sound volume and detached sound. The same commands sit on edit.speed, edit.reverseClip and
 // edit.detachAudio (tl-commands.js); edit.speed focuses the select here.
 function SpeedSection({ project, shot, vid, clips, busy }) {
@@ -115,6 +130,7 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
   const reversed = isReverse(vid);
   const rendering = busy.some((j) => j.kind === "reverse");
   const sel = { type: "shot", id: shot.id };
+  const clip = clips.find((c) => c.shot.id === shot.id);
   const options = (SPEEDS.includes(speed) ? SPEEDS : [...SPEEDS, speed].sort((a, b) => a - b))
     .map((v) => ({ value: v, label: `${v}x` }));
   let note = null;
@@ -135,7 +151,15 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
     ${vid.hasAudio && !detached && html`<${Field} label="原聲音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
       <${Slider} value=${Number(shot.volume ?? 1)} min=${0} max=${4} step=${0.05} format=${(v) => `${Math.round(v * 100)}%`}
         onCommit=${(v) => updateShot(shot.id, { volume: round(v, 2) }, { label: "原聲音量" })} />
-    <//>`}
+    <//>
+    <div class="row">
+      <${Button} size="sm" icon="volume" disabled=${!clip}
+        title=${clip ? "找出這段原聲超過滿格（時間軸波形變紅）的地方，用音量關鍵幀自動壓低到不爆音；調過原聲音量後再按一次會重新計算"
+          : "鏡頭不在輸出序列裡，無法偵測爆音"}
+        onClick=${() => declipShot(project, shot, clip)}>壓低爆音<//>
+      ${(vid.volumeKeys || []).length > 0 && html`<${Button} size="sm" icon="x" title="移除自動壓低的音量關鍵幀，恢復原本的音量"
+        onClick=${() => ops([{ op: "take.update", id: vid.id, patch: { volumeKeys: [] } }], { label: "移除壓低爆音" })}>移除壓低<//>`}
+    </div>`}
     ${vid.hasAudio && html`<${Button} icon="music"
       title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、淡入淡出、加音量關鍵幀"}${keyHint("edit.detachAudio")}`}
       onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}

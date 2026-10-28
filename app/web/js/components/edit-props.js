@@ -5,9 +5,10 @@ import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round, shotLabel } from "../lib/format.js";
-import { audioLength, audioMedia, audioTrack, VOICE_TRACK, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { audioLength, audioMedia, audioSpeed, audioTrack, VOICE_TRACK, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
 import { rowRole, roleOp, duckDb, ROLE_LABELS, DUCK_LEVELS } from "../lib/duck.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
+import { withDips } from "../lib/declip.js";
 import { VOICE_STATES, voiceState, voiceClip, voiceEnd, generateVoices } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openCaptionStyleDialog } from "../dialogs/caption-style-dialog.js";
@@ -21,9 +22,11 @@ import { Inspector } from "./inspector.js";
 import { VoicePanel } from "./voice-panel.js";
 import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
-import { addKeyframe } from "./tl-commands.js";
+import { addKeyframe, isStabilized, stabilizeClip } from "./tl-commands.js";
 import { clipKeysHint, keyHint, undoKeyText } from "../lib/keymap.js";
 import { multiAudio } from "./tl-tracks.js";
+import { findLoud, playGain } from "./tl-wave.js";
+import { toast } from "./toast.js";
 import { CHOICES as GAIN_CHOICES, dbToGain } from "../dialogs/import-gain.js";
 import { DEFAULT_CHROMA } from "../lib/chroma.js";
 import { parseGlossary, glossaryHits, fixHits, hitText } from "../lib/glossary.js";
@@ -78,6 +81,15 @@ function AudioPanel({ project, item }) {
     closePanel();
     ops([{ op: "audio.delete", id: item.id }], { label: "移除音軌" });
   };
+  // 壓低爆音: dips multiplied into the volume keyframes the clip already has, so hand-made keys keep their shape.
+  const declip = async () => {
+    const room = 200 - (item.keyframes || []).filter((k) => "volume" in k).length;
+    const found = await findLoud(project.id, media, tIn, len, audioSpeed(item), (t) => playGain(item, t, len), room);
+    if (!found) return toast("這段音訊的波形沒有音量資料，無法偵測爆音", { level: "warn" });
+    if (!found.spans.length) return toast("這段音訊沒有爆音");
+    if (!(await updateAudio(item.id, { keyframes: withDips(item, found.keys, len) }, "壓低爆音"))) return;
+    toast(`已壓低 ${found.spans.length} 段爆音`);
+  };
   // Ducking (AU-02): the role is the whole row's, the 人聲 switch this clip's alone.
   const tracks = project.tracks || {};
   const row = audioTrack(item);
@@ -117,6 +129,8 @@ function AudioPanel({ project, item }) {
         <${Slider} value=${Number(valueAt(item, "volume", local, 1))} min=${0} max=${4} step=${0.05} format=${pct}
           onCommit=${(v) => updateAudio(item.id, keyedPatch(item, here(), { volume: round(v, 2) }), "音軌音量")} />
       <//>
+      ${media && html`<div class="row"><${Button} size="sm" icon="volume" onClick=${declip}
+        title="找出這段音訊超過滿格（時間軸波形變紅）的地方，加音量關鍵幀自動壓低到不爆音；已有的關鍵幀會保留">壓低爆音<//></div>`}
       <div class="row-2">
         <${Field} label="淡入">
           <${Seconds} value=${Number(item.fadeIn || 0)} max=${30} onCommit=${(v) => updateAudio(item.id, { fadeIn: v }, "音軌淡入")} />
@@ -252,6 +266,7 @@ function OverlayPanel({ project, item }) {
           onCommit=${(v) => set({ opacity: round(v, 2) }, "片段不透明度")} />
       <//>
       <${ChromaField} chroma=${item.chroma} update=${update} />
+      ${video && html`<${StabilizeField} item=${item} media=${media} />`}
       ${video && media.hasAudio && html`<${Field} label="音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
         <${Slider} value=${at("volume", 1)} min=${0} max=${4} step=${0.05} format=${pct}
           onCommit=${(v) => set({ volume: round(v, 2) }, "片段音量")} />
@@ -274,6 +289,17 @@ function OverlayPanel({ project, item }) {
       <${Button} kind="danger" icon="trash" onClick=${remove}>移除片段<//>
     </div>
   </div>`;
+}
+
+// Ticked when the clip shows a stabilized copy of its video (a library item made by a "stabilize" job).
+function StabilizeField({ item, media }) {
+  const { pid, jobs } = useStore((s) => ({ pid: s.pid, jobs: s.jobs }));
+  const rendering = jobs.some((j) => j.pid === pid && j.kind === "stabilize" && j.payload && j.payload.overlay === item.id
+    && (j.status === "queued" || j.status === "running"));
+  return html`<${Field} label="防抖" hint="只處理片段用到的範圍，前後各多留 1 秒，處理好的影片會放進素材庫；畫面會稍微放大來裁掉晃動的黑邊。之後片段拉長超過多留的部分，要取消再重新勾選">
+    <${Toggle} checked=${isStabilized(media) || rendering} disabled=${rendering}
+      label=${rendering ? "防抖處理中" : "防抖"} onChange=${() => stabilizeClip(item.id, "overlay")} />
+  <//>`;
 }
 
 // Colour key (GR-09): pixels near the chosen colour turn transparent, for a clip shot on a green or blue screen.
