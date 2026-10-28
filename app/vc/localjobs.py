@@ -25,7 +25,7 @@ from .util import AppError, clamp, kind_of, new_id
 
 log = logging.getLogger("vc.localjobs")
 
-LOCAL_KINDS = ("kenburns", "lastframe", "reverse", "ingest", "export", "package")
+LOCAL_KINDS = ("kenburns", "lastframe", "reverse", "stabilize", "ingest", "export", "package")
 UPLOAD_RE = re.compile(r"^media/cache/upload-[a-z0-9_]+\.[a-z0-9]{1,5}$")
 ENCODERS = ("auto", "libx264", "h264_nvenc", "h264_amf", "h264_qsv")
 
@@ -228,6 +228,55 @@ class LocalJobs:
                      "trimOut": round(dur - t_in, 3) if t_in > 0 else None}
         commit_takes(self._store, ctl.pid, [take], "activeVideo", extra, link=linked(ctl))
         return {"takeIds": [tid], "message": "倒放完成"}
+
+    # ---------------------------------------------------------------- stabilize
+    def _prepare_stabilize(self, project: dict, shot_id: str | None, payload: dict) -> dict:
+        index, shot = find_shot(project, shot_id)
+        item = find_item(project, payload.get("source") or shot.get("activeVideo"))
+        if not item or item.get("kind") != "video" or not item.get("duration"):
+            raise AppError("防抖需要影片")
+        dur = float(item["duration"])
+        start = clamp(number(payload.get("from"), 0.0), 0.0, dur)
+        end = clamp(number(payload.get("to"), dur), 0.0, dur)
+        if end - start < 0.2:
+            raise AppError("防抖的範圍太短")
+        return {"title": f"防抖：{shot_label(index, shot)}", "lane": "local:ffmpeg", "shotId": shot["id"],
+                "payload": {"source": item["id"], "from": round(start, 3), "to": round(end, 3)}}
+
+    def _run_stabilize(self, ctl: JobControl, work: Path) -> dict:
+        p = ctl.payload
+        project = self._store.get(ctl.pid)
+        pdir = self._store.project_dir(ctl.pid)
+        item = find_item(project, p["source"])
+        if not item:
+            raise AppError("來源影片已被刪除", 410)
+        start, end = float(p["from"]), float(p["to"])
+        media = self._media()
+        media.require()
+        out = work / "stabilize.mp4"
+        media.stabilize(item_path(pdir, item), out, start, end - start, bool(item.get("hasAudio")),
+                        cancelled=ctl.cancelled, on_progress=lambda f: ctl.progress(0.02 + f * 0.9, "防抖"))
+        ctl.check()
+        tid = new_id("t")
+        staged = stage_file(media, pdir, out, TAKE_DIR, tid, cancelled=ctl.cancelled, on_progress=ctl.progress)
+        take = new_take(
+            ctl.shot_id, staged, take_id=tid, job_id=ctl.id, parent=item["id"], label="防抖",
+            source={"backend": "local", "tool": "stabilize", "from": item["id"], "start": start, "end": end},
+            prompt=item.get("prompt") or "", negative=item.get("negative") or "",
+        )
+        # The copy starts `start` seconds into the footage: shift the trims, unless the clip was moved to
+        # another version or re-trimmed past the copy while it rendered (then it is only kept as a version).
+        shot = next((s for s in self._store.get(ctl.pid)["shots"] if s["id"] == ctl.shot_id), None)
+        t_in, t_out = (float(shot.get("trimIn") or 0.0), shot.get("trimOut")) if shot else (0.0, None)
+        last = float(t_out) if t_out is not None else float(item["duration"])
+        if shot and shot.get("activeVideo") == item["id"] and t_in >= start - 1e-3 and last <= end + 1e-3:
+            dur = float(staged.get("duration") or end - start)
+            extra = {"trimIn": round(max(0.0, t_in - start), 3),
+                     "trimOut": round(min(last - start, dur), 3) if t_out is not None else None}
+            commit_takes(self._store, ctl.pid, [take], "activeVideo", extra, link=linked(ctl))
+        else:
+            commit_takes(self._store, ctl.pid, [take], link=linked(ctl))
+        return {"takeIds": [tid], "message": "防抖完成"}
 
     # ---------------------------------------------------------------- ingest
     def _prepare_ingest(self, project: dict, shot_id: str | None, payload: dict) -> dict:

@@ -154,6 +154,7 @@ export function kindOfName(name) {
 
 export const KIND_LABEL = {
   image: "生圖", video: "生影片", upscale: "放大", upscalevideo: "影片放大", kenburns: "運鏡動畫", lastframe: "取末格", reverse: "倒放",
+  stabilize: "防抖",
   ingest: "匯入", export: "輸出影片", package: "打包", voice: "配音",
   transcribe: "語音轉字幕",
   align: "語音對齊字幕",

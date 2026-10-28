@@ -13,7 +13,7 @@ import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText, 
 import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
 import { keyHint } from "../lib/keymap.js";
-import { reverseClip, detachAudio, isReverse } from "./tl-commands.js";
+import { reverseClip, detachAudio, isReverse, stabilizeClip, isStabilized } from "./tl-commands.js";
 import { GradeEditor } from "./grade-panel.js";
 import { MaskEditor } from "./mask-panel.js";
 import { ReviewSection } from "./review-list.js";
@@ -145,6 +145,16 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
   <//>`;
 }
 
+// Ticked = the shot plays a stabilized copy of its range (edits.py stabilize); the first tick renders it.
+function StabilizeSection({ shot, vid, busy }) {
+  const rendering = busy.some((j) => j.kind === "stabilize");
+  return html`<${Section} title="防抖" icon="camera">
+    <${Toggle} checked=${isStabilized(vid) || rendering} disabled=${rendering} onChange=${() => stabilizeClip(shot.id)}
+      label=${rendering ? "防抖處理中" : "防抖"}
+      hint="只處理目前的剪輯範圍，前後各多留 1 秒；畫面會稍微放大來裁掉晃動的黑邊。之後剪輯範圍拉長超過多留的部分，要取消再重新勾選" />
+  <//>`;
+}
+
 // 降噪 / 去回音 / 聲道 belong to an audio clip (voice-panel.js): opens the shot's detached sound, detaching it first.
 function voiceTools(project, shot, clips, sel) {
   const audio = shot.audioDetached && (project.audio || []).find((a) => a.shotId === shot.id);
@@ -271,7 +281,8 @@ export function EditTab({ project, shot, busy = NONE }) {
       onChange=${(review) => updateShot(shot.id, { review }, { label: "刪除客戶意見" })} />
     ${vid
       ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />
-        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`
+        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />
+        <${StabilizeSection} shot=${shot} vid=${vid} busy=${busy} />`
       : html`<${StillSection} shot=${shot} img=${img} />`}
     ${(vid || img) && html`<${GradeSection} shot=${shot} />`}
     ${(vid || img) && html`<${MaskSection} shot=${shot} />`}

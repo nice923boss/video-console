@@ -215,6 +215,7 @@ class Media:
     def __init__(self, exe: str | None):
         self.exe = exe
         self._encoders: dict[str, bool] = {}
+        self._filters: set[str] | None = None
         self._lock = threading.Lock()
         self._version: str | None = None
 
@@ -397,6 +398,24 @@ class Media:
         log.info("Encoder %s %s", name, "available" if ok else "unavailable")
         return ok
 
+    def has_filter(self, name: str) -> bool:
+        """Whether this ffmpeg build has a filter (libvidstab's are left out of some builds)."""
+        with self._lock:
+            names = self._filters
+        if names is None:
+            names = set()
+            if self.exe:
+                try:
+                    proc = subprocess.run([self.exe, "-hide_banner", "-nostdin", "-filters"], capture_output=True,
+                                          timeout=30, creationflags=NO_WINDOW)
+                    rows = (line.split() for line in proc.stdout.decode("utf-8", "replace").splitlines())
+                    names = {row[1] for row in rows if len(row) > 2}
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    log.warning("Listing ffmpeg filters failed: %s", exc)
+            with self._lock:
+                self._filters = names
+        return name in names
+
     def pick_encoder(self, preference: str = "auto") -> str:
         if preference not in ("auto", "", None):
             if preference == "libx264" or self.has_encoder(preference):
@@ -564,6 +583,36 @@ class Media:
         (work / "rev-list.txt").write_text("".join(f"file '{n}'\n" for n in names), encoding="utf-8")
         self.run(["-f", "concat", "-safe", "0", "-i", "rev-list.txt", "-c", "copy", "-movflags", "+faststart",
                   dst.name], timeout=1800, cwd=work)
+
+    def stabilize(
+        self,
+        src: Path,
+        dst: Path,
+        start: float,
+        length: float,
+        has_audio: bool,
+        cancelled: Callable[[], bool] | None = None,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> None:
+        """Steady [start, start + length) of a shaky video with libvidstab: a first pass measures the camera's
+        shake, a second smooths it away and zooms in just enough to hide the moving edges. The motion file
+        is named relative to dst's folder (the working directory), as filter options cannot take a Windows path.
+        "copy" hands vidstabtransform a fresh frame every time: given a mix of writable and shared decoder frames
+        it keeps reading a released buffer, and every second or so a frame from further on shows up."""
+        if not self.has_filter("vidstabdetect") or not self.has_filter("vidstabtransform"):
+            raise AppError("這個 ffmpeg 沒有防抖濾鏡（libvidstab）：請到「設定 › 影片輸出」指定含 libvidstab 的 ffmpeg.exe", 501)
+        def part(base: float, share: float) -> Callable[[float], None] | None:
+            return (lambda f: on_progress(base + f * share)) if on_progress else None
+
+        work = dst.parent
+        cut = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src)]
+        self.run_progress([*cut, "-vf", "vidstabdetect=shakiness=5:accuracy=15:result=stab.trf", "-an", "-f", "null",
+                           "-"], length, part(0.0, 0.35), cancelled, cwd=work)
+        args = [*cut, "-vf",
+                "copy,vidstabtransform=input=stab.trf:smoothing=15:zoom=0:optzoom=1,unsharp=5:5:0.8:3:3:0.4",
+                *self.encoder_args("libx264", "high")]
+        args += ["-c:a", "aac", "-b:a", "192k"] if has_audio else ["-an"]
+        self.run_progress([*args, "-movflags", "+faststart", dst.name], length, part(0.35, 0.65), cancelled, cwd=work)
 
     def to_web_video(self, src: Path, dst: Path, cancelled: Callable[[], bool] | None = None) -> None:
         """Re-encode a video the browser cannot play (HEVC, ProRes, 10-bit...) into H.264 MP4."""

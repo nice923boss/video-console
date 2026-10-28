@@ -20,6 +20,7 @@ MAX_STILL = 600.0
 VOLUME_MAX = 4.0
 RAMP = 0.1  # seconds a range's volume takes to rise or fall to its level
 FREEZE_LEN = 2.0
+STAB_HANDLE = 1.0  # seconds of footage a stabilized copy keeps beyond each end of the clip, for small re-trims
 EDGE = 0.1
 SPLIT_LABEL = {"shot": "分割鏡頭", "overlay": "分割片段", "audio": "分割音軌", "adjust": "分割調整圖層", "caption": "分割字幕"}
 
@@ -415,11 +416,11 @@ def _detached_sound_ops(project: dict, clip: dict, place: float) -> list[dict]:
 
 
 def _file_of(project: dict, take_id: str | None) -> str | None:
-    """The footage a version shows; a reversed copy counts as the footage it was made from."""
+    """The footage a version shows; a reversed or stabilized copy counts as the footage it was made from."""
     takes = project.get("takes") or {}
     take = takes.get(take_id) or {}
-    if _is_reverse(take):
-        take = takes.get(take.get("parent")) or take
+    while (_is_reverse(take) or _is_stab(take)) and take.get("parent") in takes:
+        take = takes[take["parent"]]
     return take.get("file")
 
 
@@ -493,6 +494,49 @@ def reverse(project: dict, shot_id: str | None = None, t: float | None = None) -
     if _is_reverse(take):
         raise AppError("找不到倒放前的原始影片")
     return {"ops": [], "label": "倒放", "job": {"kind": "reverse", "shotId": shot["id"], "payload": {"source": take["id"]}}}
+
+
+def _is_stab(take: dict | None) -> bool:
+    return bool(take and (take.get("source") or {}).get("tool") == "stabilize")
+
+
+def stabilize(project: dict, shot_id: str | None = None, t: float | None = None) -> dict:
+    """Switch to a stabilized copy of the part the clip uses (or back). The copy starts at source["start"] of the
+    footage it was made from, so trims shift by that much; the first time, a "stabilize" job renders the clip's
+    range plus STAB_HANDLE seconds each side, and a copy too short for the clip's trims is rendered anew."""
+    shot = (next((s for s in project["shots"] if s["id"] == shot_id), None) if shot_id
+            else (_clip_at(_clips(project), t) or {}).get("shot") if t is not None else None)
+    take = shot and video_take(project, shot)
+    if not take:
+        raise AppError("防抖只能用在影片鏡頭")
+    takes = project.get("takes") or {}
+    t_in, t_out = float(shot.get("trimIn") or 0.0), shot.get("trimOut")
+    if _is_stab(take):
+        parent = takes.get(take.get("parent"))
+        if not parent:
+            raise AppError("找不到防抖前的原始影片")
+        start = float(take["source"].get("start") or 0.0)
+        out = start + float(t_out if t_out is not None else take["duration"])
+        reaches_end = t_out is None and out >= float(parent.get("duration") or 0.0) - 1e-3
+        return {"ops": [{"op": "shot.update", "id": shot["id"],
+                         "patch": {"activeVideo": parent["id"], "trimIn": r3(start + t_in),
+                                   "trimOut": None if reaches_end else r3(out)}}], "label": "取消防抖"}
+    dur = float(take["duration"])
+    end = float(t_out) if t_out is not None else dur
+    have = next((x for x in takes.values() if x.get("parent") == take["id"] and _is_stab(x)
+                 and x.get("kind") == "video" and x.get("duration")
+                 and float(x["source"].get("start") or 0.0) <= t_in + 1e-3
+                 and float(x["source"].get("end") or 0.0) >= end - 1e-3), None)
+    if have:
+        start = float(have["source"].get("start") or 0.0)
+        trims = {"trimIn": r3(max(0.0, t_in - start)),
+                 "trimOut": r3(min(end - start, float(have["duration"]))) if t_out is not None else None}
+        return {"ops": [{"op": "shot.update", "id": shot["id"], "patch": {"activeVideo": have["id"], **trims}}],
+                "label": "防抖"}
+    return {"ops": [], "label": "防抖",
+            "job": {"kind": "stabilize", "shotId": shot["id"],
+                    "payload": {"source": take["id"], "from": r3(max(0.0, t_in - STAB_HANDLE)),
+                                "to": r3(min(dur, end + STAB_HANDLE))}}}
 
 
 def _shot_volume(project: dict, shot_id: str, db: float, t_in: float | None, t_out: float | None) -> dict:
@@ -625,6 +669,8 @@ def plan(project: dict, data: dict) -> dict:
         return restore(project, _id(data))
     if cmd == "reverse":
         return reverse(project, _id(data), _num(data, "t", False))
+    if cmd == "stabilize":
+        return stabilize(project, _id(data), _num(data, "t", False))
     if cmd == "volume":
         if not _id(data):
             raise AppError("volume 要給片段 id")
@@ -641,5 +687,5 @@ def plan(project: dict, data: dict) -> dict:
         if not _id(data):
             raise AppError(f"{cmd} 要給鏡頭 id")
         return {"roll": roll, "slip": slip, "slide": slide}[cmd](project, _id(data), _num(data, "by"))
-    raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、volume、keyframe、"
-                   "roll、slip、slide")
+    raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、stabilize、volume、"
+                   "keyframe、roll、slip、slide")

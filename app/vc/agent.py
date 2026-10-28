@@ -86,11 +86,12 @@ TOOLS = [
     _tool("apply_ops", "Apply project ops as one undo step (see the cheat sheet in the instructions).",
           {"ops": {"type": "array", "items": {"type": "object"}}, "label": STR}, ("ops", "label")),
     _tool("edit", "One timeline edit. split {t, type?, id?}; splitAll {t}; trim {t, side: start|end, type?, id?}; "
-          "freeze {t}; detach {id|t}; restore {id}; reverse {id|t}; volume {type, id, db, in?, out?}; "
+          "freeze {t}; detach {id|t}; restore {id}; reverse {id|t}; stabilize {id|t} (toggles); "
+          "volume {type, id, db, in?, out?}; "
           "keyframe {type, id, t, values?}; roll/slip/slide {id, by}. type: shot (default), overlay, audio, "
           "caption, adjust. Without id the clip under t is used.",
           {"cmd": {"type": "string", "enum": ["split", "splitAll", "trim", "freeze", "detach", "restore", "reverse",
-                                              "volume", "keyframe", "roll", "slip", "slide"]},
+                                              "stabilize", "volume", "keyframe", "roll", "slip", "slide"]},
            "t": NUM, "type": STR, "id": STR, "side": STR, "by": NUM, "db": NUM, "in": NUM, "out": NUM,
            "values": {"type": "object"}}, ("cmd",)),
     _tool("import_bilingual", "Import a Chinese/English parallel text as captions on two rows (中文 above, English "
