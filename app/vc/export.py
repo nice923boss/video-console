@@ -25,6 +25,7 @@ from .captions import caption_ass, shown_captions
 from .cover import covered_spans, uncovered
 from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
+from .framegrid import clip_frames, frame_bounds, frame_rate, frames_per_second
 from .grade import build_cube, clean_grade, is_neutral
 from .keyframes import expr as kf_expr
 from .keyframes import source_keys, take_keys
@@ -48,11 +49,6 @@ AUDIO_CODECS = {
 }
 # Loudness targets the mix can be brought to (EX-01), in LUFS: YouTube and streaming play back at -14, podcasts at -16.
 LOUDNESS_TARGETS = (-14.0, -16.0)
-
-
-def frame_rate(fps: float) -> str:
-    """The project frame rate as ffmpeg takes it: 29.97 is the NTSC rate 30000/1001."""
-    return "30000/1001" if abs(fps - 29.97) < 0.01 else f"{fps:g}"
 
 
 def export_options(project: dict, settings_export: dict, overrides: dict | None) -> dict:
@@ -296,10 +292,11 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
                 sounds.append((idx, start, length, kf_expr(item, "volume", "t", 0.0, 1.0)))
             if layer.get("hidden") or not picture:
                 continue
-            # The clip's frames start at its place on the timeline; before that and after its end the
-            # overlay passes the picture through unchanged.
-            chain = [f"setpts=PTS-STARTPTS+{start:.3f}/TB"] + ([AS_709] if media["kind"] == "video" else [])
-            end = start + length
+            # The clip covers the frames from frame_at(start) to frame_at(end), the same frames the cuts below land
+            # on; before and after them the overlay passes the picture through unchanged. Its first frame sits half
+            # a frame before the first frame it covers: laid even a hair late, that frame would show the shot below.
+            on, off = frame_bounds(start, start + length, fps)
+            chain = [f"setpts=PTS-STARTPTS+{on:.3f}/TB"] + ([AS_709] if media["kind"] == "video" else [])
             chroma = item.get("chroma") or {}
             if chroma.get("on"):
                 # Keyed on the clip's own pixels, before scaling blurs the edge of the colour.
@@ -328,7 +325,7 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             # Conformed like FCPX: every timeline frame in [start, end) shows the clip's latest frame, the last
             # held to the end (eof_action=pass let a 29.97 fps clip on 30 fps leave a frame of the picture below).
             graph.append(f"[{label}][pip{idx}]overlay=x={x}:y={y}:eof_action=repeat:"
-                         f"enable='gte(t,{start:.3f})*lt(t,{end:.3f})'[pv{idx}]")
+                         f"enable='gte(t,{on:.3f})*lt(t,{off:.3f})'[pv{idx}]")
             label = f"pv{idx}"
     return label, sounds
 
@@ -387,6 +384,7 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     inputs: list[list[str]] = []
     graph: list[str] = []
     video_index: dict[int, int] = {}
+    frames, rate = clip_frames(clips, total, fps), frames_per_second(fps)
 
     for i, clip in enumerate(clips):
         length = clip["length"]
@@ -415,7 +413,7 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         black = "drawbox=c=black:t=fill," if hidden and clip["source"] == "video" else ""
         graph.append(
             f"[{idx}:v]setpts={pts},{lut}{_fit_filter(opts['fit'], w, h)},{black}setsar=1,fps={frame_rate(fps)},{TO_709},"
-            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=duration={length:.3f}[v{i}{'m' if masks else ''}]"
+            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end_frame={frames[i][1] - frames[i][0]}[v{i}{'m' if masks else ''}]"
         )
         graph.extend(_mask_chains(f"v{i}", masks, w, h))
 
@@ -429,13 +427,12 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     run_labels: list[str] = []
     for r, run in enumerate(runs):
         label = f"v{run[0]}"
-        run_start = clips[run[0]]["start"]
         for i in run[1:]:
             trans = clips[i - 1]["transition"]
             out = f"x{i}"
             graph.append(
-                f"[{label}][v{i}]xfade=transition={XFADE_NAMES[trans['type']]}:duration={trans['duration']:.3f}:"
-                f"offset={clips[i]['start'] - run_start:.3f}[{out}]"
+                f"[{label}][v{i}]xfade=transition={XFADE_NAMES[trans['type']]}:duration={(frames[i - 1][1] - frames[i][0]) / rate:.4f}:"
+                f"offset={(frames[i][0] - frames[run[0]][0]) / rate:.4f}[{out}]"
             )
             label = out
         run_labels.append(label)
@@ -454,7 +451,8 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         graph.append(f"[{joined}]ass=filename={ass_rel}[caps]")
         joined = "caps"
     for i, (start, end, rel) in enumerate(luts or []):
-        graph.append(f"[{joined}]lut3d=file={rel}:interp=tetrahedral:enable='between(t,{start:.3f},{end:.3f})'[adj{i}]")
+        on, off = frame_bounds(start, end, fps)
+        graph.append(f"[{joined}]lut3d=file={rel}:interp=tetrahedral:enable='gte(t,{on:.3f})*lt(t,{off:.3f})'[adj{i}]")
         joined = f"adj{i}"
 
     post: list[str] = []
