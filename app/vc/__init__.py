@@ -3,7 +3,7 @@ from pathlib import Path
 
 APP_ID = "video-console"
 APP_NAME = "Video Console"
-VERSION = "1.8.4"
+VERSION = "1.8.5"
 DEFAULT_PORT = 8790
 # The code this process runs: VERSION plus the newest backend source time. A packaged build has no .py files,
 # so packaging/build_exe.py stores the value the source had in BUILD_STAMP. A launch compares it with the
