@@ -10,7 +10,8 @@ import { audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TR
 import { valueAt } from "../lib/keyframes.js";
 import { wakeMix, unroute, mixContext, mixInput, buildVoice, tuneVoice } from "../lib/audio-mix.js";
 import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
-import { RATE, info, failed, peek, keepOnly } from "../lib/pcm-cache.js";
+import { RATE, info, failed, peek, keepOnly, loading } from "../lib/pcm-cache.js";
+import { report } from "../lib/crash-report.js";
 import { toFrame, speedKey, speedCopy, pieces, edgeValue, edgePoints, segKey, reverseGrain,
   bestShift } from "../lib/audio-sched.js";
 import { mixPlan, stemChannels } from "../lib/voice-mix.js";
@@ -36,6 +37,7 @@ const GRAIN = 0.08; // seconds of each grain of the backwards sound, one startin
 const GRAIN_AHEAD = 0.12; // seconds of those grains kept scheduled ahead of the context clock
 const GRAIN_DRIFT = 0.15; // seconds the backwards sound may drift from the picture before it starts again there
 const GRAIN_SHIFT = 0.005; // seconds a faster backwards grain may move to line up with the one before (WSOLA)
+const LATE_MS = 2000; // a playing sound still waiting for its blocks this long is noted in app.log, once
 
 // A video clip's own sound is heard.
 export const clipSounds = (clip) => clip && clip.source === "video" && clip.take.hasAudio && !clip.shot.disabled
@@ -187,7 +189,7 @@ export function createSound(view, hooks) {
     edge.gain.setValueAtTime(edgeValue(seg, u0 - base), at(u0));
     for (const [F, value] of edgePoints(seg)) if (base + F > u0) edge.gain.linearRampToValueAtTime(value, at(base + F));
     return { sk: seg.key, seg, base, u0, env, edge, mix, level, levelOf: null, levelTo: u0, sources: [], fedTo: u0,
-      dry: u0 > base + seg.f0, endU: base + Math.min(seg.f1, anchor.L) };
+      dry: u0 > base + seg.f0, endU: base + Math.min(seg.f1, anchor.L), waitAt: 0, lateSent: false };
   }
 
   const heard = (track, solo) => !solo.length || solo.includes(track);
@@ -254,7 +256,8 @@ export function createSound(view, hooks) {
   // pump; the sound then fades in where it catches up).
   function feed(v, fromU, toU) {
     const meta = info(v.seg.url);
-    if (!meta || v.fedTo >= Math.min(toU, v.endU)) return;
+    if (!meta) return late(v, -1);
+    if (v.fedTo >= Math.min(toU, v.endU)) return;
     if (v.fedTo < fromU) {
       v.fedTo = fromU;
       v.dry = true;
@@ -265,8 +268,9 @@ export function createSound(view, hooks) {
       const buf = peek(v.seg.url, p.block);
       if (!buf) {
         v.fedTo = v.base + p.F;
-        return;
+        return late(v, p.block);
       }
+      v.waitAt = 0;
       const C = anchor.C0 + v.base + p.F - anchor.F0;
       const begin = C / RATE;
       const end = (C + p.n) / RATE;
@@ -284,6 +288,17 @@ export function createSound(view, hooks) {
       v.fedTo = v.base + p.F + p.n;
     }
     v.fedTo = v.endU;
+  }
+
+  // A sound waiting for its file's header (block -1) or a block; one still waiting LATE_MS after it was first due is
+  // noted in app.log (once per sound), so a silence in the preview can be traced afterwards.
+  function late(v, block) {
+    const now = performance.now();
+    if (!v.waitAt) v.waitAt = now;
+    if (v.lateSent || now - v.waitAt < LATE_MS) return;
+    v.lateSent = true;
+    report("預覽聲音遲到", `${v.seg.url} ${block < 0 ? "檔頭" : `區塊 ${block}`}，已等 ${Math.round(now - v.waitAt)} 毫秒，`
+      + `讀取中 ${loading()} 個區塊`);
   }
 
   function pump() {

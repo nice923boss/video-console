@@ -6,6 +6,7 @@ export const BLOCK = 5 * RATE; // frames per block
 const BUDGET = 256 * 1024 * 1024; // bytes of decoded samples kept (32-bit floats)
 const HEAD = 4096; // first read; a long LIST chunk before the samples is read again larger
 const RETRY_MS = 10000; // a file that could not be read is tried again after this long
+const READ_MS = 5000; // a read not done by then is dropped and asked again, so a stalled one cannot hold the sound
 
 const files = new Map(); // url -> { info, promise, failedAt }
 const blocks = new Map(); // `${i}|${url}` -> { buffer, promise, bytes }; insertion order is the use order
@@ -50,12 +51,21 @@ export function deinterleave(buf, channels, float) {
 }
 
 async function readRange(url, start, end) {
-  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
-  if (res.status !== 206 && res.status !== 200) throw new Error(`讀取聲音檔失敗（HTTP ${res.status}）`);
-  const total = Number((res.headers.get("Content-Range") || "").split("/")[1]) || Number(res.headers.get("Content-Length"));
-  let buf = await res.arrayBuffer();
-  if (res.status === 200) buf = buf.slice(start, end + 1); // the server ignored the range
-  return { buf, total };
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), READ_MS);
+  try {
+    const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal: stop.signal });
+    if (res.status !== 206 && res.status !== 200) throw new Error(`讀取聲音檔失敗（HTTP ${res.status}）`);
+    const total = Number((res.headers.get("Content-Range") || "").split("/")[1]) || Number(res.headers.get("Content-Length"));
+    let buf = await res.arrayBuffer();
+    if (res.status === 200) buf = buf.slice(start, end + 1); // the server ignored the range
+    return { buf, total };
+  } catch (err) {
+    if (stop.signal.aborted) throw new Error(`讀取聲音檔逾時（${READ_MS / 1000} 秒）`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readInfo(url) {
@@ -85,6 +95,9 @@ export function info(url) {
 }
 
 export const failed = (url) => Boolean(files.get(url)?.failedAt);
+
+// How many blocks are being read now (for the report of a late sound).
+export const loading = () => [...blocks.values()].filter((b) => !b.buffer).length;
 
 function touch(key) {
   const b = blocks.get(key);

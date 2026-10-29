@@ -5,7 +5,8 @@ import { api, ApiError } from "./api.js";
 const MAX_REPORTS = 20; // per page load, so an error in a render loop cannot flood the log
 let sent = 0;
 
-function report(message, stack) {
+// Also for a problem the page notices without an exception; stack then holds its details.
+export function report(message, stack) {
   if (sent >= MAX_REPORTS) return;
   sent += 1;
   api.post("/api/system/client-error", {
