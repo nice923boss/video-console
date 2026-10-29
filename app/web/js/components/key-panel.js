@@ -60,7 +60,7 @@ export function KeyList({ item, start, length, local, update, onAdd }) {
             <span class="grow dim">${fieldsOf(k).map((f) => FIELD_NAMES[f] || f).join("、")}</span>
             <${IconButton} icon="trash" size=${13} title="刪除這個關鍵幀" onClick=${() => remove(k)} />
           </div>`)}`
-        : html`<span class="field-hint">還沒有關鍵幀。${keyLabel("edit.keyframeAdd") ? `按 ${keyLabel("edit.keyframeAdd")} 在播放頭加入，或` : ""}Shift+點擊時間軸上的片段，在點的位置加入。</span>`}
+        : html`<span class="field-hint">還沒有關鍵幀。${keyLabel("edit.keyframeAdd") ? `按 ${keyLabel("edit.keyframeAdd")} 在播放頭加入。` : ""}</span>`}
       <div class="row">
         <${Button} size="sm" icon="plus" onClick=${onAdd}>在播放頭加入<//>
         ${keys.length > 0 && html`<${Button} size="sm" kind="ghost" icon="trash" onClick=${clearAll}

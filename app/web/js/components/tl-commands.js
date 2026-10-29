@@ -8,13 +8,13 @@ import { getState, setState } from "../lib/store.js";
 import { clock, setTime, setPlaying, onClock } from "../lib/clock.js";
 import { newId, round, clamp, fmtTime } from "../lib/format.js";
 import { clipIndexAt, audioLength, audioMedia, videoTake } from "../lib/sequence.js";
-import { showQueued } from "../lib/jobs-actions.js";
+import { showQueued, upsertJobs } from "../lib/jobs-actions.js";
 import { keyHint } from "../lib/keymap.js";
 import { readPref } from "../lib/prefs.js";
 import { toast } from "./toast.js";
 
 const LISTS = { audio: "audio", overlay: "overlays", caption: "captions", adjust: "adjustments" };
-const OFF_FIELD = { shot: "disabled", overlay: "disabled", caption: "disabled", audio: "muted", adjust: "hidden" };
+export const OFF_FIELD = { shot: "disabled", overlay: "disabled", caption: "disabled", audio: "muted", adjust: "hidden" };
 export const KEYABLE = ["overlay", "audio", "adjust"];
 
 export const MARKER_COLORS = [
@@ -137,12 +137,17 @@ export function markerColor(project) {
   toast(`標記改成${next.label}`, { id: "tl-marker", duration: 1500 });
 }
 
+// Moves the playhead to the next (dir 1) or previous marker; returns its time, or null when there is none.
 export function markerJump(project, dir) {
   const starts = (project.markers || []).map((m) => Number(m.start)).sort((x, y) => x - y);
   const t = clock.time;
   const hit = dir > 0 ? starts.find((s) => s > t + 0.01) : [...starts].reverse().find((s) => s < t - 0.01);
-  if (hit == null) return toast(dir > 0 ? "後面沒有標記" : "前面沒有標記", { id: "tl-marker", duration: 1500 });
+  if (hit == null) {
+    toast(dir > 0 ? "後面沒有標記" : "前面沒有標記", { id: "tl-marker", duration: 1500 });
+    return null;
+  }
   setTime(hit);
+  return hit;
 }
 
 // ---------------------------------------------------------------- picture
@@ -186,6 +191,17 @@ export function stabilizeClip(id, type = "shot") {
   editCmd({ cmd: "stabilize", id, type }).then((res) => res && res.job && showQueued(res.job));
 }
 
+// Several shots in one undo step (the multi-select inspector): on stabilizes the video shots not yet stabilized,
+// off switches the stabilized ones back; copies not made yet render in the background.
+export function stabilizeShots(ids, on) {
+  editCmd({ cmd: "stabilizeShots", ids, on }).then((res) => {
+    if (!res) return;
+    const jobs = res.jobs || [];
+    upsertJobs(jobs);
+    toast(jobs.length ? `${res.label}，${jobs.length} 個在背景處理` : res.label, { duration: 2400 });
+  });
+}
+
 // Opens the shot's speed setting in the inspector (SpeedSection in insp-edit.js).
 export function focusSpeed(project, clips, sel) {
   const cur = currentShot(project, clips, sel);
@@ -199,11 +215,14 @@ export function focusSpeed(project, clips, sel) {
 }
 
 // ---------------------------------------------------------------- keyframes
-// A key at t (timeline seconds) holding what the clip shows and plays there. Shots and captions take
-// none: put the picture on an upper track, or grade it with an adjustment layer.
+// A key at t (timeline seconds) holding what the clip shows and plays there. A selected shot takes one on its
+// own sound only (the 原聲 volume); captions take none.
 export function addKeyframe(project, clips, sel, t = clock.time) {
-  const cur = current(project, clips, sel);
-  if (!cur || !KEYABLE.includes(cur.type)) return warn("先選取上方畫面、音訊或調整圖層的片段；鏡頭與字幕不能加關鍵幀");
+  const cur = sel ? current(project, clips, sel) : null;
+  if (!cur || (!KEYABLE.includes(cur.type) && cur.type !== "shot")) return warn("先選取上方畫面、音訊、調整圖層或原聲的片段；字幕不能加關鍵幀");
+  if (cur.type === "shot" && !(cur.clip && cur.clip.source === "video" && cur.clip.take.hasAudio && !cur.item.audioDetached)) {
+    return warn("鏡頭只能在原聲上加音量關鍵幀；這個鏡頭沒有原聲或原聲已分離");
+  }
   if (t < cur.start - 1e-3 || t > cur.start + cur.length + 1e-3) return warn("播放頭不在選取的片段上");
   editCmd({ cmd: "keyframe", type: cur.type, id: cur.item.id, t: round(t, 3) }).then((res) => {
     if (res) toast(`已在 ${fmtTime(clamp(t, cur.start, cur.start + cur.length))} 加入關鍵幀`, { id: "tl-key", duration: 1500 });
@@ -211,7 +230,7 @@ export function addKeyframe(project, clips, sel, t = clock.time) {
 }
 
 export function toggleKeyPanel(sel) {
-  if (!sel || !KEYABLE.includes(sel.type)) return warn("先選取上方畫面、音訊或調整圖層的片段");
+  if (!sel || (!KEYABLE.includes(sel.type) && sel.type !== "shot")) return warn("先選取上方畫面、音訊、調整圖層或原聲的片段");
   setState({ keyPanel: !getState().keyPanel });
 }
 

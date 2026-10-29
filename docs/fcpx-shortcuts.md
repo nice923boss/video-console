@@ -69,7 +69,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 |---|---|---|---|---|---|
 | Show/Hide Retime Editor | Command-R | 變速 | Ctrl+R | Ctrl+R | 開右側「速度與方向」，0.25x 到 4x |
 | Reverse Clip | 無 | 倒放選取的鏡頭 | Ctrl+Shift+R | 無 | Final Cut Pro 沒有預設鍵；第一次會在背景產生倒放影片 |
-| Insert/Connect Freeze Frame | Option-F | 定格 | Alt+Shift+F | Alt+F | 插入 2 秒靜止畫面 |
+| Insert/Connect Freeze Frame | Option-F | 定格 | Alt+Shift+F | Alt+F | 插入 5 秒靜止畫面 |
 | 無 | 無 | 曲線變速 | Shift+B | 無 | [Shell] 按下只提示還沒有支援 |
 | Add Keyframe | Option-K | 在播放頭添加關鍵幀 | K | Alt+K | 上方影片記位置、大小、不透明度、音量；音訊記音量；調整圖層記調色 |
 | Show Video Animation | Control-V | 顯示或隱藏關鍵幀面板 | Ctrl+K | 無 | Video Console 是右側面板，不是時間軸上的動畫編輯器 |

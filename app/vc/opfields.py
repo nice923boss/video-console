@@ -341,6 +341,8 @@ TAKE_FIELDS = {
     "label": _str(120),
     # gain on the file's own sound, on top of the shot volume; t is seconds into the file, so trims keep them
     "volumeKeys": _keyframes({"volume": _float(0, 4)}),
+    # hand-set keys on that sound (K on the 原聲 lane), the same way; kept apart so 壓低爆音 can redo its own
+    "gainKeys": _keyframes({"volume": _float(0, 4)}),
 }
 AUDIO_FIELDS = {
     "name": _str(120),

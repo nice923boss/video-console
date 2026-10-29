@@ -23,9 +23,8 @@ export function setPlaying(playing) {
   emit();
 }
 
-// Play/pause; pressing play at the end starts again from the beginning.
+// Play/pause. At the end, play stays there (the playhead is not sent back to the beginning) unless looping.
 export function togglePlay() {
-  if (!clock.playing && clock.duration > 0 && clock.time >= clock.duration - 0.05) setTime(0);
   setPlaying(!clock.playing);
 }
 
@@ -37,7 +36,6 @@ export function shuttle(dir) {
     setPlaying(false);
     return;
   }
-  if (dir > 0 && !clock.playing && clock.duration > 0 && clock.time >= clock.duration - 0.05) clock.time = 0;
   const same = clock.playing && Math.sign(clock.rate) === dir;
   const rate = same ? dir * Math.min(MAX_SHUTTLE, Math.abs(clock.rate) * 2) : dir;
   if (clock.playing && clock.rate === rate) return;

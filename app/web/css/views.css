@@ -28,6 +28,7 @@
 .export-folder-path { overflow: hidden; min-width: 0; color: var(--text-2); text-overflow: ellipsis; white-space: nowrap;
   direction: rtl; text-align: left; }
 .export-folder .icon-btn { flex: none; margin-left: -2px; }
+.export-folder .btn { flex: none; }
 
 /* Home */
 

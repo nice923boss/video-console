@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .grade import clean_grade
-from .keyframes import source_keys, value_at
+from .keyframes import source_keys, take_keys, value_at
 from .sequence import VOICE_TRACK, audio_media, audio_track, build_sequence, total_duration, video_take
 from .util import AppError, new_id
 
@@ -19,7 +19,7 @@ MIN_VIDEO, MIN_STILL, MIN_ITEM = 0.1, 0.2, 0.1
 MAX_STILL = 600.0
 VOLUME_MAX = 4.0
 RAMP = 0.1  # seconds a range's volume takes to rise or fall to its level
-FREEZE_LEN = 2.0
+FREEZE_LEN = 5.0
 STAB_HANDLE = 1.0  # seconds of footage a stabilized copy keeps beyond each end of the clip, for small re-trims
 EDGE = 0.1
 SPLIT_LABEL = {"shot": "分割鏡頭", "overlay": "分割片段", "audio": "分割音軌", "adjust": "分割調整圖層", "caption": "分割字幕"}
@@ -443,9 +443,9 @@ def detach(project: dict, shot_id: str | None = None, t: float | None = None) ->
     if clip["source"] != "video" or not clip["take"].get("hasAudio"):
         raise AppError("這個鏡頭沒有聲音")
     aid = new_id("a")
-    # The version's volume keys (爆音 lowered) carry over as the clip's own keyframes, times the shot volume.
+    # The version's volume keys (爆音 lowered and hand-set) carry over as the clip's own keyframes, times the shot volume.
     level = float(shot.get("volume", 1))
-    keys = source_keys(clip["take"].get("volumeKeys") or [], clip["in"], clip["speed"], clip["length"])
+    keys = source_keys(take_keys(clip["take"]), clip["in"], clip["speed"], clip["length"])
     # A sped shot's sound keeps its speed (the shot's speed is locked while its sound is detached).
     item = {"id": aid, "takeId": clip["take"]["id"], "shotId": shot["id"], "start": r3(clip["start"]),
             "in": r3(clip["in"]), "out": r3(clip["out"]), "name": f"{shot.get('name') or '鏡頭'} 原聲",
@@ -541,6 +541,20 @@ def stabilize(project: dict, shot_id: str | None = None, t: float | None = None)
             "job": {"kind": "stabilize", "shotId": shot["id"],
                     "payload": {"source": take["id"], "from": r3(max(0.0, t_in - STAB_HANDLE)),
                                 "to": r3(min(dur, end + STAB_HANDLE))}}}
+
+
+def stabilize_shots(project: dict, ids: list[str], on: bool) -> dict:
+    """stabilize for several shots in one undo step: on stabilizes the video shots not yet stabilized, off switches
+    the stabilized ones back; the rest are left alone. Copies not rendered yet come back as "jobs"."""
+    videos = [s for s in project["shots"] if s["id"] in ids and video_take(project, s)]
+    if not videos:
+        raise AppError("防抖只能用在影片鏡頭")
+    picked = [s for s in videos if _is_stab(video_take(project, s)) != on]
+    if not picked:
+        raise AppError("選取的影片鏡頭都已經防抖" if on else "選取的鏡頭都沒有防抖")
+    plans = [stabilize(project, s["id"]) for s in picked]
+    return {"ops": [o for p in plans for o in p["ops"]], "label": f"{len(picked)} 個鏡頭{'防抖' if on else '取消防抖'}",
+            "jobs": [p["job"] for p in plans if p.get("job")]}
 
 
 def stabilize_overlay(project: dict, item_id: str | None = None, t: float | None = None) -> dict:
@@ -644,10 +658,32 @@ KEY_FIELDS = {"audio": {"volume": 1.0}, "overlay": {"x": 0.0, "y": 0.0, "w": 0.3
               "adjust": {"grade": None}}
 
 
+def _shot_key(project: dict, shot_id: str, t: float, values: dict | None) -> dict:
+    """A key on a shot's own sound: the version's gainKeys, t in file seconds (so trims keep it), a volume that
+    multiplies the shot volume."""
+    g = _target(project, _clips(project), "shot", shot_id, t)
+    clip = g["clip"]
+    if clip["shot"].get("audioDetached"):
+        raise AppError("這個鏡頭的原聲已經分離，請在分離出的音訊片段上加關鍵幀")
+    if clip["source"] != "video" or not clip["take"].get("hasAudio"):
+        raise AppError("這個鏡頭沒有聲音；鏡頭只能在原聲上加音量關鍵幀")
+    if not g["start"] - 1e-3 <= t <= g["start"] + g["length"] + 1e-3:
+        raise AppError("時間點不在這個片段上")
+    if set(values or {}) - {"volume"}:
+        raise AppError("鏡頭原聲的關鍵幀只能記：volume")
+    at = clip["in"] + min(max(t - g["start"], 0.0), g["length"]) * clip["speed"]
+    keys = {"keyframes": clip["take"].get("gainKeys") or []}
+    level = {"volume": round(float(value_at(keys, "volume", at, 1.0)), 4), **(values or {})}
+    return {"ops": [{"op": "take.update", "id": clip["take"]["id"], "patch": {"gainKeys": with_key(keys, at, level)}}],
+            "label": "加入關鍵幀"}
+
+
 def keyframe(project: dict, kind: str, item_id: str, t: float, values: dict | None = None) -> dict:
     """A key at t holding what the clip shows and plays there; values (field: value) replace those."""
+    if kind == "shot":
+        return _shot_key(project, item_id, t, values)
     if kind not in KEY_FIELDS:
-        raise AppError("只有 overlay、audio 與 adjust 片段能加關鍵幀；鏡頭與字幕不能加")
+        raise AppError("只有鏡頭原聲、overlay、audio 與 adjust 片段能加關鍵幀；字幕不能加")
     g = _target(project, [], kind, item_id, t)
     item = g["item"]
     if not g["start"] - 1e-3 <= t <= g["start"] + g["length"] + 1e-3:
@@ -707,6 +743,11 @@ def plan(project: dict, data: dict) -> dict:
         if kind == "overlay":
             return stabilize_overlay(project, _id(data), _num(data, "t", False))
         return stabilize(project, _id(data), _num(data, "t", False))
+    if cmd == "stabilizeShots":
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            raise AppError("stabilizeShots 要給 ids（鏡頭 id 陣列）")
+        return stabilize_shots(project, [str(x) for x in ids], data.get("on", True) is not False)
     if cmd == "volume":
         if not _id(data):
             raise AppError("volume 要給片段 id")
@@ -723,5 +764,5 @@ def plan(project: dict, data: dict) -> dict:
         if not _id(data):
             raise AppError(f"{cmd} 要給鏡頭 id")
         return {"roll": roll, "slip": slip, "slide": slide}[cmd](project, _id(data), _num(data, "by"))
-    raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、stabilize、volume、"
-                   "keyframe、roll、slip、slide")
+    raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、stabilize、"
+                   "stabilizeShots、volume、keyframe、roll、slip、slide")

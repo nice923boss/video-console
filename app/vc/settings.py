@@ -26,7 +26,7 @@ EXPORT_PRESETS = ("", "youtube", "shorts", "reels", "line")
 EXPORT_RESOLUTIONS = ("", "1080", "2160")  # output short side when no preset is picked; "" keeps the project size
 
 DEFAULTS: dict[str, Any] = {
-    "version": 1,
+    "version": 2,
     "ui": {
         "theme": "dark",
         "safeArea": False,
@@ -84,7 +84,7 @@ DEFAULTS: dict[str, Any] = {
     "providers": {},
     "ffmpeg": {"path": "", "encoder": "auto"},
     # folder: where every project's videos and ZIP files go; empty means <data>/exports
-    "export": {"quality": "high", "burnCaptions": False, "captionSize": 52, "fadeIn": 0.0, "fadeOut": 0.0,
+    "export": {"quality": "high", "burnCaptions": True, "captionSize": 52, "fadeIn": 0.0, "fadeOut": 0.0,
                "folder": "", "preset": "", "resolution": ""},
     "notify": {
         "desktop": True,
@@ -235,6 +235,10 @@ class SettingsStore:
         stored = read_json(path, {}) or {}
         # deep_merge copies only the levels it patches, so start from a private copy of DEFAULTS
         merged = deep_merge(copy.deepcopy(DEFAULTS), {k: v for k, v in stored.items() if k in _TOP_LEVEL})
+        # Version 2 burns captions into exported videos by default. A file from version 1 holds the old default
+        # (off), so it is turned on once; from the next save on the file is version 2 and keeps what the user sets.
+        if stored and stored.get("version", 1) == 1:
+            merged["export"]["burnCaptions"] = True
         try:
             _validate(merged)
         except AppError as exc:

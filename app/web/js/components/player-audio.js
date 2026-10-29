@@ -7,7 +7,7 @@
 // backwards in short grains (P2-4).
 import { fileUrl } from "../lib/format.js";
 import { audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK } from "../lib/sequence.js";
-import { valueAt } from "../lib/keyframes.js";
+import { valueAt, takeKeys } from "../lib/keyframes.js";
 import { wakeMix, unroute, mixContext, mixInput, buildVoice, tuneVoice } from "../lib/audio-mix.js";
 import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
 import { RATE, info, failed, peek, keepOnly, loading } from "../lib/pcm-cache.js";
@@ -50,9 +50,9 @@ export function clipFades(clips, i) {
     Math.max(0.03, Math.min(clips[i].transition.duration, len / 2))];
 }
 
-// The shot's volume times the version's volume keys (t in file seconds), local seconds into the clip.
+// The shot's volume times the version's volume and hand-set keys (t in file seconds), local seconds into the clip.
 export const clipLevel = (clip, local) => Number(clip.shot.volume ?? 1)
-  * Number(valueAt({ keyframes: clip.take.volumeKeys }, "volume", clip.in + local * (clip.speed || 1), 1));
+  * Number(valueAt({ keyframes: takeKeys(clip.take) }, "volume", clip.in + local * (clip.speed || 1), 1));
 
 // view(): {project, clips, total, solo, stems, monitor} of the engine as they are now. hooks.setGain(media, gain,
 // track, voice) sets an element's gain; hooks.pictureReady() is true once the picture can move; hooks.fade(t) is

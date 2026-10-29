@@ -116,7 +116,7 @@ export function AdjustTrack({ project, ctx, editSel }) {
     return html`<div key=${item.id} class=${cls} style=${`left:${cur.start * pps}px;width:${Math.max(4, cur.length * pps)}px`}
       data-sel=${`adjust:${item.id}`}
       title=${`${adjustName(item)}${item.hidden ? "（已停用）" : ""}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n調色套用到下方所有畫面；${
-        clipActions(ctx, "拖曳移動，拖曳左右邊緣改長度，雙擊跳到開頭，Shift+點擊加關鍵幀", "雙擊跳到開頭")}`}
+        clipActions(ctx, "拖曳移動，拖曳左右邊緣改長度，雙擊跳到開頭", "雙擊跳到開頭")}`}
       onPointerDown=${(e) => begin(e, item, "move")} onDblClick=${() => setTime(cur.start)}>
       <${Icon} name=${item.hidden ? "eye-off" : "palette"} size=${12} class="tl-adj-icon" />
       <span class="tl-adj-name">${adjustName(item)}</span>

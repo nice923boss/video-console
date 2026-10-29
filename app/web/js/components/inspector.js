@@ -18,6 +18,7 @@ import { ContentTab, ColorSwatches } from "./insp-content.js";
 import { GenerateTab, RouteChips, kenburnsFor } from "./insp-generate.js";
 import { TakesTab } from "./insp-takes.js";
 import { EditTab } from "./insp-edit.js";
+import { isStabilized, stabilizeShots } from "./tl-commands.js";
 import { StyleLibrary } from "./style-library.js";
 import { ReviewSection } from "./review-list.js";
 
@@ -152,7 +153,7 @@ function ProjectPanel({ project }) {
 
 // ---------------------------------------------------------------- several shots
 function BatchPanel({ project, ids }) {
-  const { routes, presets, pid } = useStore((s) => ({ routes: (s.settings && s.settings.routes) || NO_ROUTES, presets: s.presets, pid: s.pid }));
+  const { routes, presets, pid, jobs } = useStore((s) => ({ routes: (s.settings && s.settings.routes) || NO_ROUTES, presets: s.presets, pid: s.pid, jobs: s.jobs }));
   const [count, setCount] = useState(1);
   const shots = project.shots.filter((x) => ids.includes(x.id));
   const same = (key) => {
@@ -193,6 +194,13 @@ function BatchPanel({ project, ids }) {
   const sameVolume = volumes.every((v) => v === volumes[0]) ? volumes[0] : null;
   const setVolume = (volume) => ops(sounding.map((x) => ({ op: "shot.update", id: x.id, patch: { volume } })),
     { label: `${sounding.length} 個鏡頭原聲音量 ${Math.round(volume * 100)}%` });
+  // 防抖 on the video shots; one whose copy is still rendering is left out, as its toggle is locked in the edit tab.
+  const videoShots = shots.filter((x) => videoTake(project, x));
+  const rendering = new Set(jobs.filter((j) => j.pid === pid && j.kind === "stabilize"
+    && (j.status === "queued" || j.status === "running")).map((j) => j.shotId));
+  const stabFree = videoShots.filter((x) => !rendering.has(x.id));
+  const stabbed = stabFree.filter((x) => isStabilized(videoTake(project, x)));
+  const busyStab = videoShots.length - stabFree.length;
 
   return html`<div class="insp-scroll">
     <div class="insp-hero">
@@ -221,6 +229,17 @@ function BatchPanel({ project, ids }) {
         <${Button} size="sm" icon="volume-x" onClick=${() => setVolume(0)}>全部靜音<//>
         <${Button} size="sm" icon="volume" onClick=${() => setVolume(1)}>恢復原音量<//>
       </div>
+    <//>`}
+    ${videoShots.length > 0 && html`<${Section} title="防抖" icon="camera">
+      <${Field} label=${`${stabbed.length} / ${videoShots.length} 個影片鏡頭已防抖${busyStab ? `，${busyStab} 個處理中` : ""}`}
+        hint=${`還沒做過的在背景處理，只處理各自的剪輯範圍，前後各多留 1 秒；畫面會稍微放大來裁掉晃動的黑邊${shots.length > videoShots.length ? `。略過 ${shots.length - videoShots.length} 個沒有影片的鏡頭` : ""}`}>
+        <div class="row">
+          <${Button} size="sm" icon="camera" disabled=${stabbed.length === stabFree.length}
+            onClick=${() => stabilizeShots(stabFree.map((x) => x.id), true)}>全部防抖<//>
+          <${Button} size="sm" icon="x" disabled=${!stabbed.length}
+            onClick=${() => stabilizeShots(stabbed.map((x) => x.id), false)}>全部取消防抖<//>
+        </div>
+      <//>
     <//>`}
     <${Section} title="批次生成" icon="sparkles">
       <${Field} label="每個鏡頭的份數" inline>

@@ -76,6 +76,17 @@ def steps(item: dict, field: str, start: float, end: float, fps: int, max_steps:
     return spans
 
 
+def take_keys(take: dict) -> list[dict]:
+    """A version's volume keys times its hand-set keys (both t in file seconds), as one list of volume keys."""
+    a, b = take.get("volumeKeys") or [], take.get("gainKeys") or []
+    if not a or not b:
+        return a or b
+    ka, kb = {"keyframes": a}, {"keyframes": b}
+    times = sorted({round(float(k["t"]), 3) for k in (*a, *b)})
+    return [{"t": t, "volume": round(float(value_at(ka, "volume", t, 1.0)) * float(value_at(kb, "volume", t, 1.0)), 4)}
+            for t in times]
+
+
 def source_keys(keys: list[dict], t_in: float, speed: float, length: float) -> list[dict]:
     """A take's volume keys (t in file seconds) as clip keyframes: t = (file seconds - t_in) / speed, cut to 0..length."""
     if not keys:

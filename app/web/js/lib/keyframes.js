@@ -77,3 +77,13 @@ export function shiftKeys(item, d) {
 
 // {keyframes} for an ops patch when the item has keyframes, else nothing.
 export const keyPatch = (item, keys) => ((item.keyframes || []).length ? { keyframes: keys } : {});
+
+// Mirror of take_keys(): a version's 壓低爆音 keys times its hand-set keys (t in file seconds), as one list.
+export function takeKeys(take) {
+  const a = take.volumeKeys || [];
+  const b = take.gainKeys || [];
+  if (!a.length || !b.length) return a.length ? a : b;
+  const times = [...new Set([...a, ...b].map((k) => r3(Number(k.t))))].sort((x, y) => x - y);
+  return times.map((t) => ({ t, volume: Math.round(valueAt({ keyframes: a }, "volume", t, 1)
+    * valueAt({ keyframes: b }, "volume", t, 1) * 1e4) / 1e4 }));
+}

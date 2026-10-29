@@ -186,10 +186,14 @@ def register(router: Router, app: App) -> None:
                     ops = [{"op": "linked", "ops": ops, "shift": False}]
             out.update(store.apply(pid, ops, origin="user", label=plan["label"],
                                    coalesce=_short(data.get("coalesce"), 64)))
-        if plan.get("job"):
-            job = plan["job"]
+        def submit(job: dict) -> dict:
             payload = job["payload"] if data.get("link", True) is not False else {**job["payload"], "link": False}
-            out["job"] = app.jobs.submit(job["kind"], pid, job["shotId"], payload)
+            return app.jobs.submit(job["kind"], pid, job["shotId"], payload)
+
+        if plan.get("job"):
+            out["job"] = submit(plan["job"])
+        if "jobs" in plan:
+            out["jobs"] = [submit(job) for job in plan["jobs"]]
         for key in ("id", "by", "level", "partial"):
             if key in plan:
                 out[key] = plan[key]

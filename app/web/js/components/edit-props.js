@@ -24,7 +24,7 @@ import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe, isStabilized, stabilizeClip } from "./tl-commands.js";
 import { clipKeysHint, keyHint, undoKeyText } from "../lib/keymap.js";
-import { multiAudio } from "./tl-tracks.js";
+import { multiAudio } from "./tl-audio-sel.js";
 import { findLoud, playGain } from "./tl-wave.js";
 import { toast } from "./toast.js";
 import { CHOICES as GAIN_CHOICES, dbToGain } from "../dialogs/import-gain.js";
@@ -131,6 +131,9 @@ function AudioPanel({ project, item }) {
       <//>
       ${media && html`<div class="row"><${Button} size="sm" icon="volume" onClick=${declip}
         title="找出這段音訊超過滿格（時間軸波形變紅）的地方，加音量關鍵幀自動壓低到不爆音；已有的關鍵幀會保留">壓低爆音<//></div>`}
+      <${KeyList} item=${item} start=${start} length=${len} local=${local}
+        update=${(patch, label) => updateAudio(item.id, patch, label)}
+        onAdd=${() => addKeyframe(project, null, { type: "audio", id: item.id })} />
       <div class="row-2">
         <${Field} label="淡入">
           <${Seconds} value=${Number(item.fadeIn || 0)} max=${30} onCommit=${(v) => updateAudio(item.id, { fadeIn: v }, "音軌淡入")} />
@@ -157,9 +160,6 @@ function AudioPanel({ project, item }) {
         hint="開啟連動時，移動、刪除或修剪鏡頭也不會帶動這條音軌，適合跟著節拍剪的配樂"
         onChange=${(fixed) => updateAudio(item.id, { fixed }, fixed ? "固定音軌" : "取消固定音軌")} />`}
       ${media && html`<${VoicePanel} project=${project} item=${item} media=${media} />`}
-      <${KeyList} item=${item} start=${start} length=${len} local=${local}
-        update=${(patch, label) => updateAudio(item.id, patch, label)}
-        onAdd=${() => addKeyframe(project, null, { type: "audio", id: item.id })} />
       ${media && html`<div class="src-info dim">
         <${Icon} name="music" size=${14} /><span class="grow">${media.name || media.file}</span>
         <span class="mono">${full > 0 ? fmtSeconds(full, 2) : "長度未知"}</span>
@@ -498,7 +498,7 @@ function AudioBatchPanel({ project, items }) {
     patch: { volume: Math.min(4, dbToGain(db)), ...(hasKeys(a, "volume") ? { keyframes: volumeOff(a) } : {}) },
   })), { label: `${items.length} 段音訊改成 ${db > 0 ? "+" : ""}${db}dB` });
   return html`<div class="insp-shot">
-    <${Head} icon="music" title=${`已選 ${items.length} 段音訊`} sub="Ctrl+點擊時間軸上的音訊片段加選或取消" />
+    <${Head} icon="music" title=${`已選 ${items.length} 段音訊`} sub="Ctrl+點擊逐一加選或取消，Shift+點擊選取同一軌中間的片段" />
     <div class="insp-scroll">
       <${Field} label="音量" hint="以原始檔音量為準，選項與匯入時相同；之後仍可逐段調整">
         <div class="gain-choices">

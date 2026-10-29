@@ -41,7 +41,7 @@ function BatchExport({ close }) {
     setBusy(true);
     const jobs = ready.filter((p) => picked.has(p.id)).map((p) => ({
       kind: "export", pid: p.id, shotId: null,
-      payload: { options: { quality, burnCaptions: burn, captionSize: defaults.captionSize || 52,
+      payload: { options: { quality, burnCaptions: burn,
         size: resolutionSize(resolution, p.settings || {}), loudness: loudnessValue(loudness) } },
     }));
     const res = await submitBatch(jobs);

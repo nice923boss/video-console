@@ -22,6 +22,17 @@ export function fitStart(want, len, taken) {
   return best;
 }
 
+// Where a clip moved over from another track lands: inside the free stretch under its middle, lined up with a
+// neighbour it would run into, or null when that stretch is too short (it is not pushed on to some other gap).
+export function fitGap(want, len, taken) {
+  const mid = Math.max(0, want) + len / 2;
+  if (taken.some((sp) => mid > sp.s + EPS && mid < sp.e - EPS)) return null;
+  const from = Math.max(0, ...taken.filter((sp) => sp.e <= mid + EPS).map((sp) => sp.e));
+  const to = Math.min(Infinity, ...taken.filter((sp) => sp.s >= mid - EPS).map((sp) => sp.s));
+  if (to - from < len - EPS) return null;
+  return Math.min(Math.max(want, from), to - len);
+}
+
 // How far the edges of the clip at start..end can go before they meet a neighbour: { lo, hi }.
 // The overlays on one picture layer as spans, leaving out `skip` (the clip being dragged).
 export function layerSpans(overlays, layer, skip) {

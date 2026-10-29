@@ -106,7 +106,7 @@ export function OutputSection() {
       <${Field} label="預設畫質">
         <${Segmented} value=${draft.quality} options=${QUALITY} onChange=${(quality) => set({ quality })} />
       <//>
-      <${Field} label="內建字幕大小" hint="沒有套用字幕樣式的字幕使用，以 1080 高的畫面為準">
+      <${Field} label="內建字幕大小" hint="沒有套用字幕樣式的字幕使用，預覽與輸出都照這個大小，以 1080 高的畫面為準">
         <${NumberInput} value=${draft.captionSize} min=${16} max=${160} step=${2} suffix="px"
           onCommit=${(captionSize) => set({ captionSize })} />
       <//>

@@ -8,17 +8,17 @@ import { setTime } from "../lib/clock.js";
 import { releaseFocus } from "../lib/keys.js";
 import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/format.js";
 import { buildSequence, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK } from "../lib/sequence.js";
-import { shiftKeys, keyPatch } from "../lib/keyframes.js";
+import { shiftKeys, keyPatch, takeKeys } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
 import { liftOps, dropOps } from "../lib/lift.js";
-import { fitStart, edgeRoom, layerSpans } from "../lib/track-fit.js";
+import { fitStart, fitGap, edgeRoom, layerSpans } from "../lib/track-fit.js";
 import { parseGlossary, glossaryHits, hitText } from "../lib/glossary.js";
 import { takeFromMedia } from "../lib/media-actions.js";
 import { Icon } from "./icons.js";
 import { toast } from "./toast.js";
-import { openMenu } from "./overlay.js";
-import { labelColors } from "./insp-content.js";
+import { AudioVolumeLine, SourceVolumeLine } from "./tl-volume-line.js";
 import { Wave } from "./tl-wave.js";
+import { toggleAudioSel, rangeAudioSel } from "./tl-audio-sel.js";
 import { trimDown } from "./tl-roll.js";
 import { inView } from "./tl-view.js";
 
@@ -38,18 +38,7 @@ const MAX_TIME = 36000;
 const TILE_INSET = 11; // the row's 1px bottom border, then .tl-clip sits 5px in from top and bottom
 const STRIP_FRAMES = 8;
 const SOURCE_ICON = { video: "video", image: "image", empty: "film" };
-
-// Right-click on a picture clip: tag it with a colour, e.g. to mark a long pause for review before cutting it.
-function clipMenu(e, shot, label) {
-  setState({ editSel: { type: "shot", id: shot.id } });
-  focusShot(shot.id, { tab: "edit" });
-  const current = shot.color ?? null;
-  openMenu(e, [
-    { header: `${label}：標籤顏色` },
-    ...labelColors(getState().settings).map((c) => ({ label: c.label, swatch: c.value, checked: current === c.value,
-      onClick: () => current !== c.value && updateShot(shot.id, { color: c.value }, { label: "修改標籤顏色" }) })),
-  ]);
-}
+const BLOCKED = "這條軌道在這裡沒有足夠的空間，放開不會移動";
 
 // A clip's keyframes as diamonds along its bottom edge. While its left edge is being trimmed they keep
 // their place on the timeline, as they will once the trim lands.
@@ -141,7 +130,7 @@ export function clipActions(ctx, select, dbl) {
 
 export function Tip({ tip, pps }) {
   if (!tip) return null;
-  return html`<div class="tl-drag-tip mono" style=${`left:${tip.t * pps}px`}>${tip.text}</div>`;
+  return html`<div class=${`tl-drag-tip mono${tip.text === BLOCKED ? " is-blocked" : ""}`} style=${`left:${tip.t * pps}px`}>${tip.text}</div>`;
 }
 
 export function Handles({ onDown }) {
@@ -230,6 +219,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
     const snap = ctx.snapper({ shot: id });
     let k = ci;
     let lift = null; // dragged onto an upper track: { target, start }
+    let blocked = false; // over an upper track with no room there: dropping it changes nothing
     dragPointer(e, {
       threshold: 4,
       axis: "xy",
@@ -237,14 +227,22 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
         const hit = pipLaneAt(ev);
         if (hit && hit.target !== "video") {
           const want = round(Math.max(0, snapRange(clip.start + dx / pps, clip.length, snap, ev)), 3);
-          const start = hit.target.startsWith("layer:") ? round(fitStart(want, clip.length, layerSpans(project.overlays, hit.target.slice(6))), 3) : want;
-          lift = { target: hit.target, start };
+          const fit = hit.target.startsWith("layer:") ? fitGap(want, clip.length, layerSpans(project.overlays, hit.target.slice(6))) : want;
           const dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
+          if (fit == null) {
+            lift = null;
+            blocked = true;
+            setDrag({ id, dx: (want - clip.start) * pps, dy, insert: null, blocked: true, tip: { t: want, text: BLOCKED } });
+            return;
+          }
+          const start = round(fit, 3);
+          lift = { target: hit.target, start };
           const where = hit.target === "new-layer" ? "放到新的畫面軌" : "移到這條上層軌";
           setDrag({ id, dx: (start - clip.start) * pps, dy, insert: null, tip: { t: start, text: `${where}，開始 ${start.toFixed(2)} 秒${start !== want ? "，對齊相鄰片段" : ""}，原位留空白` } });
           return;
         }
         lift = null;
+        blocked = false;
         const center = clip.start + clip.length / 2 + dx / pps;
         k = rest.filter((c) => c.start + c.length / 2 < center).length;
         const at = !rest.length || k === ci ? null : k < rest.length ? rest[k].start : rest[k - 1].start + rest[k - 1].length;
@@ -253,7 +251,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
         if (!moved) clickShot(e, id, clips.map((c) => c.shot.id));
-        else if (cancelled) return;
+        else if (cancelled || blocked) return;
         else if (lift) liftShot(project, clip, lift);
         else if (rest.length && k !== ci) moveShot(id, moveTarget(project, id, rest, k));
       },
@@ -332,15 +330,14 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
     const geo = drag && drag.geo && drag.id === id ? drag.geo : { start: clip.start, length: clip.length, in: clip.in };
     const moving = drag && drag.dx != null && drag.id === id;
     const cls = ["tl-clip", `is-${clip.source}`, shotSel && (focus === id || picked.includes(id)) && "is-selected", moving && "is-dragging",
-      clip.shot.color && "has-color", clip.shot.disabled && "is-off"].filter(Boolean).join(" ");
+      moving && drag.blocked && "is-blocked", clip.shot.color && "has-color", clip.shot.disabled && "is-off"].filter(Boolean).join(" ");
     const label = shotLabel(clip.shot, clip.index);
     const style = `left:${geo.start * pps}px;width:${Math.max(2, geo.length * pps)}px`
       + (clip.shot.color ? `;--shot-color:${clip.shot.color}` : "")
       + (moving ? `;transform:translate(${drag.dx}px,${drag.dy || 0}px)` : "");
     return html`<div key=${id} class=${cls} style=${style} data-sel=${`shot:${id}`}
-      title=${`${label}，${clip.shot.disabled ? "已停用，" : ""}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n${trim ? "修剪模式：拖曳左右邊緣滾動剪接點，拖曳中間滑動內容，按住 Shift 拖曳滑移鏡頭" : clipActions(ctx, "拖曳左右邊緣修剪，拖曳中間調整順序，往上拖到上層軌變成上層片段，雙擊跳到該處，右鍵標記顏色", "雙擊跳到該處")}`}
-      onPointerDown=${(e) => (trim ? trimDown(e, { clips, clip, side: null, ctx, setDrag }) : beginMove(e, clip))} onDblClick=${(e) => setTime(laneTime(e, pps))}
-      onContextMenu=${(e) => clipMenu(e, clip.shot, label)}>
+      title=${`${label}，${clip.shot.disabled ? "已停用，" : ""}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n${trim ? "修剪模式：拖曳左右邊緣滾動剪接點，拖曳中間滑動內容，按住 Shift 拖曳滑移鏡頭" : clipActions(ctx, "拖曳左右邊緣修剪，拖曳中間調整順序，往上拖到上層軌變成上層片段，雙擊跳到該處，右鍵看更多操作與標籤顏色", "雙擊跳到該處")}`}
+      onPointerDown=${(e) => (trim ? trimDown(e, { clips, clip, side: null, ctx, setDrag }) : beginMove(e, clip))} onDblClick=${(e) => setTime(laneTime(e, pps))}>
       <${Tiles} clip=${clip} geo=${geo} pid=${project.id} pps=${pps} ar=${ctx.ar} scale=${ctx.scale} />
       <div class="tl-clip-label"><${Icon} name=${SOURCE_ICON[clip.source]} size=${12} /><span>${label}</span></div>
       ${clip.source === "empty" && geo.length * pps > 90 && html`<span class="tl-clip-empty">尚未產生畫面</span>`}
@@ -437,20 +434,6 @@ export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
 }
 
 // ---------------------------------------------------------------- soundtrack lane
-// The audio clips selected together (two or more), or null. A Ctrl+click set that no longer holds the
-// selected item (another clip or a caption was picked since) no longer counts.
-export const multiAudio = (s) => (s.audioSel && s.editSel && s.editSel.type === "audio" && s.audioSel.includes(s.editSel.id)
-  ? s.audioSel : null);
-
-// Ctrl+click on an audio clip: add it to the clips selected together, or take it out.
-function toggleAudioSel(id) {
-  const s = getState();
-  const cur = multiAudio(s) || (s.editSel && s.editSel.type === "audio" ? [s.editSel.id] : []);
-  const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-  if (!next.length) return setState({ editSel: null, audioSel: null });
-  const keep = next.includes(s.editSel && s.editSel.id) ? s.editSel.id : next[next.length - 1];
-  setState({ editSel: { type: "audio", id: keep }, audioSel: next.length > 1 ? next : null });
-}
 
 // The audio lane under the pointer while a clip is dragged up or down: a music track, the voice rows or
 // the new-track row (timeline.js marks each row data-drop="audio:<track>", "audio:new" for the new one).
@@ -519,10 +502,18 @@ export function AudioClip({ project, item, ctx, selected }) {
             target = hit && hit.lane !== home && hit.track !== own ? hit.track : null;
             if (target) dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
           }
-          // On a music track the clip slides into a free stretch, lined up with the clip it would run into.
+          // On a music track the clip slides into a free stretch, lined up with the clip it would run into; moved
+          // over to another music track, only the free stretch under it will do.
           const dest = target || own;
-          const start = dest === VOICE_TRACK || dest === "new" ? want
-            : round(fitStart(want, span, dest === own ? mates : trackSpans(project, item, dest)), 3);
+          const fit = dest === VOICE_TRACK || dest === "new" ? want
+            : dest === own ? fitStart(want, span, mates) : fitGap(want, span, trackSpans(project, item, dest));
+          if (fit == null) {
+            next = null;
+            patch = null;
+            setDrag({ ...base, start: want, mode, dy, blocked: true, tip: { t: want, text: BLOCKED } });
+            return;
+          }
+          const start = round(fit, 3);
           next = { ...base, start };
           patch = { start };
           text = `開始 ${start.toFixed(2)} 秒`;
@@ -562,6 +553,7 @@ export function AudioClip({ project, item, ctx, selected }) {
         if (shown) ctx.onAudioDrag(false);
         if (!moved) {
           if (ev && (ev.ctrlKey || ev.metaKey)) toggleAudioSel(item.id);
+          else if (ev && ev.shiftKey) rangeAudioSel(project, item);
           else setState({ editSel: { type: "audio", id: item.id }, audioSel: null });
           return;
         }
@@ -608,14 +600,14 @@ export function AudioClip({ project, item, ctx, selected }) {
 
   const width = Math.max(4, len * pps);
   const name = item.name || (media && media.name) || "音訊";
-  const cls = ["tl-audio", selected && "is-selected", item.muted && "is-muted", !media && "is-missing", drag && "is-dragging"]
-    .filter(Boolean).join(" ");
+  const cls = ["tl-audio", selected && "is-selected", item.muted && "is-muted", !media && "is-missing", drag && "is-dragging",
+    drag && drag.blocked && "is-blocked"].filter(Boolean).join(" ");
   const fi = Math.min(Number(shown.fadeIn || 0), len / 2) * pps;
   const fo = Math.min(Number(shown.fadeOut || 0), len / 2) * pps;
   const style = `left:${cur.start * pps}px;width:${width}px` + (drag && drag.dy ? `;transform:translateY(${drag.dy}px)` : "");
   return html`<div class=${cls} style=${style} data-sel=${`audio:${item.id}`}
     title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(len, 2)}\n${clipActions(ctx,
-      `${free ? "上下拖曳換音軌，" : ""}雙擊跳到開頭，Shift+點擊加關鍵幀，Ctrl+點擊多選`, "雙擊跳到開頭")}`}
+      `${free ? "上下拖曳換音軌，" : ""}雙擊跳到開頭，Ctrl+點擊逐一加選，Shift+點擊選取同一軌中間的片段`, "雙擊跳到開頭")}`}
     onPointerDown=${(e) => begin(e, "move")} onDblClick=${() => setTime(cur.start)}>
     ${media && html`<${Wave} pid=${project.id} media=${media} tIn=${cur.in} len=${len} speed=${sp} width=${width} item=${shown} />`}
     ${fi > 1 && html`<i class="tl-fade is-in" style=${`width:${fi}px`}></i>`}
@@ -627,6 +619,7 @@ export function AudioClip({ project, item, ctx, selected }) {
     <div class="tl-audio-label"><${Icon} name=${item.muted ? "volume-x" : "music"} size=${12} />
       <span>${media ? name : "找不到音訊檔"}</span></div>
     <${KeyMarks} item=${item} pps=${pps} drag=${drag} base=${base} length=${len} />
+    ${!drag && html`<${AudioVolumeLine} item=${item} length=${len} pps=${pps} active=${selected} />`}
     <${Handles} onDown=${begin} />
     <${Tip} tip=${drag && drag.tip ? { ...drag.tip, t: drag.tip.t - cur.start } : null} pps=${pps} />
   </div>`;
@@ -657,8 +650,11 @@ export function SourceAudioTrack({ project, clips, ctx, editSel, picked }) {
       onPointerDown=${(e) => e.stopPropagation()} onDblClick=${() => setTime(c.start)}
       onClick=${(e) => clickShot(e, c.shot.id, sounding, "edit")}>
       <${Wave} pid=${project.id} media=${c.take} tIn=${c.in} len=${c.length} speed=${c.speed} width=${width} item=${c.shot}
-        keys=${c.take.volumeKeys} />
+        keys=${takeKeys(c.take)} />
       <div class="tl-audio-label"><${Icon} name="volume" size=${12} /><span>${name}${pct !== 100 ? ` ${pct}%` : ""}</span></div>
+      <${KeyMarks} item=${{ keyframes: (c.take.gainKeys || []).map((k) => ({ t: (k.t - c.in) / c.speed })) }} pps=${pps}
+        drag=${null} length=${c.length} />
+      <${SourceVolumeLine} clip=${c} pps=${pps} active=${sel} />
     </div>`;
   });
 }
@@ -713,7 +709,15 @@ export function OverlayClip({ project, item, ctx, selected }) {
           const hit = pipLaneAt(ev);
           target = hit && hit.lane !== home && (hit.target !== "video" || media) ? hit.target : null;
           const layer = !target ? item.layer : target.startsWith("layer:") ? target.slice(6) : null;
-          const start = layer ? round(fitStart(want, base.length, spansOn(layer)), 3) : want;
+          const fit = !layer ? want : target ? fitGap(want, base.length, spansOn(layer)) : fitStart(want, base.length, spansOn(layer));
+          if (fit == null) {
+            next = null;
+            dy = hit.lane.getBoundingClientRect().top - home.getBoundingClientRect().top;
+            setDrag({ ...base, start: want, mode, dy, insert: null, blocked: true, tip: { t: want, text: BLOCKED } });
+            ctx.onPipGap(null);
+            return;
+          }
+          const start = round(fit, 3);
           next = { ...base, start };
           text = `開始 ${start.toFixed(2)} 秒`;
           if (start !== want) text += "，對齊相鄰片段";
@@ -777,11 +781,11 @@ export function OverlayClip({ project, item, ctx, selected }) {
   const name = item.name || (media && media.name) || "片段";
   const thumb = media ? media.thumb || (still ? media.file : "") : "";
   const cls = ["tl-clip", "tl-pip", still ? "is-image" : "is-video", selected && "is-selected", !media && "is-missing",
-    drag && "is-dragging", item.disabled && "is-off"].filter(Boolean).join(" ");
+    drag && "is-dragging", drag && drag.blocked && "is-blocked", item.disabled && "is-off"].filter(Boolean).join(" ");
   const style = `left:${cur.start * pps}px;width:${width}px` + (drag && drag.dy ? `;transform:translateY(${drag.dy}px)` : "");
   return html`<div class=${cls} style=${style} data-sel=${`overlay:${item.id}`}
     title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n${clipActions(ctx,
-      "拖曳移動，上下拖曳換軌道，拖進「畫面」軌可穿插成鏡頭，拖曳左右邊緣修剪，雙擊跳到開頭，Shift+點擊加關鍵幀", "雙擊跳到開頭")}`}
+      "拖曳移動，上下拖曳換軌道，拖進「畫面」軌可穿插成鏡頭，拖曳左右邊緣修剪，雙擊跳到開頭", "雙擊跳到開頭")}`}
     onPointerDown=${(e) => begin(e, "move")} onDblClick=${() => setTime(cur.start)}>
     ${thumb && html`<div class="tl-tiles" style=${`background-image:url("${fileUrl(project.id, thumb)}");background-size:auto 100%`}></div>`}
     <div class="tl-clip-label"><${Icon} name=${still ? "image" : "video"} size=${12} /><span>${media ? name : "找不到素材檔"}</span></div>

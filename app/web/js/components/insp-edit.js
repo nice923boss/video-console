@@ -13,7 +13,9 @@ import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText, 
 import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
 import { keyHint } from "../lib/keymap.js";
-import { reverseClip, detachAudio, isReverse, stabilizeClip, isStabilized } from "./tl-commands.js";
+import { reverseClip, detachAudio, isReverse, stabilizeClip, isStabilized, addKeyframe } from "./tl-commands.js";
+import { KeyList, useClipTime } from "./key-panel.js";
+import { valueAt, withKey } from "../lib/keyframes.js";
 import { GradeEditor } from "./grade-panel.js";
 import { MaskEditor } from "./mask-panel.js";
 import { ReviewSection } from "./review-list.js";
@@ -113,7 +115,8 @@ function TrimSection({ project, shot, vid, clip }) {
 async function declipShot(project, shot, clip) {
   const vid = clip.take;
   const speed = clip.speed || 1;
-  const found = await findLoud(project.id, vid, clip.in, clip.length, speed, () => Number(shot.volume ?? 1));
+  const gainAt = (t) => Number(shot.volume ?? 1) * valueAt({ keyframes: vid.gainKeys || [] }, "volume", clip.in + t * speed, 1);
+  const found = await findLoud(project.id, vid, clip.in, clip.length, speed, gainAt);
   if (!found) return toast("這段影片的波形沒有音量資料，無法偵測爆音", { level: "warn" });
   const had = (vid.volumeKeys || []).length > 0;
   if (!found.spans.length && !had) return toast("這段原聲沒有爆音");
@@ -159,7 +162,8 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
         onClick=${() => declipShot(project, shot, clip)}>壓低爆音<//>
       ${(vid.volumeKeys || []).length > 0 && html`<${Button} size="sm" icon="x" title="移除自動壓低的音量關鍵幀，恢復原本的音量"
         onClick=${() => ops([{ op: "take.update", id: vid.id, patch: { volumeKeys: [] } }], { label: "移除壓低爆音" })}>移除壓低<//>`}
-    </div>`}
+    </div>
+    ${clip && html`<${SourceKeys} project=${project} shot=${shot} clip=${clip} clips=${clips} />`}`}
     ${vid.hasAudio && html`<${Button} icon="music"
       title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、淡入淡出、加音量關鍵幀"}${keyHint("edit.detachAudio")}`}
       onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}
@@ -167,6 +171,34 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
       onClick=${() => voiceTools(project, shot, clips, sel)}>降噪／去回音<//>`}
     ${note && html`<${Hint}>${note}<//>`}
   <//>`;
+}
+
+// The shot's hand-set sound keys (the version's gainKeys: file seconds, factors on the shot volume), shown in
+// seconds into the clip and at the level they play: the playhead's level and the key list, so a key placed
+// with K is set right under 原聲音量. Removing the last key or clearing them moves their level into the volume.
+function SourceKeys({ project, shot, clip, clips }) {
+  const speed = clip.speed || 1;
+  const gain = clip.take.gainKeys || NONE;
+  const item = { keyframes: gain.map((k) => ({ ...k, t: (k.t - clip.in) / speed })) };
+  const local = useClipTime(clip.start, clip.length, gain.length > 0);
+  const base = Number(shot.volume ?? 1);
+  const update = (patch, label) => {
+    const list = [];
+    if (patch.keyframes) {
+      const gainKeys = patch.keyframes.map((k) => ({ ...k, t: round(clip.in + k.t * speed, 3) }));
+      list.push({ op: "take.update", id: clip.take.id, patch: { gainKeys } });
+    }
+    if (patch.volume != null) list.push({ op: "shot.update", id: shot.id, patch: { volume: round(Math.min(4, base * patch.volume), 2) } });
+    return ops(list, { label });
+  };
+  return html`${gain.length > 0 && base > 0 && html`<${Field} label="播放頭位置的音量"
+      hint="原聲有關鍵幀：這裡改寫播放頭位置的關鍵幀；上面的原聲音量整段一起放大縮小">
+      <${Slider} value=${base * valueAt(item, "volume", local, 1)} min=${0} max=${Math.min(4, base * 4)} step=${0.05}
+        format=${(v) => `${Math.round(v * 100)}%`}
+        onCommit=${(v) => update({ keyframes: withKey(item, local, { volume: round(v / base, 4) }) }, "原聲關鍵幀音量")} />
+    <//>`}
+    <${KeyList} item=${item} start=${clip.start} length=${clip.length} local=${local} update=${update}
+      onAdd=${() => addKeyframe(project, clips, { type: "shot", id: shot.id })} />`;
 }
 
 // Ticked = the shot plays a stabilized copy of its range (edits.py stabilize); the first tick renders it.

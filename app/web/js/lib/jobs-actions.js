@@ -15,7 +15,7 @@ const enc = encodeURIComponent;
 const linkOff = () => !readPref(LINK_PREF, true, (v) => typeof v === "boolean");
 const withLink = (payload) => (linkOff() ? { ...payload, link: false } : payload);
 
-function upsertJobs(list) {
+export function upsertJobs(list) {
   setState((s) => {
     const byId = new Map(s.jobs.map((j) => [j.id, j]));
     for (const job of list) byId.set(job.id, job);

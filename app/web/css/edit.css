@@ -539,6 +539,8 @@
 }
 
 .tl-lane > .tl-drag-tip { bottom: auto; top: 2px; }
+.tl-drag-tip.is-blocked { background: var(--danger); color: #fff; }
+:is(.tl-clip, .tl-audio).is-blocked { opacity: .55; outline: 2px dashed var(--danger); outline-offset: -2px; cursor: not-allowed; }
 
 /* Captions */
 
@@ -591,6 +593,13 @@
 .tl-audio.tl-source { cursor: pointer; }
 
 .tl-wave { position: absolute; top: 13px; left: 0; width: 100%; height: calc(100% - 15px); max-width: none; color: var(--info); opacity: .8; pointer-events: none; }
+
+/* Volume line: silent at the bottom, 100% at mid height; drag it on a selected block */
+.tl-vline { position: absolute; top: 13px; left: 0; z-index: 2; width: 100%; height: calc(100% - 15px); overflow: visible; pointer-events: none; }
+.tl-vline-path { fill: none; stroke: var(--warn); stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: .7; }
+.tl-vline.is-active .tl-vline-path { stroke-width: 2; opacity: 1; }
+.tl-vline-hit { fill: none; stroke: transparent; stroke-width: 12; vector-effect: non-scaling-stroke; pointer-events: stroke; cursor: ns-resize; }
+.tl-vdot { position: absolute; z-index: 3; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 1px var(--stage-bg); pointer-events: none; }
 
 .tl-fade { position: absolute; top: 0; bottom: 0; pointer-events: none; }
 .tl-fade.is-in { left: 0; border-radius: var(--r-sm) 0 0 var(--r-sm); background: linear-gradient(to bottom right, color-mix(in srgb, var(--stage-bg) 40%, transparent) 50%, transparent 50%); }

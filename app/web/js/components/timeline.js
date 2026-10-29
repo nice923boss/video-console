@@ -7,10 +7,9 @@ import { useStore, setState, getState } from "../lib/store.js";
 import { usePref } from "../lib/prefs.js";
 import { useKeymap, keyHint } from "../lib/keymap.js";
 import { clock, setTime, onClock } from "../lib/clock.js";
-import { ops, undo, deleteShots, LINK_PREF } from "../lib/actions.js";
+import { ops, undo, LINK_PREF } from "../lib/actions.js";
 import { setWatch, watchRefuses } from "../lib/watch.js";
 import { uploadFiles, importFiles } from "../lib/jobs-actions.js";
-import { rippleOps } from "../lib/ripple.js";
 import { copyItem, pasteItem } from "./tl-clipboard.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
 import { sequenceDuration, audioLength, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, musicTracks, mergeTracks } from "../lib/sequence.js";
@@ -27,7 +26,7 @@ import { MEDIA_MIME, placeMedia } from "../lib/media-actions.js";
 import { toast, toastError } from "./toast.js";
 import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
 import {
-  MARKER_COLORS, KEYABLE, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
+  MARKER_COLORS, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
   markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet,
 } from "./tl-commands.js";
 import { openMenu, openModal, Modal, promptDialog } from "./overlay.js";
@@ -35,13 +34,15 @@ import { Button, IconButton, Field, Select, Segmented, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
 import { TrackMeter } from "./audio-meter.js";
 import {
-  VideoTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H, multiAudio,
+  VideoTrack, AudioClip, OverlayClip, SourceAudioTrack, hasSourceAudio, dragPointer, makeSnap, VIDEO_H,
   AUDIO_H, PIP_H, ADD_H,
 } from "./tl-tracks.js";
+import { multiAudio } from "./tl-audio-sel.js";
 import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
 import { Minimap } from "./tl-minimap.js";
 import { useViewWindow, inView } from "./tl-view.js";
 import { ToolButtons } from "./tl-roll.js";
+import { deleteSelection, rippleDelete, timelineMenu } from "./tl-menu.js";
 
 const LABEL_W = 176;
 const RULER_H = 26;
@@ -69,27 +70,6 @@ function addCaption() {
   ops([{ op: "caption.add", item }], { label: "新增字幕" }).then((res) => {
     if (res) setState({ editSel: { type: "caption", id } });
   });
-}
-
-function deleteSelection(sel) {
-  if (!sel) return false;
-  if (sel.type === "shot") deleteShots([sel.id]);
-  else if (sel.type === "caption") ops([{ op: "caption.delete", id: sel.id }], { label: "刪除字幕" });
-  else if (sel.type === "audio") ops([{ op: "audio.delete", id: sel.id }], { label: "移除音軌" });
-  else if (sel.type === "overlay") ops([{ op: "overlay.delete", id: sel.id }], { label: "移除片段" });
-  else if (sel.type === "adjust") ops([{ op: "adjust.delete", id: sel.id }], { label: "刪除調整圖層" });
-  else return false;
-  return true;
-}
-
-// Shift+Delete: what comes after the clip on its track moves back to close the gap.
-function rippleDelete(project, sel) {
-  if (!sel) return false;
-  if (sel.type === "shot") return deleteShots([sel.id], { ripple: true }), true;
-  const list = rippleOps(project, sel);
-  if (!list) return false;
-  ops(list, { label: "漣漪刪除" });
-  return true;
 }
 
 const layerName = (layers, layer) => layer.name || `畫面 ${layers.indexOf(layer) + 2}`;
@@ -446,6 +426,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
   selRef.current = editSel;
   // Commands that act on the project, the sequence and the selection as they are when the key is pressed.
   const on = (fn) => () => fn(dataRef.current.project, dataRef.current.clips, selRef.current);
+  // A marker jump (t: its time, null when none) scrolls the lanes to put it mid-view.
+  const centerOn = (t) => t != null && (scrollRef.current.scrollLeft = t * ppsRef.current - (scrollRef.current.clientWidth - LABEL_W) / 2);
   const stepScale = (dir) => {
     const i = TRACK_SCALES.indexOf(dataRef.current.scale) + dir;
     if (i < 0 || i >= TRACK_SCALES.length) return toast(dir > 0 ? "軌道已經最高" : "軌道已經最低", { id: "tl-scale", duration: 1500 });
@@ -468,8 +450,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.addCaption": () => addCaption(),
     "edit.markerAdd": on(markerAdd),
     "edit.markerColor": on(markerColor),
-    "edit.markerNext": () => markerJump(dataRef.current.project, 1),
-    "edit.markerPrev": () => markerJump(dataRef.current.project, -1),
+    "edit.markerNext": () => centerOn(markerJump(dataRef.current.project, 1)),
+    "edit.markerPrev": () => centerOn(markerJump(dataRef.current.project, -1)),
     "edit.volumeUp": on((p, c, sel) => nudgeVolume(p, c, sel, 1, getState().editRange)),
     "edit.volumeDown": on((p, c, sel) => nudgeVolume(p, c, sel, -1, getState().editRange)),
     "edit.markIn": () => markIn(contentSpan(dataRef.current.project, dataRef.current.clips)),
@@ -500,21 +482,18 @@ export function Timeline({ project, clips, hotkeys = true }) {
   useKeymap(watch ? Object.fromEntries(Object.entries(keys).map(([id, fn]) => [id, WATCH_KEYS.has(id) ? fn : () => { watchRefuses(); }]))
     : keys, { active: hotkeys });
 
-  // Clicks on a clip in the blade tool cut it there; Shift+click on a clip that takes keyframes adds one there.
+  // Clicks on a clip in the blade tool cut it there.
   const onCanvasDown = (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || editTool !== "blade") return;
     const el = e.target.closest && e.target.closest("[data-sel]");
-    const blade = editTool === "blade";
-    if (!el || !(blade || e.shiftKey)) return;
+    if (!el) return;
     const [type, id] = el.dataset.sel.split(":");
-    if (!blade && !KEYABLE.includes(type)) return;
     e.preventDefault();
     e.stopPropagation();
     const sc = scrollRef.current;
     const t = Math.max(0, (e.clientX - sc.getBoundingClientRect().left - LABEL_W + sc.scrollLeft) / pps);
     const sel = { type, id };
     setState({ editSel: sel });
-    if (!blade) return addKeyframe(project, clips, sel, t);
     setTime(t);
     splitAtPlayhead(project, clips, sel);
   };
@@ -713,7 +692,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
     </div>
     <div class="tl-scroll" ref=${scrollRef} onWheel=${onWheel} onScroll=${placeHead}>
       <div class="tl-canvas" style=${`width:${LABEL_W + contentW}px;--label-w:${LABEL_W}px`} onPointerDownCapture=${watch ? watchDown : onCanvasDown}
-        onClickCapture=${watch ? watchBlock : null} onContextMenuCapture=${watch ? watchBlock : null}>
+        onClickCapture=${watch ? watchBlock : null} onContextMenuCapture=${watch ? watchBlock : null}
+        onContextMenu=${watch ? null : (e) => timelineMenu(e, () => dataRef.current)}>
         <div class="tl-row tl-row-ruler" style=${`height:${RULER_H}px`}>
           <div class="tl-label tl-corner"></div>
           <${Ruler} width=${contentW} pps=${pps} onScrub=${scrub} markers=${project.markers || []} range=${editRange} />

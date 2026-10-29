@@ -98,7 +98,6 @@ function useVideoForm(project, clips, close) {
   const [encoder, setEncoder] = useState("auto");
   const [burn, setBurn] = useState(!!defaults.burnCaptions);
   const [srt, setSrt] = useState(false);
-  const [captionSize, setCaptionSize] = useState(defaults.captionSize || 52);
   const [fadeIn, setFadeIn] = useState(project.settings.fadeIn || 0);
   const [fadeOut, setFadeOut] = useState(project.settings.fadeOut || 0);
   const [clipAudio, setClipAudio] = useState(true);
@@ -120,9 +119,9 @@ function useVideoForm(project, clips, close) {
     if ((s.fadeIn || 0) !== fadeIn || (s.fadeOut || 0) !== fadeOut || (s.fit || "contain") !== fit) {
       await updateProject({ settings: { fadeIn, fadeOut, fit } }, { label: "修改輸出設定" });
     }
-    if (keep) await saveSettings({ export: { quality, burnCaptions: burn, captionSize, preset, resolution } });
+    if (keep) await saveSettings({ export: { quality, burnCaptions: burn, preset, resolution } });
     const job = await submitJob("export", null, {
-      options: { quality, encoder, burnCaptions: burn, captionSize, fadeIn, fadeOut, clipAudio, fit,
+      options: { quality, encoder, burnCaptions: burn, fadeIn, fadeOut, clipAudio, fit,
         size: out.size, maxrate: out.maxrate, loudness: loudnessValue(loudness) },
     }, { quiet: true });
     setBusy(false);
@@ -192,10 +191,7 @@ function useVideoForm(project, clips, close) {
       <//>
     </div>
     <${Toggle} checked=${burn} onChange=${setBurn} label="把字幕燒進畫面"
-      hint=${hasCaptions ? "關掉時影片不含字幕，可以另外下載 SRT 字幕檔" : "這個專案還沒有字幕，打開也不會有作用"} />
-    ${burn && html`<${Field} label="內建字幕大小" inline hint="沒有套用字幕樣式的字幕使用；外框、陰影等樣式在字幕屬性的「編輯樣式」設定">
-      <${NumberInput} value=${captionSize} onCommit=${setCaptionSize} min=${16} max=${160} step=${2} suffix="px" />
-    <//>`}
+      hint=${hasCaptions ? "字型、大小與位置照預覽畫面；關掉時影片不含字幕，可以另外下載 SRT 字幕檔" : "這個專案還沒有字幕，打開也不會有作用"} />
     ${!burn && hasCaptions && html`<${Toggle} checked=${srt} onChange=${setSrt} label="同時下載 SRT 字幕檔"
       hint="按「開始輸出」時一併下載到「下載」資料夾" />`}
     <${Toggle} checked=${clipAudio} onChange=${setClipAudio} label="保留影片片段本身的聲音"
