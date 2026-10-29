@@ -66,7 +66,7 @@ const BUILT_IN = [
   cmd("edit", "edit.rangeFromClip", "以選取片段設定區域", ["shift+x"], ["x"]),
   cmd("edit", "edit.playRange", "播放區域（入點到出點）", ["shift+enter"], ["/"]),
   cmd("edit", "edit.clearRange", "清除區域", ["alt+x"]),
-  cmd("edit", "edit.freeze", "定格：在播放頭插入一段靜止畫面", ["alt+shift+f"], ["alt+f"]),
+  cmd("edit", "edit.freeze", "定格：在播放頭插入 5 秒靜止畫面", ["alt+f"]),
   cmd("edit", "edit.detachAudio", "分離或還原鏡頭的原聲", ["mod+shift+s"], []),
   cmd("edit", "edit.reverseClip", "倒放選取的鏡頭", ["mod+shift+r"], []),
   cmd("edit", "edit.speed", "變速：設定選取鏡頭的速度", ["mod+r"]),

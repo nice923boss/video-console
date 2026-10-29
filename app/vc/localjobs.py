@@ -9,11 +9,11 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
-from .edits import track_busy
+from .edits import freeze_overlay, track_busy
 from .export import AUDIO_CODECS, export_options, render
 from .exportdir import ensure_root, export_root, record_export
 from .jobs import JobControl
-from .media import KENBURNS, KENBURNS_LABELS, Media
+from .media import ALPHA_DECODERS, KENBURNS, KENBURNS_LABELS, Media
 from .opfields import new_overlay, valid_id
 from .package import build_package
 from .sequence import VOICE_TRACK, build_sequence
@@ -130,6 +130,15 @@ class LocalJobs:
 
     # ---------------------------------------------------------------- lastframe
     def _prepare_lastframe(self, project: dict, shot_id: str | None, payload: dict) -> dict:
+        if payload.get("overlay"):
+            # A freeze of an upper-track video clip (edits.freeze_overlay).
+            over = next((o for o in project.get("overlays") or [] if o["id"] == payload["overlay"]), None)
+            item = project["media"].get(payload.get("source") or "")
+            if not over or not item or item.get("kind") != "video":
+                raise AppError("找不到這個上層影片片段")
+            at = round(clamp(number(payload.get("at"), 0.0), 0.0, float(item.get("duration") or 0.0)), 3)
+            return {"title": f"定格：{over.get('name') or '上層片段'}", "lane": "local:ffmpeg", "shotId": None,
+                    "payload": {"overlay": over["id"], "source": item["id"], "t": number(payload.get("t"), 0.0), "at": at}}
         index, shot = find_shot(project, shot_id)
         item = find_item(project, payload.get("source") or shot.get("activeVideo"))
         if not item:
@@ -173,10 +182,12 @@ class LocalJobs:
         if p.get("at") is None:
             media.last_frame(src, out)
         else:
-            media.frame_at(src, p["at"], out)
+            media.frame_at(src, p["at"], out, ALPHA_DECODERS.get(item.get("alphaCodec") or "") if p.get("overlay") else None)
         if not out.is_file():
             raise AppError("無法從影片擷取畫面（影片可能損毀）", 500)
         ctl.check()
+        if p.get("overlay"):
+            return self._frozen_overlay(ctl, pdir, media, out, item)
         tid = new_id("t")
         staged = stage_file(media, pdir, out, TAKE_DIR, tid)
         take = new_take(
@@ -187,6 +198,18 @@ class LocalJobs:
         )
         commit_takes(self._store, ctl.pid, [take], "activeImage", link=linked(ctl))
         return {"takeIds": [tid], "message": "已擷取畫面"}
+
+    def _frozen_overlay(self, ctl: JobControl, pdir: Path, media: Media, out: Path, item: dict) -> dict:
+        """The grab joins the library and the freeze edit goes in with it as one undo step; the edit is planned
+        again on the current project, so a clip moved or crowded meanwhile fails the job before anything changes."""
+        p, mid = ctl.payload, new_id("m")
+        with self._store.locked(ctl.pid):
+            ops = freeze_overlay(self._store.get(ctl.pid), p["t"], p["overlay"], mid)["ops"]
+            staged = stage_file(media, pdir, out, IMPORT_DIR, mid)
+            still = {**new_media(staged, f"{item.get('name') or '影片'}（定格）", mid),
+                     "source": {"backend": "local", "tool": "lastframe", "from": item["id"], "at": p["at"]}}
+            self._store.apply(ctl.pid, [{"op": "media.add", "media": still}, *ops], origin="job", label="定格")
+        return {"mediaIds": [mid], "message": "已定格"}
 
     # ---------------------------------------------------------------- reverse
     def _prepare_reverse(self, project: dict, shot_id: str | None, payload: dict) -> dict:

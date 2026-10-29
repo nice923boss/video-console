@@ -643,9 +643,12 @@ export function createEngine(host, hooks = {}) {
     const flags = project.tracks || {};
     drawPicture(t, moving, flags.videoMuted ? 0 : g);
     layers.style.opacity = flags.videoHidden ? "0" : "";
-    drawOverlays(t, moving, g);
-    drawGrade(t);
-    drawCaptions(t);
+    // The playhead parked at the end shows the export's last frame, as the shot picture holds its own.
+    const fps = Math.max(1, Number(project.settings.fps) || 24);
+    const shown = total > 0 && t >= total ? Math.max(0, (Math.ceil(total * fps - 1e-6) - 1) / fps) : t;
+    drawOverlays(shown, moving, g);
+    drawGrade(shown);
+    drawCaptions(shown);
     fade.style.opacity = String(1 - g);
   }
 

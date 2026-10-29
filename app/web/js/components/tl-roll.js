@@ -1,7 +1,8 @@
 // Trim tool on the picture lane (ED-08, key T). Dragging a clip's edge rolls the cut there: one shot gets longer,
 // its neighbour shorter. Dragging its middle slips the footage inside it; Shift+drag slides it between its
-// neighbours. None of them changes the total length. The drag previews with lib/roll.js and lands as one
-// POST /edit, so the keys and Claude cut the same way.
+// neighbours. None of them changes the total length, and only the picture moves: the server leaves the other
+// tracks put and detaches the shots' own sound where it is (vc/trimtool.py). The drag previews with lib/roll.js
+// and lands as one POST /edit, so the keys and Claude cut the same way.
 import { html } from "../lib/h.js";
 import { setState } from "../lib/store.js";
 import { editCmd, focusShot } from "../lib/actions.js";
@@ -14,7 +15,7 @@ import { IconButton } from "./ui.js";
 
 const TOOLS = [
   ["select", "pointer", "選擇模式", "edit.toolSelect"],
-  ["trim", "trim", "修剪模式：拖曳剪接點滾動，拖曳片段滑動內容，按住 Shift 拖曳滑移鏡頭", "edit.toolTrim"],
+  ["trim", "trim", "修剪模式：拖曳剪接點滾動，拖曳片段滑動內容，按住 Shift 拖曳滑移鏡頭；只動畫面，上方片段與原聲留在原位", "edit.toolTrim"],
   ["blade", "blade", "分割模式：點片段就在點的位置切開", "edit.toolBlade"],
 ];
 

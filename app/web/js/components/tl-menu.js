@@ -49,13 +49,23 @@ function shotItems(cur, run, at) {
   const detached = !!cur.item.audioDetached;
   return [
     { divider: true },
-    { label: "添加靜幀（5 秒）", icon: "image", hint: keyLabel("edit.freeze"), onClick: freezeFrame,
+    { label: "添加靜幀（5 秒）", icon: "image", hint: keyLabel("edit.freeze"), onClick: run(freezeFrame),
       disabled: !video || !at, title: notVideo || (at ? "在播放頭插入 5 秒靜止畫面，後面的畫面接在靜幀之後" : PLAYHEAD_OFF) },
     { label: detached ? "還原原聲" : "分離原聲", icon: "music", hint: keyLabel("edit.detachAudio"), onClick: run(detachAudio),
       disabled: !detached && !(video && clip.take.hasAudio), title: detached || (video && clip.take.hasAudio) ? undefined : "這個鏡頭沒有原聲" },
     { label: "倒放", checked: video && isReverse(clip.take), hint: keyLabel("edit.reverseClip"), onClick: run(reverseClip),
       disabled: !video, title: notVideo },
     { label: "變速…", icon: "gauge", hint: keyLabel("edit.speed"), onClick: run(focusSpeed), disabled: !video, title: notVideo },
+  ];
+}
+
+// An upper-track video clip's still goes on its own track; later clips there stay put, so it needs 5 s free.
+function overlayItems(project, cur, run, at) {
+  const video = (project.media[cur.item.mediaId] || {}).kind === "video";
+  return [
+    { divider: true },
+    { label: "添加靜幀（5 秒）", icon: "image", hint: keyLabel("edit.freeze"), onClick: run(freezeFrame), disabled: !video || !at,
+      title: !video ? "只有影片片段可以用（圖片本來就是靜止畫面）" : at ? "在播放頭插入 5 秒靜止畫面，同一軌片段後面要有 5 秒空位" : PLAYHEAD_OFF },
   ];
 }
 
@@ -92,6 +102,7 @@ function clipItems(data, sel, cur) {
     { label: "在播放頭分割", icon: "scissors", hint: keyLabel("edit.split"), onClick: run(splitAtPlayhead),
       disabled: !inside, title: inside ? undefined : PLAYHEAD_OFF },
     ...(sel.type === "shot" ? shotItems(cur, run, at) : []),
+    ...(sel.type === "overlay" ? overlayItems(project, cur, run, at) : []),
     ...(detachedSound ? [{ label: "還原原聲", icon: "music", hint: keyLabel("edit.detachAudio"), onClick: run(detachAudio) }] : []),
     ...(KEYABLE.includes(sel.type) ? [{ label: "添加關鍵幀", icon: "diamond", hint: keyLabel("edit.keyframeAdd"),
       onClick: run(addKeyframe), disabled: !at, title: at ? undefined : PLAYHEAD_OFF }] : []),

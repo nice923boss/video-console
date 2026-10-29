@@ -524,8 +524,10 @@ class Media:
         if not dst.exists():
             self.run(["-i", str(src), "-an", "-vf", AS_709, "-update", "1", str(dst)], timeout=300)
 
-    def frame_at(self, src: Path, at: float, dst: Path) -> None:
-        self.run(["-ss", f"{max(0.0, at):.3f}", "-i", str(src), "-frames:v", "1", "-an", "-vf", AS_709, str(dst)], timeout=120)
+    def frame_at(self, src: Path, at: float, dst: Path, decoder: str | None = None) -> None:
+        """decoder: an ALPHA_DECODERS entry to keep a transparent WebM's alpha in the PNG."""
+        self.run(["-ss", f"{max(0.0, at):.3f}", *(["-c:v", decoder] if decoder else []), "-i", str(src), "-frames:v", "1",
+                  "-an", "-vf", AS_709, str(dst)], timeout=120)
 
     def kenburns(
         self,

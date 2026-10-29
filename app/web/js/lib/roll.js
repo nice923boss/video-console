@@ -1,4 +1,4 @@
-// Mirror of the roll, slip and slide limits in app/vc/edits.py, so the trim tool's drag stops where the server
+// Mirror of the roll, slip and slide limits in app/vc/trimtool.py, so the trim tool's drag stops where the server
 // would. The server makes the ops (POST /edit); this only shapes the preview.
 const MIN_VIDEO = 0.1;
 const MIN_STILL = 0.2;

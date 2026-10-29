@@ -2,8 +2,8 @@
 
 Each command reads the project and returns the ops of one edit, so one call is one undo step. The edit page's
 keys send these same commands (web/js/components/tl-edit.js, tl-commands.js and tl-roll.js pick the clip and
-call POST /edit), so the keys and Claude share this one implementation. Times are timeline seconds unless a
-name says otherwise; "type" is shot, overlay, audio, caption or adjust.
+call POST /edit), so the keys and Claude share this one implementation (roll, slip and slide are in trimtool.py).
+Times are timeline seconds unless a name says otherwise; "type" is shot, overlay, audio, caption or adjust.
 """
 from __future__ import annotations
 
@@ -282,101 +282,6 @@ def trim(project: dict, t: float, side: str, kind: str = "shot", item_id: str | 
     return {"ops": [{"op": f"{kind}.update", "id": item["id"], "patch": patch}], "label": label}
 
 
-# ---------------------------------------------------------------- roll, slip and slide (mirror of lib/roll.js)
-def _seq_index(clips: list[dict], shot_id: str | None) -> int:
-    i = next((k for k, c in enumerate(clips) if c["shot"]["id"] == shot_id), -1)
-    if i < 0:
-        raise AppError("找不到這個鏡頭，或它不在剪輯序列裡")
-    return i
-
-
-def _end_room(clip: dict) -> tuple[float, float]:
-    """How far (timeline seconds) a clip's end can move earlier and later while its first frame stays."""
-    if clip["source"] == "video":
-        return clip["length"] - MIN_VIDEO / clip["speed"], (float(clip["take"]["duration"]) - clip["out"]) / clip["speed"]
-    return clip["length"] - MIN_STILL, MAX_STILL - clip["length"]
-
-
-def _head_room(clip: dict) -> tuple[float, float]:
-    """How far a clip's first frame can move later and earlier while its last frame stays."""
-    if clip["source"] == "video":
-        return clip["length"] - MIN_VIDEO / clip["speed"], clip["in"] / clip["speed"]
-    return clip["length"] - MIN_STILL, MAX_STILL - clip["length"]
-
-
-def cut_range(before: dict, after: dict) -> tuple[float, float]:
-    """How far the cut between two clips can move earlier (negative) and later."""
-    return -max(0.0, min(_end_room(before)[0], _head_room(after)[1])), max(0.0, min(_end_room(before)[1], _head_room(after)[0]))
-
-
-def slip_range(clip: dict) -> tuple[float, float]:
-    """How far a video clip's footage can slip (timeline seconds, positive shows later footage)."""
-    return -clip["in"] / clip["speed"], max(0.0, (float(clip["take"]["duration"]) - clip["out"]) / clip["speed"])
-
-
-def _limit(by: float, span: tuple[float, float]) -> float:
-    d = min(max(by, span[0]), span[1])
-    if abs(d) < 1e-3:
-        raise AppError("已經到底了：素材沒有多的畫面，或片段已經是最短")
-    return d
-
-
-def _end_patch(clip: dict, d: float) -> dict:
-    if clip["source"] != "video":
-        return {"duration": r3(clip["length"] + d)}
-    out = clip["out"] + d * clip["speed"]
-    return {"trimOut": None if out >= float(clip["take"]["duration"]) - 1e-3 else r3(out)}
-
-
-def _head_patch(clip: dict, d: float) -> dict:
-    if clip["source"] != "video":
-        return {"duration": r3(clip["length"] - d)}
-    return {"trimIn": r3(clip["in"] + d * clip["speed"])}
-
-
-def _move_cut(before: dict, after: dict, by: float) -> tuple[list[dict], float]:
-    d = _limit(by, cut_range(before, after))
-    return [{"op": "shot.update", "id": before["shot"]["id"], "patch": _end_patch(before, d)},
-            {"op": "shot.update", "id": after["shot"]["id"], "patch": _head_patch(after, d)}], r3(d)
-
-
-def roll(project: dict, shot_id: str | None, by: float) -> dict:
-    """Move the cut after a shot `by` seconds: it ends later and the next shot starts later in its footage (or
-    both earlier), so the total length and everything past the two shots stay put."""
-    clips = _clips(project)
-    i = _seq_index(clips, shot_id)
-    if i + 1 >= len(clips):
-        raise AppError("這是最後一個鏡頭，後面沒有剪接點可以滾動")
-    ops, d = _move_cut(clips[i], clips[i + 1], by)
-    return {"ops": ops, "label": "滾動剪接點", "by": d}
-
-
-def slip(project: dict, shot_id: str | None, by: float) -> dict:
-    """Show other footage in the same slot: in and out points both move `by` seconds (positive shows later
-    footage). The clip keeps its place and length, and nothing else moves."""
-    clips = _clips(project)
-    clip = clips[_seq_index(clips, shot_id)]
-    if clip["source"] != "video":
-        raise AppError("滑動內容只能用在影片鏡頭")
-    d = _limit(by, slip_range(clip))
-    s = d * clip["speed"]
-    out = clip["out"] + s
-    patch = {"trimIn": r3(clip["in"] + s), "trimOut": None if out >= float(clip["take"]["duration"]) - 1e-3 else r3(out)}
-    return {"ops": [{"op": "shot.update", "id": clip["shot"]["id"], "patch": patch}], "label": "滑動內容",
-            "by": r3(d), "link": False}
-
-
-def slide(project: dict, shot_id: str | None, by: float) -> dict:
-    """Move a shot `by` seconds between its neighbours, unchanged: the one before ends later and the one after
-    starts later in its footage (or both earlier), so the total length stays."""
-    clips = _clips(project)
-    i = _seq_index(clips, shot_id)
-    if i == 0 or i + 1 >= len(clips):
-        raise AppError("滑移鏡頭要前後都有鏡頭")
-    ops, d = _move_cut(clips[i - 1], clips[i + 1], by)
-    return {"ops": ops, "label": "滑移鏡頭", "by": d}
-
-
 # ---------------------------------------------------------------- picture and sound
 def freeze(project: dict, t: float) -> dict:
     """Cut the video clip at t and put a FREEZE_LEN still of that frame in between (before or after at an edge)."""
@@ -398,6 +303,38 @@ def freeze(project: dict, t: float) -> dict:
     job = {"kind": "lastframe", "shotId": clip["shot"]["id"],
            "payload": {"source": clip["take"]["id"], "target": "shot", "targetShot": sid, "at": at}}
     return {"ops": ops, "label": "定格", "job": job, "id": sid}
+
+
+def freeze_overlay(project: dict, t: float, item_id: str | None = None, still_id: str | None = None) -> dict:
+    """freeze for an upper-track video clip: without still_id it queues the grab, whose job calls it again with the
+    picture's id. Later clips on the track stay put, so it needs FREEZE_LEN free after the clip."""
+    g = _target(project, [], "overlay", item_id, t)
+    item, start, length, t_in = g["item"], g["start"], g["length"], float(g["item"].get("in") or 0.0)
+    media, local, end = project["media"].get(item.get("mediaId")) or {}, t - start, start + length
+    if media.get("kind") != "video":
+        raise AppError("定格要用在影片片段（圖片本來就是靜止畫面）")
+    if local < -1e-3 or local > length + 1e-3:
+        raise AppError("播放頭不在這個片段上")
+    local = min(max(local, 0.0), length)
+    track = [o for o in project.get("overlays") or [] if o.get("layer") == item.get("layer") and o is not item]
+    if any(s < end + FREEZE_LEN - 1e-3 and s + n > end + 1e-3 for s, n in (_span(project, "overlay", o) for o in track)):
+        raise AppError(f"同一軌在這個片段後面 {FREEZE_LEN:g} 秒內還有片段，沒有空位放定格，請先移開")
+    if not still_id:
+        at = r3(max(0.0, min(min(float(media.get("duration") or 1e9), t_in + length) - 0.04, t_in + local)))
+        return {"ops": [], "label": "定格", "job": {"kind": "lastframe", "shotId": None, "payload": {
+            "overlay": item["id"], "t": r3(t), "source": media["id"], "at": at}}}
+    if local < EDGE:
+        ops, place = [{"op": "overlay.update", "id": item["id"], "patch": {"start": r3(start + FREEZE_LEN)}}], start
+    elif length - local < EDGE:
+        ops, place = [], end
+    else:
+        head, tail = split_ops(g, t, local, project)
+        ops, place = [head, {**tail, "item": {**tail["item"], "start": r3(t + FREEZE_LEN)}}], t
+    # The still holds the clip's place and look at that moment; keyframes don't move a frozen frame.
+    keyed = {f: r3(value_at(item, f, local)) for f in ("x", "y", "w", "opacity") if any(f in k for k in item.get("keyframes") or [])}
+    frozen = {**{k: v for k, v in item.items() if k != "keyframes"}, **keyed, "id": new_id("o"), "mediaId": still_id,
+              "name": f"{item.get('name') or '影片'}（定格）"[:120], "start": r3(place), "in": 0.0, "length": FREEZE_LEN}
+    return {"ops": [*ops, {"op": "overlay.add", "item": frozen}], "label": "定格", "id": frozen["id"]}
 
 
 def _detached_sound_ops(project: dict, clip: dict, place: float) -> list[dict]:
@@ -730,7 +667,7 @@ def plan(project: dict, data: dict) -> dict:
     if cmd == "trim":
         return trim(project, _num(data, "t"), str(data.get("side") or ""), kind, _id(data))
     if cmd == "freeze":
-        return freeze(project, _num(data, "t"))
+        return freeze_overlay(project, _num(data, "t"), _id(data)) if kind == "overlay" else freeze(project, _num(data, "t"))
     if cmd == "detach":
         return detach(project, _id(data), _num(data, "t", False))
     if cmd == "restore":
@@ -763,6 +700,7 @@ def plan(project: dict, data: dict) -> dict:
     if cmd in ("roll", "slip", "slide"):
         if not _id(data):
             raise AppError(f"{cmd} 要給鏡頭 id")
-        return {"roll": roll, "slip": slip, "slide": slide}[cmd](project, _id(data), _num(data, "by"))
+        from . import trimtool  # it builds on this module
+        return getattr(trimtool, cmd)(project, _id(data), _num(data, "by"))
     raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、stabilize、"
                    "stabilizeShots、volume、keyframe、roll、slip、slide")

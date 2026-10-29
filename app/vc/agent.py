@@ -86,9 +86,9 @@ TOOLS = [
     _tool("apply_ops", "Apply project ops as one undo step (see the cheat sheet in the instructions).",
           {"ops": {"type": "array", "items": {"type": "object"}}, "label": STR}, ("ops", "label")),
     _tool("edit", "One timeline edit. split {t, type?, id?}; splitAll {t}; trim {t, side: start|end, type?, id?}; "
-          "freeze {t}; detach {id|t}; restore {id}; reverse {id|t}; stabilize {type?, id|t} (toggles; shot or overlay); "
+          "freeze {t, type?, id?} (shot, or an overlay video: the still goes in when its grab job is done); detach {id|t}; restore {id}; reverse {id|t}; stabilize {type?, id|t} (toggles; shot or overlay); "
           "volume {type, id, db, in?, out?}; "
-          "keyframe {type, id, t, values?}; roll/slip/slide {id, by}. type: shot (default), overlay, audio, "
+          "keyframe {type, id, t, values?}; roll/slip/slide {id, by} (picture only: other tracks stay, the shots' own sound is detached in place). type: shot (default), overlay, audio, "
           "caption, adjust. Without id the clip under t is used.",
           {"cmd": {"type": "string", "enum": ["split", "splitAll", "trim", "freeze", "detach", "restore", "reverse",
                                               "stabilize", "volume", "keyframe", "roll", "slip", "slide"]},

@@ -41,7 +41,7 @@ export function current(project, clips, sel) {
   return shot ? { type: "shot", item: shot, start: 0, length: 0, clip: null } : null;
 }
 
-// Picture commands (freeze, reverse, speed) use the selected shot, else the shot under the playhead.
+// Picture commands (reverse, speed) use the selected shot, else the shot under the playhead.
 const currentShot = (project, clips, sel) => current(project, clips, sel && sel.type === "shot" ? sel : null);
 
 export function toggleEnabled(project, clips, sel) {
@@ -152,9 +152,14 @@ export function markerJump(project, dir) {
 
 // ---------------------------------------------------------------- picture
 // Splits the video clip under the playhead there and puts a still of that frame in between (before or
-// after the clip when the playhead is at an edge). The still is filled in by a lastframe job.
-export function freezeFrame() {
-  editCmd({ cmd: "freeze", t: round(clock.time, 3) }).then((res) => res && res.job && showQueued(res.job));
+// after the clip when the playhead is at an edge). The still is filled in by a lastframe job. A selected
+// upper-track clip gets its still on its own track instead, once the job has grabbed the picture.
+export function freezeFrame(project, clips, sel) {
+  const t = round(clock.time, 3);
+  const over = sel && sel.type === "overlay" ? current(project, clips, sel) : null;
+  if (over && (t < over.start - 1e-3 || t > over.start + over.length + 1e-3)) return warn("播放頭不在選取的片段上");
+  editCmd({ cmd: "freeze", t, ...(over && { type: "overlay", id: over.item.id }) })
+    .then((res) => res && res.job && showQueued(res.job));
 }
 
 // Detach: the shot's sound becomes an audio clip under it and the shot itself plays silent. Again on the
