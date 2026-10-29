@@ -319,6 +319,7 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "trimOut": _opt_float(0, 36000),
     "transition": _transition,
     "disabled": _bool,  # kept on the timeline but shown as black and silent
+    "pictureHidden": _bool,  # picture shown as black (an upper-track clip covers it) while its sound plays
     "speed": _float(0.25, 4),  # playback speed of a video shot; its length on the timeline is (out - in) / speed
     "audioDetached": _bool,  # the shot's own sound plays from an audio clip instead (see AUDIO_FIELDS takeId)
     "volume": _float(0, 4),  # gain of the shot's own sound while not detached; 1 = as recorded

@@ -80,14 +80,14 @@ function makeSlot(host, rerender) {
   slot.load = (clip, pid, scale) => {
     slot.clip = clip;
     const take = clip ? clip.take : null;
-    const off = clip && clip.shot.disabled;
+    const off = clip && (clip.shot.disabled || clip.shot.pictureHidden);
     const file = take ? playFile(take, scale) : "";
     const key = clip ? `${off ? "off" : clip.source}|${file}|${slateText(clip)}` : "";
     if (key === slot.key) return;
     slot.key = key;
     slot.pendingSeek = null;
     if (!clip || off) {
-      // A disabled shot keeps its place as black, as in the export.
+      // A disabled shot, or one whose picture is hidden (its sound still plays), keeps its place as black, as in the export.
       release(video);
       img.removeAttribute("src");
       setMode(off ? "off" : "none");

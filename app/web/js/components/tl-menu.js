@@ -59,6 +59,13 @@ function shotItems(cur, run, at) {
   ];
 }
 
+// A shot under a full-frame upper-track clip: its picture shows black while its sound plays.
+function pictureItem(shot) {
+  const hidden = !!shot.pictureHidden;
+  return { label: hidden ? "顯示分鏡畫面" : "隱藏分鏡畫面（原聲保留）", icon: hidden ? "eye" : "eye-off",
+    onClick: () => updateShot(shot.id, { pictureHidden: !hidden }, { label: hidden ? "顯示分鏡畫面" : "隱藏分鏡畫面" }) };
+}
+
 function colorItems(shot) {
   const now = shot.color ?? null;
   return [
@@ -91,6 +98,7 @@ function clipItems(data, sel, cur) {
     { divider: true },
     { label: cur.item[field] ? onLabel : offLabel, icon: cur.item[field] ? "eye" : "eye-off", hint: keyLabel("edit.toggleEnabled"),
       onClick: run(toggleEnabled) },
+    ...(sel.type === "shot" ? [pictureItem(cur.item)] : []),
     { label: "以片段設定區域", icon: "range-x", hint: keyLabel("edit.rangeFromClip"), onClick: run(rangeFromClip) },
     { divider: true },
     { label: "刪除", icon: "trash", danger: true, hint: keyLabel("edit.delete"), onClick: () => deleteSelection(sel) },

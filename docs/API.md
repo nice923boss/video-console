@@ -81,6 +81,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `duration` | 只有圖片或空白鏡頭時使用的長度 |
 | `speed` | 影片播放速度 0.25~4（預設 1），聲音一起變速；時間軸上的長度是 `(trimOut - trimIn) / speed` |
 | `disabled` | `true` 時保留位置，預覽與輸出都是黑畫面加靜音 |
+| `pictureHidden` | `true` 時畫面在預覽與輸出都是黑色（空白鏡頭也不顯示文字卡），原聲照常播放與輸出；給整段被滿版上層片段蓋住的鏡頭用，見 3 節回應的 `covered` |
 | `audioDetached` | `true` 時鏡頭本身無聲，原聲改由音訊軌上 `shotId` 指向它的片段播放（見 3.7 的 `detach`） |
 | `volume` | 鏡頭原聲音量 0~4（預設 1，原音量），整段同一個值；`audioDetached` 時不作用，`detach` 時帶到分離出的音訊片段 |
 | `parked` | 鏡頭移出序列時收起的項目 `{"captions", "audio", "overlays", "adjustments"}`，時間從鏡頭開頭算；放回序列時由連動放回（見 3.2） |
@@ -136,6 +137,7 @@ POST /api/projects/{pid}/ops
 
 - 一次呼叫是一個復原步驟（介面上的 Ctrl+Z 會整批收回）。
 - 回應不含整個專案，要最新內容請再 `GET /api/projects/{pid}`。
+- 修改上層片段或上層軌（`overlay.*`、`layer.*`，含包在 `linked` 裡的）時，回應可能多一個 `covered`：這次修改讓哪些有畫面的鏡頭（id，依鏡頭清單順序）整段被不透明的滿版上層片段蓋住（誤差半格內；透明字卡、去背、半透明、有位置或透明度關鍵幀的片段不算）。剪輯頁據此詢問是否把這些鏡頭設成 `pictureHidden`。蓋住的範圍不論是否詢問，輸出都不會在那裡燒入空白鏡頭的文字卡。
 - 一批最多 2000 個 op。
 - 其他本文欄位：`undoable: false` 不進復原堆疊；`coalesce`（64 字內字串，短時間內相同字串的連續修改合併成一個復原步驟，例如連續打字）；`batch`（64 字內字串，原樣附在這次修改的 `project` 事件上，供呼叫端辨認自己送出的修改）。
 
@@ -221,7 +223,7 @@ vc.ops(pid, [{"op": "linked", "ops": [{"op": "shot.delete", "id": sid}]}], label
 ```
 GET /api/projects/{pid}/timeline
 → {"duration": 42.5,
-   "clips": [{"shotId", "index", "name", "source", "takeId", "start", "length", "in", "out", "speed", "disabled", "audioDetached"}],
+   "clips": [{"shotId", "index", "name", "source", "takeId", "start", "length", "in", "out", "speed", "disabled", "pictureHidden", "audioDetached"}],
    "items": [{"type", "id", "start", "length", "name", "keyframes"}],
    "markers": [{"id", "start", "color", "name"}]}
 ```
@@ -236,6 +238,8 @@ POST /api/projects/{pid}/edit
 {"cmd": "split", "t": 12.5}
 → {"label": "分割鏡頭", "changed": [...], "rev": 13, "id": "s_..."}
 ```
+
+回應同 3 節，可能帶 `covered`。
 
 共用參數：`t` 是序列秒數；`type` 是片段種類 `shot`（預設）、`overlay`、`audio`、`caption`、`adjust`；`id` 是片段 id。沒給 `id` 時取 `t` 下方的片段（鏡頭取畫面軌，其他種類取第一個蓋到 `t` 的片段）。可選 `link: false`（剪輯頁「連動」關閉時送）讓鏡頭變動不帶動其他軌，一起送出的工作也帶 `payload.link: false`；可選 `coalesce`，用法同 3 節的本文欄位，只拿來合併改同一批欄位的連續指令（合併後復原只還原第一次修改前的那些欄位，剪輯頁連按音量鍵時依「整段」或「區域」分開）。
 
@@ -439,7 +443,7 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 
 首頁的「批次輸出」就是對每個勾選的專案各送一個 `export` 工作（`POST /api/jobs/batch`），輸出通道一次跑一個。
 
-輸出前可先 `GET /api/projects/{pid}/export-check`，回傳 `{"duration", "empty", "missing", "disabled", "missingAudio", "missingOverlays", "audioPastEnd", "captionsPastEnd", "videoHidden"}`：`empty`、`missing`、`disabled` 是鏡頭清單的編號（沒有畫面、檔案不見、停用），`missingAudio`、`missingOverlays` 是不見的檔名，`...PastEnd` 是超出影片結尾、會被切掉的數量。只列出問題，不會擋下輸出。
+輸出前可先 `GET /api/projects/{pid}/export-check`，回傳 `{"duration", "empty", "missing", "disabled", "missingAudio", "missingOverlays", "audioPastEnd", "captionsPastEnd", "videoHidden"}`：`empty`、`missing`、`disabled` 是鏡頭清單的編號（沒有畫面、檔案不見、停用；隱藏畫面或整段被滿版上層片段蓋住的鏡頭看不到文字卡，不列入 `empty`、`missing`），`missingAudio`、`missingOverlays` 是不見的檔名，`...PastEnd` 是超出影片結尾、會被切掉的數量。只列出問題，不會擋下輸出。
 
 有指定 `loudness` 時，工作的 `notes` 會寫出調整前後的響度（例如「響度從 -20.3 調整到 -14 LUFS」），峰值太高、loudnorm 改用壓縮時另外註明；混音幾乎無聲（低於 -70 LUFS）時不調整。
 

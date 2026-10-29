@@ -330,17 +330,18 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
     const geo = drag && drag.geo && drag.id === id ? drag.geo : { start: clip.start, length: clip.length, in: clip.in };
     const moving = drag && drag.dx != null && drag.id === id;
     const cls = ["tl-clip", `is-${clip.source}`, shotSel && (focus === id || picked.includes(id)) && "is-selected", moving && "is-dragging",
-      moving && drag.blocked && "is-blocked", clip.shot.color && "has-color", clip.shot.disabled && "is-off"].filter(Boolean).join(" ");
+      moving && drag.blocked && "is-blocked", clip.shot.color && "has-color", (clip.shot.disabled || clip.shot.pictureHidden) && "is-off"].filter(Boolean).join(" ");
     const label = shotLabel(clip.shot, clip.index);
+    const state = clip.shot.disabled ? "已停用，" : clip.shot.pictureHidden ? "已隱藏畫面（原聲保留），" : "";
     const style = `left:${geo.start * pps}px;width:${Math.max(2, geo.length * pps)}px`
       + (clip.shot.color ? `;--shot-color:${clip.shot.color}` : "")
       + (moving ? `;transform:translate(${drag.dx}px,${drag.dy || 0}px)` : "");
     return html`<div key=${id} class=${cls} style=${style} data-sel=${`shot:${id}`}
-      title=${`${label}，${clip.shot.disabled ? "已停用，" : ""}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n${trim ? "修剪模式：拖曳左右邊緣滾動剪接點，拖曳中間滑動內容，按住 Shift 拖曳滑移鏡頭" : clipActions(ctx, "拖曳左右邊緣修剪，拖曳中間調整順序，往上拖到上層軌變成上層片段，雙擊跳到該處，右鍵看更多操作與標籤顏色", "雙擊跳到該處")}`}
+      title=${`${label}，${state}${fmtSeconds(clip.length, 2)}${clip.shot.notes ? `\n${clip.shot.notes}` : ""}\n${trim ? "修剪模式：拖曳左右邊緣滾動剪接點，拖曳中間滑動內容，按住 Shift 拖曳滑移鏡頭" : clipActions(ctx, "拖曳左右邊緣修剪，拖曳中間調整順序，往上拖到上層軌變成上層片段，雙擊跳到該處，右鍵看更多操作與標籤顏色", "雙擊跳到該處")}`}
       onPointerDown=${(e) => (trim ? trimDown(e, { clips, clip, side: null, ctx, setDrag }) : beginMove(e, clip))} onDblClick=${(e) => setTime(laneTime(e, pps))}>
       <${Tiles} clip=${clip} geo=${geo} pid=${project.id} pps=${pps} ar=${ctx.ar} scale=${ctx.scale} />
       <div class="tl-clip-label"><${Icon} name=${SOURCE_ICON[clip.source]} size=${12} /><span>${label}</span></div>
-      ${clip.source === "empty" && geo.length * pps > 90 && html`<span class="tl-clip-empty">尚未產生畫面</span>`}
+      ${clip.source === "empty" && !clip.shot.pictureHidden && geo.length * pps > 90 && html`<span class="tl-clip-empty">尚未產生畫面</span>`}
       <span class="tl-clip-dur mono">${fmtSeconds(geo.length, 1)}</span>
       <${Handles} onDown=${(e, side) => (trim ? trimDown(e, { clips, clip, side, ctx, setDrag }) : beginTrim(e, clip, side))} />
     </div>`;

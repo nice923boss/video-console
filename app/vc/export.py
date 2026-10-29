@@ -22,6 +22,7 @@ from typing import Callable
 from .captions import ass_text as _ass_text
 from .captions import ass_time as _ass_time
 from .captions import caption_ass, shown_captions
+from .cover import covered_spans, uncovered
 from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
 from .grade import build_cube, clean_grade, is_neutral
@@ -131,9 +132,10 @@ def build_ass(project: dict, clips: list[dict], opts: dict, width: int, height: 
     # Slates use the shot numbers of the shot list (not the sequence position), so they match the app.
     numbers = {s["id"]: i for i, s in enumerate(project.get("shots") or [], start=1)}
     tracks = project.get("tracks") or {}
+    covered = covered_spans(project)
     for n, clip in enumerate(clips, start=1):
         # A hidden picture track hides its slates too, as the preview does.
-        if clip["source"] in ("video", "image") or tracks.get("videoHidden"):
+        if clip["source"] in ("video", "image") or tracks.get("videoHidden") or clip["shot"].get("pictureHidden"):
             continue
         name = (clip["shot"].get("name") or "").strip()
         number = numbers.get(clip["shot"]["id"], n)
@@ -148,7 +150,10 @@ def build_ass(project: dict, clips: list[dict], opts: dict, width: int, height: 
         end = clip["start"] + clip["length"] - clip["transition"]["duration"]
         if end - start < 0.3:
             start, end = clip["start"], clip["start"] + clip["length"]
-        events.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Slate,,0,0,0,,{text}")
+        # Not over upper-track clips that hide the whole frame (the ASS is burnt in above them).
+        for a, b in uncovered(start, end, covered):
+            if b - a >= 0.2:
+                events.append(f"Dialogue: 0,{_ass_time(a)},{_ass_time(b)},Slate,,0,0,0,,{text}")
     burn: list[dict] = []
     if opts["burnCaptions"]:
         burn = [cap for cap in shown_captions(project)
@@ -294,6 +299,7 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             # The clip's frames start at its place on the timeline; before that and after its end the
             # overlay passes the picture through unchanged.
             chain = [f"setpts=PTS-STARTPTS+{start:.3f}/TB"] + ([AS_709] if media["kind"] == "video" else [])
+            end = start + length
             chroma = item.get("chroma") or {}
             if chroma.get("on"):
                 # Keyed on the clip's own pixels, before scaling blurs the edge of the colour.
@@ -319,7 +325,10 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             else:
                 x, y = round(w * float(item.get("x") or 0.0)), round(h * float(item.get("y") or 0.0))
             graph.append(f"[{idx}:v]{','.join(chain)}[pip{idx}]")
-            graph.append(f"[{label}][pip{idx}]overlay=x={x}:y={y}:eof_action=pass[pv{idx}]")
+            # Conformed like FCPX: every timeline frame in [start, end) shows the clip's latest frame, the last
+            # held to the end (eof_action=pass let a 29.97 fps clip on 30 fps leave a frame of the picture below).
+            graph.append(f"[{label}][pip{idx}]overlay=x={x}:y={y}:eof_action=repeat:"
+                         f"enable='gte(t,{start:.3f})*lt(t,{end:.3f})'[pv{idx}]")
             label = f"pv{idx}"
     return label, sounds
 
@@ -348,7 +357,8 @@ def shot_grades(clips: list[dict]) -> list[tuple[int, dict]]:
     out = []
     for i, clip in enumerate(clips):
         shot = clip["shot"]
-        if clip["source"] in ("video", "image") and not shot.get("disabled") and shot.get("grade"):
+        if (clip["source"] in ("video", "image") and not shot.get("disabled") and not shot.get("pictureHidden")
+                and shot.get("grade")):
             grade = clean_grade(shot["grade"])
             if not is_neutral(grade):
                 out.append((i, grade))
@@ -382,7 +392,9 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         length = clip["length"]
         speed = float(clip.get("speed") or 1.0)
         disabled = bool(clip["shot"].get("disabled"))
-        if disabled:
+        # A hidden picture is black too, but a video clip's sound still plays (the file stays its input).
+        hidden = not disabled and bool(clip["shot"].get("pictureHidden"))
+        if disabled or (hidden and clip["source"] != "video"):
             # A disabled shot keeps its place on the timeline as black and silence.
             inputs.append(["-f", "lavfi", "-t", f"{length:.3f}", "-i", f"color=c=black:s={w}x{h}:r={frame_rate(fps)}"])
         elif clip["source"] == "video":
@@ -399,9 +411,10 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         if clip["source"] == "video":
             lut = f"{AS_709},{lut}"
         # Masks sit on the fitted frame, so a box drawn over the preview lands on the same pixels.
-        masks = (clip["shot"].get("masks") or []) if clip["source"] in ("video", "image") and not disabled else []
+        masks = (clip["shot"].get("masks") or []) if clip["source"] in ("video", "image") and not (disabled or hidden) else []
+        black = "drawbox=c=black:t=fill," if hidden and clip["source"] == "video" else ""
         graph.append(
-            f"[{idx}:v]setpts={pts},{lut}{_fit_filter(opts['fit'], w, h)},setsar=1,fps={frame_rate(fps)},{TO_709},"
+            f"[{idx}:v]setpts={pts},{lut}{_fit_filter(opts['fit'], w, h)},{black}setsar=1,fps={frame_rate(fps)},{TO_709},"
             f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=duration={length:.3f}[v{i}{'m' if masks else ''}]"
         )
         graph.extend(_mask_chains(f"v{i}", masks, w, h))

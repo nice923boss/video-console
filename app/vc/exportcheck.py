@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from .cover import covered_shots
 from .export import prepare_clips
 from .sequence import VOICE_TRACK, audio_media, audio_track, total_duration
 
@@ -16,6 +17,8 @@ from .sequence import VOICE_TRACK, audio_media, audio_track, total_duration
 def export_check(project: dict, project_dir: Path) -> dict:
     clips = prepare_clips(project, project_dir)
     total = total_duration(clips)
+    # No slate shows where the picture is hidden or a full-frame upper-track clip covers the whole shot.
+    unseen = covered_shots(project) | {c["shot"]["id"] for c in clips if c["shot"].get("pictureHidden")}
     # Shot numbers of the shot list (as the app and the export slates show them), not sequence positions.
     numbers = {s["id"]: i for i, s in enumerate(project.get("shots") or [], start=1)}
 
@@ -44,8 +47,8 @@ def export_check(project: dict, project_dir: Path) -> dict:
                         if not c.get("disabled") and (c.get("text") or "").strip() and float(c.get("end") or 0.0) > past_end)
     return {
         "duration": round(total, 3),
-        "empty": shot_numbers(lambda c: c["source"] == "empty"),
-        "missing": shot_numbers(lambda c: c["source"] == "missing"),
+        "empty": shot_numbers(lambda c: c["source"] == "empty" and c["shot"]["id"] not in unseen),
+        "missing": shot_numbers(lambda c: c["source"] == "missing" and c["shot"]["id"] not in unseen),
         "disabled": shot_numbers(lambda c: bool(c["shot"].get("disabled"))),
         "missingAudio": missing_audio,
         "missingOverlays": missing_overlays,

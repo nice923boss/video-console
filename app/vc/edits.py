@@ -123,7 +123,7 @@ def timeline(project: dict) -> dict:
         "shotId": c["shot"]["id"], "index": c["index"], "name": c["shot"].get("name") or "", "source": c["source"],
         "takeId": (c["take"] or {}).get("id"), "start": r3(c["start"]), "length": r3(c["length"]),
         "in": r3(c["in"]), "out": r3(c["out"]), "speed": c["speed"], "disabled": bool(c["shot"].get("disabled")),
-        "audioDetached": bool(c["shot"].get("audioDetached")),
+        "audioDetached": bool(c["shot"].get("audioDetached")), "pictureHidden": bool(c["shot"].get("pictureHidden")),
     } for c in clips]
     items = []
     for kind, key in LISTS.items():

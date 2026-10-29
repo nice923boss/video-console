@@ -6,6 +6,7 @@ import shutil
 from typing import TYPE_CHECKING, Any
 
 from .. import edits, scriptsync
+from ..cover import newly_covered
 from ..exportcheck import export_check
 from ..exportdir import remove_shared_exports
 from ..ops import apply_ops
@@ -26,6 +27,11 @@ MAX_DOCX = 50 * 1024 ** 2
 
 def _short(value: Any, limit: int) -> str | None:
     return str(value)[:limit] if value else None
+
+
+def _moves_overlays(ops: list) -> bool:
+    return any(str(o.get("op") or "").startswith(("overlay.", "layer.")) or _moves_overlays(o.get("ops") or [])
+               for o in ops if isinstance(o, dict))
 
 
 def untouched_blank_shot(project: dict) -> str | None:
@@ -76,6 +82,14 @@ def script_ops(project: dict, defaults: dict, shots: list[dict], index: int, cap
 
 def register(router: Router, app: App) -> None:
     store = app.store
+
+    def apply_user(pid: str, ops: list, **kw: Any) -> dict:
+        """store.apply for an edit made in the editor. When it lays upper-track clips over shots so they hide
+        them from end to end, "covered" lists those shots: the editor offers to hide their picture."""
+        before = store.get(pid) if _moves_overlays(ops) else None
+        res = store.apply(pid, ops, origin="user", **kw)
+        covered = newly_covered(before, store.get(pid)) if before and res.get("changed") else []
+        return {**res, "covered": covered} if covered else res
 
     # ------------------------------------------------------------------ project list
     @router.route("GET", "/api/projects")
@@ -158,9 +172,9 @@ def register(router: Router, app: App) -> None:
         ops = data.get("ops")
         if not isinstance(ops, list):
             raise AppError("操作格式不正確")
-        return store.apply(req.params["pid"], ops, origin="user", undoable=bool(data.get("undoable", True)),
-                           batch=_short(data.get("batch"), 64), coalesce=_short(data.get("coalesce"), 64),
-                           label=str(data.get("label") or "")[:80])
+        return apply_user(req.params["pid"], ops, undoable=bool(data.get("undoable", True)),
+                          batch=_short(data.get("batch"), 64), coalesce=_short(data.get("coalesce"), 64),
+                          label=str(data.get("label") or "")[:80])
 
     @router.route("GET", "/api/projects/{pid}/timeline")
     def project_timeline(req: Request) -> dict:
@@ -184,8 +198,7 @@ def register(router: Router, app: App) -> None:
                     ops = [{"op": "linked", "ops": ops}]
                 elif any(s.get("parked") for s in project["shots"]):
                     ops = [{"op": "linked", "ops": ops, "shift": False}]
-            out.update(store.apply(pid, ops, origin="user", label=plan["label"],
-                                   coalesce=_short(data.get("coalesce"), 64)))
+            out.update(apply_user(pid, ops, label=plan["label"], coalesce=_short(data.get("coalesce"), 64)))
         def submit(job: dict) -> dict:
             payload = job["payload"] if data.get("link", True) is not False else {**job["payload"], "link": False}
             return app.jobs.submit(job["kind"], pid, job["shotId"], payload)

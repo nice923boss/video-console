@@ -221,6 +221,7 @@ export async function ops(list, { label = "", coalesce = null, undoable = true, 
     const sent = link || (link === null && linking(list)) ? [{ op: "linked", ops: list }] : holding(list) ? [{ op: "linked", ops: list, shift: false }] : list;
     const res = await api.post(`/api/projects/${enc(pid)}/ops`, { ops: sent, label, coalesce, undoable, batch });
     if (res && res.changed) ensureRev(pid, res.rev);
+    if (res && res.covered) askHidePicture(res.covered);
     return res;
   } catch (err) {
     toastError(err, "變更沒有儲存");
@@ -243,12 +244,29 @@ export async function editCmd(data, { coalesce = null } = {}) {
     const link = readPref(LINK_PREF, true, (v) => typeof v === "boolean");
     const res = await api.post(`/api/projects/${enc(pid)}/edit`, { ...data, link, coalesce });
     if (res && res.changed) ensureRev(pid, res.rev);
+    if (res && res.covered) askHidePicture(res.covered);
     return res;
   } catch (err) {
     if (err && err.status === 400) toast(err.message, { level: "warn" });
     else toastError(err, "變更沒有儲存");
     return null;
   }
+}
+
+// The server lists the shots an edit has just covered end to end with full-frame upper-track clips ("covered");
+// the one frame where a clip below shows through at a cut is hidden by blacking out their picture.
+async function askHidePicture(ids) {
+  const shots = (getState().project || { shots: [] }).shots;
+  const names = ids.map((id) => shots.findIndex((x) => x.id === id)).filter((i) => i >= 0).map((i) => shotLabel(shots[i], i));
+  if (!names.length) return;
+  const ok = await confirmDialog({
+    title: names.length > 1 ? `${names.length} 個分鏡被滿版畫面蓋住` : `「${names[0]}」被滿版畫面蓋住`,
+    message: `${names.length > 1 ? `${names.join("、")}\n\n` : ""}上方軌的畫面蓋滿了整段分鏡。要隱藏分鏡畫面嗎？`
+      + "隱藏後分鏡畫面變黑、片段變灰，原聲照常播放與匯出，接點不會閃出底下的畫面。之後可在片段右鍵選單「顯示分鏡畫面」還原。",
+    confirmLabel: "隱藏分鏡畫面",
+    cancelLabel: "保留",
+  });
+  if (ok) updateShots(ids, { pictureHidden: true }, "隱藏分鏡畫面");
 }
 
 async function step(kind) {
