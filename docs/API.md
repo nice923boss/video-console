@@ -54,7 +54,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `id`、`name`、`rev` | `rev` 每次修改加 1 |
 | `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
-| `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本。影片版本與素材可能有 `preview2`、`preview4`：1/2、1/4 解析度預覽檔的路徑（`media/thumbs/<id>_p2.mp4`），由 `preview-files` 產生，只供預覽播放，輸出一律用原檔 |
+| `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本。影片版本與素材可能有 `preview2`、`preview4`：1/2、1/4 解析度預覽檔的路徑（`media/thumbs/<id>_p2.mp4`），由 `preview-files` 產生，只供預覽播放，輸出一律用原檔。有聲音的版本與素材另有 `previewAudio`：預覽播放聲音用的 16 位元立體聲 48 kHz WAV（`media/thumbs/<id>_a.wav`），由 `audio-files` 產生。以 1 以外速度播放的聲音另有 `previewAudioSpeeds`：`{速度鍵: 路徑}`，速度鍵是四捨五入到小數 4 位、去掉尾端 0 的速度（`0.5`、`1.3333`），檔案（`media/thumbs/<id>_a_<速度鍵>.wav`）用輸出同一組 atempo 變速、音高不變 |
 | `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title, track, pair, disabled}`，時間是序列上的秒數。`track` 是所在的字幕軌（`captionTracks` 的 id；沒有或指向已不存在的軌道時算在主字幕軌）。`pair` 是這句所翻譯那句字幕的 id（雙語匯入時英文指向中文），語音對齊時兩句一起移動。`disabled: true` 時保留位置，但不顯示、不輸出、不寫進 SRT。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
 | `captionTracks` | 主字幕軌以外的字幕軌 `{id, name, hidden}`。陣列順序是時間軸上由上到下的順序，主字幕軌永遠在最上面。同時出現在畫面下方的字幕，越下面的軌道越靠近畫面底邊（雙語匯入的英文軌在中文軌下面，所以英文在最下一行、中文在上一行）；畫面上方與中間的字幕相反，越上面的軌道越靠近邊緣。`hidden: true` 的軌道預覽與輸出都不顯示；主字幕軌的開關是 `tracks.captionsHidden` |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
@@ -491,6 +491,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/history/{rev}/restore` | 還原版本 |
 | POST | `/api/projects/{pid}/upload` | 上傳檔案（第 4 節） |
 | POST | `/api/projects/{pid}/preview-files` | 製作低解析度預覽檔 `{"scale": 2}`（2 或 4）：在背景轉檔還沒有預覽檔的影片，回 `{"pending": 還要製作的數量}`；每完成一支就寫進版本或素材的 `preview2`／`preview4`（專案變更事件） |
+| POST | `/api/projects/{pid}/audio-files` | 製作預覽聲音檔：在背景把預覽會播放、還沒有聲音檔的影片與音訊轉成 WAV，回 `{"pending": 還要製作的數量}`；每完成一個就寫進版本或素材的 `previewAudio`（專案變更事件）。變速播放的片段另做該速度的檔，寫進 `previewAudioSpeeds`，同時移除已沒有片段使用的速度 |
 | GET | `/api/projects/{pid}/file?path=...` | 讀取專案內的檔案；`path` 也可以是這個專案輸出到匯出資料夾的完整路徑 |
 | GET | `/api/projects/{pid}/exports` | 輸出檔列表：匯出資料夾裡這個專案輸出的檔案，加上專案資料夾的舊檔，`path` 可直接給 `file?path=` |
 | DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔（`name` 是檔名，只能刪這個專案輸出的檔） |

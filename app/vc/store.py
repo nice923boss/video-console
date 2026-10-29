@@ -625,9 +625,10 @@ class ProjectStore:
         referenced: set[str] = set()
         kept = [m for m in project["media"].values() if not m.get("trashed")]
         for item in list(project["takes"].values()) + kept:
-            for key in ("file", "thumb", "strip", "wave", "preview2", "preview4"):
+            for key in ("file", "thumb", "strip", "wave", "preview2", "preview4", "previewAudio"):
                 if item.get(key):
                     referenced.add(item[key])
+            referenced.update((item.get("previewAudioSpeeds") or {}).values())
         used = unused = 0
         orphans: list[str] = []
         fresh = time.time() - 300  # files a running job just wrote may not be referenced yet

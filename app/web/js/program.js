@@ -8,7 +8,7 @@ const PROGRAM_CHANNEL = "vc-program"; // player.js sends on the same name
 const IDLE_CURSOR = 2000; // ms before the pointer hides over the picture
 
 const stage = document.querySelector(".pl-stage");
-const engine = createEngine(document.querySelector(".pl-host"), { dragDisabled: () => true });
+const engine = createEngine(document.querySelector(".pl-host"), { dragDisabled: () => true, sound: false });
 engine.setVolume(0, true);
 const channel = new BroadcastChannel(PROGRAM_CHANNEL);
 

@@ -5,6 +5,15 @@ import { fileUrl } from "../lib/format.js";
 import { mixPlan, stemChannels } from "../lib/voice-mix.js";
 import { stemsParams } from "../lib/voice-stems.js";
 
+export const DRIFT_PLAYING = 0.15;
+export const DRIFT_PAUSED = 0.02;
+// Seconds of timeline before an audio or picture-in-picture clip starts that its element is loaded and seeked to
+// the clip's in point. Farther ones hold no file: each loaded element keeps one of the browser's six connections
+// to the server, and with every clip loaded a seek waited seconds for a free one.
+export const CUE_LEAD = 2;
+export const MAX_RATE = 16; // the fastest playbackRate browsers accept
+const SLACK = 0.01; // seconds a picture led by the sample clock may sit off it before its rate is bent
+
 export function release(media) {
   media.pause();
   if (media.hasAttribute("src")) {
@@ -37,6 +46,23 @@ export function seekTo(media, holder, target) {
   } catch {
     // Not seekable yet; loadedmetadata re-renders and seeks again.
   }
+}
+
+// Keeps a playing element at `target` (its own seconds) at playback rate `base`. Led by the sample clock (PB-01,
+// player-audio.js) it is nudged: up to a quarter second off, its rate is bent by up to 25% until it is within
+// SLACK, so the picture never jumps; farther off it seeks. Otherwise it seeks once off by more than DRIFT_PLAYING.
+export function follow(media, holder, target, base, led) {
+  const d = media.currentTime - target;
+  let rate = base;
+  if (!led) {
+    if (Math.abs(d) > DRIFT_PLAYING * Math.max(1, base)) seekTo(media, holder, target);
+  } else if (Math.abs(d) > 0.25 * base) {
+    seekTo(media, holder, target);
+  } else if (Math.abs(d) > SLACK * base) {
+    rate = base * (Math.round(Math.min(1.25, Math.max(0.75, 1 - (2 * d) / base)) * 50) / 50);
+  }
+  if (media.playbackRate !== rate) media.playbackRate = rate;
+  if (media.paused) playSafe(media);
 }
 
 // A new audio element with the record seekTo() keeps its pending seek on: a seek asked for while one is under

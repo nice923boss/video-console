@@ -3,7 +3,8 @@
 // and the speakers after it. Gains above 1 (+dB) are heard here, which element.volume cannot do.
 // Elements of one timeline row share a track bus between their gain and the mix, so each row has its own
 // level (MX-02). The mix also feeds the loudness meter (loudness-worklet.js, MX-01).
-// One context for the page; it is created on first playback, since browsers start it only after a gesture.
+// One context for the page; it is created on first playback, since browsers start it only after a gesture. It runs
+// at 48 kHz, the rate the export mixes at and the preview's sound copies are made at (PB-01).
 import { LOW_HZ, HIGH_HZ, BASS_HZ, BODY_HZ, BODY_Q, TONE_HZ } from "./voice-mix.js";
 
 const FFT = 2048;
@@ -50,7 +51,7 @@ function ensure() {
   if (ctx) return ctx;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
-  ctx = new AC();
+  ctx = new AC({ sampleRate: 48000 });
   bus = ctx.createGain();
   bus.channelCount = 2;
   bus.channelCountMode = "explicit";
@@ -104,7 +105,7 @@ function biquadNode(type, hz, q = null) {
 // channels are the source X, the denoised D and V, D with the echo taken out. Per side Y = gh*X + (gr-gh)*D +
 // (1-gr)*V + (gm-gh)*LP4k(X-D) + (gl-gm)*LP250(X-D), then the EQ; one picked channel (c 1) plays on both sides.
 // The gains start at 0 and are set by tuneVoice.
-function buildVoice(src, out, c) {
+export function buildVoice(src, out, c) {
   const split = ctx.createChannelSplitter(3 * c);
   src.connect(split);
   const merge = ctx.createChannelMerger(2);
@@ -157,7 +158,7 @@ function buildVoice(src, out, c) {
 
 // plan: mixPlan of the clip; monitor: what is heard, "fx" the cleaned sound, "dry" the source as it is (unity, not
 // level-matched), "delta" only what the cleanup takes out.
-function tuneVoice(voice, plan, monitor) {
+export function tuneVoice(voice, plan, monitor) {
   const key = JSON.stringify([plan, monitor]);
   if (voice.key === key) return;
   const now = !voice.key;
@@ -179,6 +180,11 @@ function tuneVoice(voice, plan, monitor) {
     set(s.delta.gain, monitor === "delta" ? 1 : 0);
   }
 }
+
+// The context (null before the first playback) and where a sound of timeline row `track` joins the mix: the row's
+// bus, or the mix itself for no row. For the sample scheduler (components/player-audio.js).
+export const mixContext = () => ctx;
+export const mixInput = (track = "") => (ctx ? (track ? trackBus(track).input : bus) : null);
 
 // Sets an element's gain (linear, may exceed 1), routing it into the mix the first time, through the bus of
 // timeline row `track`. False while the mix is not running and the element is not routed yet; the caller

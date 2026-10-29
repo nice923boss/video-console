@@ -1,11 +1,11 @@
-// Imperative half of the preview player. Two picture slots take turns (clip i plays in slot i % 2), so
-// the next clip is already loaded when its transition starts. Transitions, captions, the project fade
+// Imperative half of the preview player. Two picture slots take turns (clip i plays in slot i % 2, shifted by
+// one after a loop wraps an odd clip count), so the next clip is already loaded when its transition starts. Transitions, captions, the project fade
 // and the audio mix follow export.py (ffmpeg xfade, ASS styles, afade lengths), so the preview matches
 // the exported file. Picture-in-picture clips sit above the picture and below the captions, bottom track
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
-// clock; nothing here re-renders through Preact.
+// clock; nothing here re-renders through Preact. The sound is played by player-audio.js.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { clipIndexAt, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged, shownCaptions } from "../lib/caption-style.js";
 import { litCount, fillCaption } from "../lib/karaoke.js";
@@ -13,22 +13,18 @@ import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
 import { chromaMarkup } from "../lib/chroma.js";
 import { maskMarkup } from "../lib/masks.js";
-import { wakeMix, routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
-import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
-import { release, playSafe, seekTo, voicePlay, trackElements, audioEntry } from "./player-media.js";
+import { routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
+import { release, seekTo, follow, DRIFT_PAUSED, CUE_LEAD, MAX_RATE } from "./player-media.js";
+import { createSound, clipSounds, clipFades, clipLevel } from "./player-audio.js";
 
-const DRIFT_PLAYING = 0.15;
-const DRIFT_PAUSED = 0.02;
-// Seconds of timeline before an audio or picture-in-picture clip starts that its element is loaded and seeked to
-// the clip's in point. Farther ones hold no file: each loaded element keeps one of the browser's six connections
-// to the server, and with every clip loaded a seek waited seconds for a free one.
-const CUE_LEAD = 2;
+// Seconds a video clip plays hidden before its cut while the sample clock leads (PB-01), so its first frame is
+// decoded when the cut comes instead of a few frames late.
+const PREROLL = 0.35;
 const EDGE = 0.001;
 const IDEO_SPACE = String.fromCharCode(0x3000);
 const ZONES = ["top", "middle", "bottom"];
 const DRAG_START_PX = 3;
 const HOLD_MS = 2000;
-const MAX_RATE = 16; // the fastest playbackRate browsers accept
 const SLATE_FADE = 0.2; // export.py's ad(200,200) on slate text
 
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
@@ -135,6 +131,7 @@ function hide(slot) {
 // hooks.onCaptionMove(caption, {x, y}): a caption was dragged to a new anchor (frame fractions); it returns
 // the ops promise. hooks.captionDragLabel(caption): the text shown on the caption while it is dragged.
 // hooks.dragDisabled(): true while captions cannot be dragged (watch mode); a press is then a click on the stage.
+// hooks.sound false: every sound stays on media elements, never on the sample clock (the silent program window).
 export function createEngine(host, hooks = {}) {
   // Adjustment layers grade the composed picture (clips, flashes, picture-in-picture) as export.py does
   // with lut3d, so captions and the project fade stay outside the graded box.
@@ -158,7 +155,6 @@ export function createEngine(host, hooks = {}) {
   const caps = el("div", "pl-caps", host);
   const zones = Object.fromEntries(ZONES.map((z) => [z, el("div", `pl-cap-zone pos-${z}`, caps)]));
   const fade = el("div", "pl-fade", host);
-  const tracks = new Map();
   const pips = new Map();
   let project = null;
   let clips = [];
@@ -168,18 +164,22 @@ export function createEngine(host, hooks = {}) {
   let solo = []; // row keys heard alone; empty: every row
   let stems = {}; // audio clip id -> its 降噪 / 去回音 stems (lib/voice-stems.js)
   let monitor = null; // {id, mode}: that clip plays its source ("dry") or only what the cleanup takes out ("delta")
-  let mixOn = false; // the Web Audio mix runs, so stems can be remixed
-  let voice = []; // merged voice spans the 背景音樂 rows dip under (lib/duck.js)
+  let lead = false; // the sample clock leads (player-audio.js): elements whose sound it plays stay silent
+  let looping = false; // the sample clock wraps at the end: the first clip waits after the last as any next clip does
+  let flip = 0; // 1 after an odd number of wraps of an odd clip count, so clip 0 comes in the slot the last one left free
+  let lastPic = 0;
   let scale = 1; // preview resolution: 1, 2 (half) or 4 (quarter)
   let capKey = "";
   let legacy = 52;
   let shiftCache = { project: null, height: 0, shifts: new Map() }; // dragShifts() for this project and size
   let drag = null;
   let held = false; // a dropped caption stays put until the moved project arrives
-  let last = { t: 0, playing: false, rate: 1 };
+  let last = { t: 0, playing: false, rate: 1, raw: 1 };
 
-  const rerender = () => render(last.t, last.playing, last.rate);
+  const rerender = () => render(last.t, last.playing, last.raw);
   slots = [makeSlot(layers, rerender), makeSlot(layers, rerender)];
+  const sound = createSound(() => ({ project, clips, total, solo, stems, monitor }),
+    { setGain, fade: projectFade, pictureReady: () => !waiting(), enabled: hooks.sound !== false });
 
   function projectFade(t) {
     const fi = Math.min(10, Math.max(0, Number(project.settings.fadeIn) || 0));
@@ -190,20 +190,14 @@ export function createEngine(host, hooks = {}) {
     return clamp01(g);
   }
 
-  const clipSounds = (clip) => clip && clip.source === "video" && clip.take.hasAudio && !clip.shot.disabled && !clip.shot.audioDetached
-    && Number(clip.shot.volume ?? 1) > 0;
-
   // Original sound of a video clip at the shot's volume, with the same short fades export.py puts at each cut;
-  // the version's volume keys (t in file seconds) scale it on top.
+  // the version's volume keys (t in file seconds) scale it on top. Silent while the sample clock plays it.
   function clipGain(i, t) {
     const clip = clips[i];
-    if (!clipSounds(clip)) return 0;
+    if (!clipSounds(clip) || (lead && sound.owns(`c:${clip.shot.id}`))) return 0;
     const local = t - clip.start;
-    const len = clip.length;
-    const fi = Math.max(0.03, Math.min(i > 0 ? clips[i - 1].transition.duration : 0, len / 2));
-    const fo = Math.max(0.03, Math.min(clip.transition.duration, len / 2));
-    const keyed = Number(valueAt({ keyframes: clip.take.volumeKeys }, "volume", clip.in + local * (clip.speed || 1), 1));
-    return clamp01(Math.min(local / fi, (len - local) / fo)) * Number(clip.shot.volume ?? 1) * keyed;
+    const [fi, fo] = clipFades(clips, i);
+    return clamp01(Math.min(local / fi, (clip.length - local) / fo)) * clipLevel(clip, local);
   }
 
   // Sound goes through the Web Audio mix once it runs (it plays gains above 1 and feeds the meters);
@@ -223,23 +217,25 @@ export function createEngine(host, hooks = {}) {
   function syncVideo(slot, t, playing, gain) {
     const { clip, video } = slot;
     if (slot.mode !== "video") return;
-    const target = clip.in + Math.min(Math.max(0, t - clip.start), Math.max(0, clip.length - EDGE)) * clip.speed;
+    // Before the clip's start (preroll) the file plays up to its in point.
+    const target = Math.max(0, clip.in + Math.min(t - clip.start, Math.max(0, clip.length - EDGE)) * clip.speed);
     setGain(video, gain, SOURCE_TRACK);
     if (playing) {
-      const speed = Math.min(MAX_RATE, last.rate * clip.speed);
-      if (video.playbackRate !== speed) video.playbackRate = speed;
-      if (Math.abs(video.currentTime - target) > DRIFT_PLAYING * Math.max(1, speed)) seekTo(video, slot, target);
-      if (video.paused) playSafe(video);
+      follow(video, slot, target, Math.min(MAX_RATE, last.rate * clip.speed), lead);
     } else {
       if (!video.paused) video.pause();
       if (Math.abs(video.currentTime - target) > DRIFT_PAUSED) seekTo(video, slot, target);
     }
   }
 
+  // Seconds of PREROLL the clip's file has before its in point.
+  const preroll = (clip) => (clip.source === "video" ? Math.min(PREROLL, clip.in / (clip.speed || 1)) : 0);
+
+  // The next clip waits hidden where it will start playing: its preroll start while the sample clock leads.
   function park(slot, clip) {
     slot.load(clip, project.id, scale);
     hide(slot);
-    if (clip) syncVideo(slot, clip.start, false, 0);
+    if (clip) syncVideo(slot, clip.start - (lead ? preroll(clip) : 0), false, 0);
   }
 
   // Draw the outgoing clip A and incoming clip B the way ffmpeg xfade does at progress p.
@@ -262,6 +258,8 @@ export function createEngine(host, hooks = {}) {
 
   function drawPicture(t, playing, g) {
     flash.style.opacity = "0";
+    if (looping && playing && lastPic > total - 0.5 && t < 0.5) flip ^= clips.length % 2;
+    lastPic = t;
     const ci = clipIndexAt(clips, t);
     if (ci < 0) {
       slots.forEach((s) => park(s, null));
@@ -269,8 +267,8 @@ export function createEngine(host, hooks = {}) {
     }
     const cur = clips[ci];
     const prev = ci > 0 ? clips[ci - 1] : null;
-    const curSlot = slots[ci % 2];
-    const other = slots[(ci + 1) % 2];
+    const curSlot = slots[(ci + flip) % 2];
+    const other = slots[(ci + 1 + flip) % 2];
     curSlot.load(cur, project.id, scale);
     const overlap = prev && prev.transition.duration > 0 && t < prev.start + prev.length - 1e-6;
     if (overlap) {
@@ -280,7 +278,14 @@ export function createEngine(host, hooks = {}) {
       syncVideo(other, t, playing, clipGain(ci - 1, t) * g);
     } else {
       resetLook(curSlot, 2);
-      park(other, clips[ci + 1] || null);
+      const next = clips[ci + 1] || (looping && clips.length ? { ...clips[0], start: total + clips[0].start } : null);
+      if (playing && lead && next && t >= next.start - preroll(next)) {
+        other.load(next, project.id, scale);
+        hide(other);
+        syncVideo(other, t, true, 0);
+      } else {
+        park(other, next);
+      }
     }
     syncVideo(curSlot, t, playing, clipGain(ci, t) * g);
     slateFade(curSlot, ci, t);
@@ -469,36 +474,6 @@ export function createEngine(host, hooks = {}) {
     setTimeout(() => window.removeEventListener("click", stop, { capture: true }), 0);
   }
 
-  function syncTracks() {
-    const seen = new Set();
-    for (const item of project.audio || []) {
-      const media = audioMedia(project, item);
-      if (!media) continue;
-      seen.add(item.id);
-      let tr = tracks.get(item.id);
-      if (!tr) {
-        tr = audioEntry();
-        tracks.set(item.id, tr);
-      }
-      const src = fileUrl(project.id, media.file);
-      if (tr.src !== src) {
-        tr.src = src;
-        release(tr.audio); // voicePlay loads it once the clip is near the playhead
-      }
-      tr.item = item;
-      tr.media = media;
-    }
-    for (const [id, tr] of tracks) {
-      if (!seen.has(id)) {
-        for (const audio of trackElements(tr)) {
-          release(audio);
-          unroute(audio);
-        }
-        tracks.delete(id);
-      }
-    }
-  }
-
   // One element per picture-in-picture clip, stacked by track; a clip whose file changed gets a new one.
   function syncOverlays() {
     const seen = new Set();
@@ -647,73 +622,62 @@ export function createEngine(host, hooks = {}) {
       }
       if (!node.hasAttribute("src")) node.src = ov.src;
       const target = Number(item.in || 0) + local;
-      setGain(node, layer.muted ? 0 : Number(valueAt(item, "volume", local, 1)) * g, layer.id);
+      const silent = layer.muted || (lead && sound.owns(`p:${item.id}`)); // the sample clock plays its sound
+      setGain(node, silent ? 0 : Number(valueAt(item, "volume", local, 1)) * g, layer.id);
       if (playing) {
-        if (node.playbackRate !== speed) node.playbackRate = speed;
-        if (Math.abs(node.currentTime - target) > DRIFT_PLAYING * speed) seekTo(node, ov, target);
-        if (node.paused) playSafe(node);
+        follow(node, ov, target, speed, lead);
       } else if (Math.abs(node.currentTime - target) > DRIFT_PAUSED) {
         seekTo(node, ov, target);
       }
     }
   }
 
-  function drawAudio(t, playing, g) {
-    const flags = project.tracks || {};
-    const bgm = bgmRows(flags);
-    const db = duckDb(project.settings);
-    for (const tr of tracks.values()) {
-      const { item, media, audio } = tr;
-      const start = Number(item.start || 0);
-      const len = Math.min(audioLength(item, media), total - start);
-      const local = t - start;
-      const track = audioTrack(item);
-      const off = item.muted || flags[track === VOICE_TRACK ? "voiceMuted" : "musicMuted"] || (solo.length && !solo.includes(track));
-      const sp = audioSpeed(item);
-      const speed = Math.min(MAX_RATE, last.rate * sp);
-      const mode = monitor && monitor.id === item.id ? monitor.mode : "fx";
-      if (!playing || off || len <= 0.05 || local < 0 || local >= len) {
-        for (const el of trackElements(tr)) if (!el.paused) el.pause();
-        // Put a clip about to start, or the one under a paused playhead, in place now: seeking into a long
-        // camera file takes a few hundred ms, heard as a gap at the cut when it happens on the clip's first frame.
-        // Any other lets go of its file (CUE_LEAD).
-        if (!off && len > 0.05 && local < len && local > -CUE_LEAD * speed) {
-          const cue = voicePlay(tr, Number(item.in || 0) + Math.max(0, local) * sp, project.id, mixOn && stems[item.id], mode);
-          if (Math.abs(cue.el.currentTime - cue.at) > DRIFT_PAUSED) seekTo(cue.el, cue.holder, cue.at);
-        } else {
-          for (const el of trackElements(tr)) if (el.hasAttribute("src")) release(el);
-        }
-        continue;
-      }
-      const fi = Math.min(Number(item.fadeIn || 0), len / 2);
-      const fo = Math.min(Number(item.fadeOut || 0), len / 2);
-      let gain = Number(valueAt(item, "volume", local, 1)) * g;
-      if (fi > 0 && local < fi) gain *= local / fi;
-      if (fo > 0 && local > len - fo) gain *= (len - local) / fo;
-      if (bgm.includes(track)) gain *= duckGain(voice, t, db);
-      const target = Number(item.in || 0) + local * sp;
-      const { el, holder, at, voice: fx } = voicePlay(tr, target, project.id, mixOn && stems[item.id], mode);
-      setGain(el, gain, track, fx);
-      if (el.playbackRate !== speed) el.playbackRate = speed;
-      if (Math.abs(el.currentTime - at) > DRIFT_PLAYING * Math.max(1, speed)) seekTo(el, holder, at);
-      if (el.paused) playSafe(el);
-    }
-  }
-
-  // rate: the clock's playback speed (J/L pressed again plays faster).
+  // rate: the clock's playback speed (J/L pressed again plays faster). While the sound's start waits for its
+  // first second (player-audio.js), picture and sound hold where they are.
   function render(t, playing, rate = 1) {
-    last = { t, playing, rate: Math.max(1, Math.abs(rate)) };
+    last = { t, playing, rate: Math.max(1, Math.abs(rate)), raw: rate };
     if (!project) return;
-    if (playing) mixOn = wakeMix();
+    lead = playing && sound.leads(rate);
+    const moving = sound.draw(t, playing, lead, last.rate);
     const g = projectFade(t);
     const flags = project.tracks || {};
-    drawPicture(t, playing, flags.videoMuted ? 0 : g);
+    drawPicture(t, moving, flags.videoMuted ? 0 : g);
     layers.style.opacity = flags.videoHidden ? "0" : "";
-    drawOverlays(t, playing, g);
+    drawOverlays(t, moving, g);
     drawGrade(t);
     drawCaptions(t);
-    drawAudio(t, playing, g);
     fade.style.opacity = String(1 - g);
+  }
+
+  // Frames the browser dropped (P2-5) since the last call with restart; an element that loads another file
+  // counts again from 0, so a smaller count than last time is all new.
+  let seenDrops = new WeakMap();
+  let drops = 0;
+  function droppedFrames(restart) {
+    if (restart) {
+      seenDrops = new WeakMap();
+      drops = 0;
+    }
+    const videos = slots.map((s) => s.video);
+    for (const ov of pips.values()) if (ov.video) videos.push(ov.node);
+    for (const v of videos) {
+      const n = v.getVideoPlaybackQuality().droppedVideoFrames;
+      const was = restart ? n : seenDrops.get(v) || 0;
+      drops += n >= was ? n - was : n;
+      seenDrops.set(v, n);
+    }
+    return drops;
+  }
+
+  // True while a visible video is still seeking or buffering; the player holds the clock meanwhile.
+  // Near the end of a file there is no "future data" to buffer, so that is not counted as waiting.
+  function waiting() {
+    return slots.some((s) => {
+      const v = s.video;
+      if (s.mode !== "video" || s.root.style.visibility === "hidden") return false;
+      if (v.seeking) return true;
+      return v.readyState < 3 && !v.ended && !(v.duration - v.currentTime < 0.25);
+    });
   }
 
   return {
@@ -724,10 +688,9 @@ export function createEngine(host, hooks = {}) {
       clips = nextClips;
       legacy = nextLegacy;
       total = sequenceDuration(clips);
-      voice = voiceSpans(project, clips.filter(clipSounds).map((c) => [c.start, c.start + c.length]));
       capKey = "";
       held = false;
-      syncTracks();
+      sound.sync();
       syncOverlays();
       dropUnusedFilters();
       rerender();
@@ -769,20 +732,34 @@ export function createEngine(host, hooks = {}) {
       setMonitor(level, muted);
       rerender();
     },
-    // True while a visible video is still seeking or buffering; the player holds the clock meanwhile.
-    // Near the end of a file there is no "future data" to buffer, so that is not counted as waiting.
-    isWaiting() {
-      return slots.some((s) => {
-        const v = s.video;
-        if (s.mode !== "video" || s.root.style.visibility === "hidden") return false;
-        if (v.seeking) return true;
-        return v.readyState < 3 && !v.ended && !(v.duration - v.currentTime < 0.25);
-      });
+    isWaiting: waiting,
+    droppedFrames,
+    // The sample clock (player-audio.js) leads at clock rate `rate`; soundStart starts it at timeline seconds t,
+    // soundTime gives the timeline seconds heard at rAF time `now` (null while its start waits).
+    soundLeads(rate) {
+      return !!project && sound.leads(rate);
+    },
+    soundStart(t, loop) {
+      looping = !!loop;
+      sound.start(t, loop);
+    },
+    soundTime(now, loop) {
+      looping = !!loop;
+      return project ? sound.time(now, loop) : null;
+    },
+    // The paused playhead moved to timeline seconds t: a short piece of the sound there plays (P2-3).
+    scrub(t) {
+      if (project) sound.scrub(t);
+    },
+    // Playing backwards at clock rate `rate`, at timeline seconds t (null: not playing backwards): the sound plays
+    // backwards with it (P2-4).
+    reverse(t, rate) {
+      sound.reverse(project ? t : null, rate);
     },
     // While the clock is held, sound and picture-in-picture wait with it; left playing they ran ahead and jumped
     // back when it moved on, heard as a stutter.
     hold() {
-      for (const tr of tracks.values()) for (const el of trackElements(tr)) if (!el.paused) el.pause();
+      sound.hold();
       for (const ov of pips.values()) if (ov.video && !ov.node.paused) ov.node.pause();
     },
     destroy() {
@@ -792,8 +769,7 @@ export function createEngine(host, hooks = {}) {
         unroute(media);
       };
       slots.forEach((s) => drop(s.video));
-      tracks.forEach((tr) => trackElements(tr).forEach(drop));
-      tracks.clear();
+      sound.destroy();
       pips.forEach((ov) => ov.video && drop(ov.node));
       pips.clear();
       host.replaceChildren();

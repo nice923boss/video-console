@@ -12,6 +12,7 @@ from pathlib import Path
 from . import BUILD, DEFAULT_PORT, VERSION, api, video2x
 from .api.deps import deps_status
 from .api.system import system_info
+from .audioproxy import AudioProxy
 from .backfill import Backfill
 from .comfy.manager import ComfyManager
 from .comfy.workflows import WorkflowStore
@@ -69,6 +70,7 @@ class App:
         self.llm = LLMClient(self.settings, self.secrets)
         self.backfill = Backfill(self.store, self.media)
         self.lowres = LowRes(self.store, self.media)
+        self.audioproxy = AudioProxy(self.store, self.media)
         self.router = Router()
         api.register(self.router, self)
         self.server: HttpServer | None = None

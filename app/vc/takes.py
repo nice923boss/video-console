@@ -204,9 +204,9 @@ RELINK_KEYS = ("file", "thumb", "strip", "wave", "width", "height", "duration", 
 def relink_ops(project: dict, item: dict, staged: dict) -> list[dict]:
     """Point a media item, and the takes the library made from the same file, at a newly staged file (LB-09).
 
-    Facts the new file lacks (a wave, low-res preview copies of the old one) are dropped."""
+    Facts the new file lacks (a wave, low-res preview and audio copies of the old one) are dropped."""
     patch = {k: staged[k] for k in RELINK_KEYS if staged.get(k) is not None}
-    stale = [k for k in (*RELINK_KEYS, "preview2", "preview4") if k not in patch]
+    stale = [k for k in (*RELINK_KEYS, "preview2", "preview4", "previewAudio", "previewAudioSpeeds") if k not in patch]
     targets = [item] + [t for t in project["takes"].values()
                         if t.get("file") == item.get("file") and (t.get("source") or {}).get("backend") == "import"]
     return [{"op": "item.relink", "id": x["id"], "patch": patch, "unset": [k for k in stale if k in x]} for x in targets]

@@ -128,6 +128,12 @@ def register(router: Router, app: App) -> None:
         (PV-06); returns how many are still to be made. Each copy arrives as a project change."""
         return {"pending": app.lowres.request(req.params["pid"], req.json_object().get("scale"))}
 
+    @router.route("POST", "/api/projects/{pid}/audio-files")
+    def audio_files(req: Request) -> dict:
+        """Make the plain audio copies the preview plays its sound from (PB-01, audioproxy.py) in the background;
+        returns how many are still to be made. Each copy arrives as a project change."""
+        return {"pending": app.audioproxy.request(req.params["pid"])}
+
     @router.route("DELETE", "/api/projects/{pid}")
     def project_delete(req: Request) -> dict:
         """Move the project to the trash; ?exports=1 also deletes what it wrote to the shared export folder."""

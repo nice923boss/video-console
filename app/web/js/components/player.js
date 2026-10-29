@@ -12,6 +12,8 @@ import { ops, saveSettings, updateProject } from "../lib/actions.js";
 import { api } from "../lib/api.js";
 import { legacySize, resolveStyle, usesStyle, dragScope, moveOps } from "../lib/caption-style.js";
 import { requestStems } from "../lib/voice-stems.js";
+import { wakeMix } from "../lib/audio-mix.js";
+import { speedKey, speedCopy } from "../lib/audio-sched.js";
 import { createEngine } from "./player-engine.js";
 import { MiniMeter } from "./audio-meter.js";
 import { Icon } from "./icons.js";
@@ -21,6 +23,7 @@ import { toastError } from "./toast.js";
 
 const WAIT_LIMIT_MS = 4000;
 const SEEK_JUMP = 0.05;
+const SCRUB_QUIET_MS = 250; // no scrub sound this soon after playing stops (the playhead is put on the range's end)
 const DEFAULT_VIEW = { safe: false, thirds: false, captions: true };
 const DEFAULT_VOLUME = { level: 1, muted: false };
 const isBool = (v) => typeof v === "boolean";
@@ -29,23 +32,45 @@ const validVolume = (v) => !!v && typeof v.level === "number" && v.level >= 0 &&
 
 // Advances the clock at clock.rate times real time while playing (backwards when it is negative). Seeks made
 // elsewhere (timeline, inspector) restart the timing from the new position; a buffering video holds
-// the clock for a few seconds at most.
-function createLoop(engine, loopRef) {
+// the clock for a few seconds at most. At normal speed with the sound on the sample clock (PB-01,
+// player-audio.js) the clock follows what is heard instead, and the picture follows the clock, delayRef ms later
+// (headphones that add their own delay, e.g. Bluetooth).
+function createLoop(engine, loopRef, delayRef) {
   let raf = 0;
   let t0 = 0;
   let wall0 = 0;
   let last = 0;
   let waitSince = 0;
   let rate = 1;
+  let led = false;
   const restart = (t) => {
     t0 = t;
     last = t;
     wall0 = performance.now();
     rate = clock.rate;
   };
+  const tickLed = (now) => {
+    const t = engine.soundTime(now - delayRef.current, loopRef.current);
+    if (t == null) {
+      raf = requestAnimationFrame(tick); // the sound's start waits for its first second; the picture with it
+      return;
+    }
+    if (t >= clock.duration && !loopRef.current) {
+      setPlaying(false);
+      setTime(clock.duration);
+      return;
+    }
+    last = t;
+    raf = requestAnimationFrame(tick);
+    setTime(t);
+  };
   const tick = (now) => {
     raf = 0;
     if (!clock.playing) return;
+    if (led) {
+      tickLed(now);
+      return;
+    }
     // Backwards playback seeks frame by frame (the engine renders it as paused), so nothing buffers.
     if (rate > 0 && engine.isWaiting()) {
       if (!waitSince) waitSince = now;
@@ -81,6 +106,18 @@ function createLoop(engine, loopRef) {
   };
   return {
     onClock(c) {
+      const leads = c.playing && engine.soundLeads(c.rate);
+      if (leads) {
+        // Starting, coming back to normal speed or a seek: the sound starts again from there.
+        if (!led || Math.abs(c.time - last) > SEEK_JUMP) engine.soundStart(c.time, loopRef.current);
+        led = true;
+        last = c.time;
+        waitSince = 0;
+        if (!raf) raf = requestAnimationFrame(tick);
+        return;
+      }
+      if (led && c.playing) restart(c.time);
+      led = false;
       if (!c.playing) {
         if (raf) cancelAnimationFrame(raf);
         raf = 0;
@@ -112,11 +149,28 @@ function playedVideos(project) {
   return out;
 }
 
+// "id@speed" of the takes and media items whose sound the preview plays at a speed they have no audio copy at
+// yet, as audioproxy.py's wanted() lists them (PB-01, P2-2).
+function soundless(project) {
+  const takes = project.takes || {};
+  const media = project.media || {};
+  const uses = [...(project.shots || []).filter((s) => !s.disabled).map((s) => [s.activeVideo, s.speed]),
+    ...(project.overlays || []).filter((o) => !o.disabled).map((o) => [o.mediaId, 1]),
+    ...(project.audio || []).map((a) => [a.mediaId in media ? a.mediaId : a.takeId, a.speed])];
+  const out = uses.filter(([id, speed]) => {
+    const item = id && (takes[id] || media[id]);
+    return !!item && !!item.file && !!item.hasAudio && !speedCopy(item, Number(speed || 1));
+  });
+  return [...new Set(out.map(([id, speed]) => `${id}@${speedKey(Number(speed || 1))}`))];
+}
+
 const RES_LABEL = { 1: "完整", 2: "1/2", 4: "1/4" };
 const PROGRAM_CHANNEL = "vc-program"; // program.js listens on the same name
 const validRes = (v) => [1, 2, 4].includes(v);
+const DELAYS = [0, 100, 150, 200, 250, 300]; // ms the picture waits for headphones that are late
+const validDelay = (v) => DELAYS.includes(v);
 
-function viewMenu(e, view, setView, cover, res, setRes, compare) {
+function viewMenu(e, view, setView, cover, res, setRes, compare, delay, setDelay) {
   const flip = (key) => () => setView({ ...view, [key]: !view[key] });
   openMenu(e, [
     { header: "預覽畫面" },
@@ -132,6 +186,11 @@ function viewMenu(e, view, setView, cover, res, setRes, compare) {
     { header: "預覽解析度（輸出一律用原檔）" },
     ...[1, 2, 4].map((n) => ({ label: RES_LABEL[n], checked: res === n, onClick: () => setRes(n),
       hint: n > 1 ? "先做較小的預覽檔，長片、4K 較順" : "" })),
+    { divider: true },
+    { header: "聲音" },
+    { label: "暫停時移動播放頭播放聲音", icon: "volume", checked: view.scrub, onClick: flip("scrub") },
+    { header: "聲音延遲補償（藍牙耳機聲音慢時，畫面跟著延後）" },
+    ...DELAYS.map((ms) => ({ label: ms ? `${ms} ms` : "不補償", checked: delay === ms, onClick: () => setDelay(ms) })),
   ]);
 }
 
@@ -191,7 +250,7 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   // Safe area and thirds live in settings (ui.safeArea / ui.thirds); only the captions switch is per browser.
   const safe = useStore((s) => !!(s.settings && s.settings.ui && s.settings.ui.safeArea));
   const thirds = useStore((s) => !!(s.settings && s.settings.ui && s.settings.ui.thirds));
-  const view = { ...shown, safe, thirds };
+  const view = { ...shown, scrub: shown.scrub !== false, safe, thirds };
   const setView = (next) => {
     setShown(next);
     if (next.safe !== safe || next.thirds !== thirds) saveSettings({ ui: { safeArea: next.safe, thirds: next.thirds } });
@@ -199,8 +258,10 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   const [volume, setVolume] = usePref("vc.player.volume", DEFAULT_VOLUME, validVolume);
   const [loop, setLoop] = usePref("vc.player.loop", false, isBool);
   const [res, setRes] = usePref("vc.player.res", 2, validRes); // 1/2 unless chosen otherwise; the export uses the originals
+  const [delay, setDelay] = usePref("vc.player.delay", 0, validDelay);
   const [live, setLive] = useState({ playing: clock.playing, index: -1, rate: 1 });
   const [full, setFull] = useState(false);
+  const [dropped, setDropped] = useState(0); // frames the browser dropped since playback last started (P2-5)
   const rootRef = useRef(null);
   const hostRef = useRef(null);
   const timeRef = useRef(null);
@@ -208,13 +269,17 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   const clipsRef = useRef(clips);
   const liveRef = useRef(live);
   const loopRef = useRef(loop);
+  const delayRef = useRef(delay);
+  const scrubRef = useRef(view.scrub);
   const programRef = useRef(null);
   clipsRef.current = clips;
   loopRef.current = loop;
+  delayRef.current = delay;
+  scrubRef.current = view.scrub;
 
   useEffect(() => {
     const engine = createEngine(hostRef.current, captionHooks);
-    const loopCtl = createLoop(engine, loopRef);
+    const loopCtl = createLoop(engine, loopRef, delayRef);
     engineRef.current = engine;
     // Program window (PV-07): it says hello when it opens and bye when it closes; it gets every clock tick.
     const program = { channel: new BroadcastChannel(PROGRAM_CHANNEL), open: false, send: null };
@@ -223,9 +288,20 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
       if (data.type === "hello" && program.send) program.send();
     };
     programRef.current = program;
+    let scrubFrom = clock.time;
+    let wasPlaying = clock.playing;
+    let stoppedAt = 0;
     const off = onClock((c) => {
       loopCtl.onClock(c);
       engine.render(c.time, rolling(c), c.rate);
+      engine.reverse(c.playing && c.rate < 0 ? c.time : null, c.rate);
+      // A paused playhead that moved plays a short piece of the sound where it lands (P2-3).
+      if (wasPlaying && !c.playing) stoppedAt = performance.now();
+      if (!c.playing && c.time !== scrubFrom && scrubRef.current && performance.now() - stoppedAt > SCRUB_QUIET_MS) {
+        engine.scrub(c.time);
+      }
+      scrubFrom = c.time;
+      wasPlaying = c.playing;
       if (program.open) program.channel.postMessage({ type: "clock", t: c.time, playing: rolling(c), rate: c.rate });
       if (timeRef.current) timeRef.current.textContent = fmtTime(c.time);
       const index = clipIndexAt(clipsRef.current, c.time);
@@ -238,8 +314,15 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
     });
     const onFull = () => setFull(document.fullscreenElement === rootRef.current);
     document.addEventListener("fullscreenchange", onFull);
+    // Browsers start sound only after a gesture: the mix starts at the first one, so it already runs when
+    // playback starts and the sound can lead from the first frame.
+    const wake = () => wakeMix();
+    window.addEventListener("pointerdown", wake, { capture: true, once: true });
+    window.addEventListener("keydown", wake, { capture: true, once: true });
     return () => {
       off();
+      window.removeEventListener("pointerdown", wake, { capture: true });
+      window.removeEventListener("keydown", wake, { capture: true });
       program.channel.postMessage({ type: "closed", t: clock.time });
       program.channel.close();
       loopCtl.stop();
@@ -285,6 +368,18 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
     engineRef.current.setVoice(voiceStems, voiceMonitor);
   }, [voiceStems, voiceMonitor]);
 
+  // Counted again from each start, read every second while playing and once more when it stops.
+  useEffect(() => {
+    if (!live.playing) return undefined;
+    const read = (restart) => engineRef.current && setDropped(engineRef.current.droppedFrames(restart));
+    read(true);
+    const id = setInterval(read, 1000);
+    return () => {
+      clearInterval(id);
+      read(false);
+    };
+  }, [live.playing]);
+
   // Smaller preview copies: the engine plays each one as it arrives; the server makes the missing ones once.
   const played = res > 1 ? playedVideos(project) : [];
   const missing = played.filter((v) => !v[`preview${res}`]).map((v) => v.id).join(",");
@@ -295,6 +390,11 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
     if (missing) api.post(`/api/projects/${project.id}/preview-files`, { scale: res }).catch((err) => toastError(err, "無法製作預覽檔"));
   }, [project.id, res, missing]);
   const ready = played.length - (missing ? missing.split(",").length : 0);
+  // Plain audio copies the sound plays from on the sample clock (PB-01); until one arrives its sound plays as before.
+  const unheard = soundless(project).join(",");
+  useEffect(() => {
+    if (unheard) api.post(`/api/projects/${project.id}/audio-files`, {}).catch((err) => toastError(err, "無法製作預覽聲音檔"));
+  }, [project.id, unheard]);
 
   // What the program window draws: sent when it opens and whenever any of it changes.
   useEffect(() => {
@@ -380,6 +480,7 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
       </span>`}
       <span class="grow"></span>
       ${res > 1 && html`<span class="pl-res mono" title=${`預覽解析度 ${RES_LABEL[res]}：${ready}／${played.length} 個影片已有較小的預覽檔${ready < played.length ? "，其餘製作中或無法製作，先播原檔" : ""}；輸出一律用原檔`}>${RES_LABEL[res]}</span>`}
+      ${dropped > 0 && html`<span class="pl-drop mono" title=${`這次播放有 ${dropped} 格畫面來不及解碼或繪製而略過，聲音不受影響；調低預覽解析度通常會改善，輸出不受影響`}>掉 ${dropped} 格</span>`}
       <${IconButton} icon="refresh" size=${16} active=${loop}
         title=${`${loop ? "循環播放：開" : "循環播放：關"}，播放區域${keyHint("edit.playRange")}時只在入點與出點之間循環`}
         onClick=${() => setLoop(!loop)} />
@@ -388,7 +489,7 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
       ${onToggleChat && html`<${IconButton} icon="bot" size=${16} active=${chat} onClick=${onToggleChat}
         title=${`${chat ? "隱藏" : "顯示"} AI 助理：用文字模型剪輯與上字幕${keyHint("edit.chat")}`} />`}
       <${IconButton} icon="frame" size=${16} active=${view.safe || view.thirds || compare} title="預覽畫面選項"
-        onClick=${(e) => viewMenu(e, view, setView, cover, res, setRes, compare)} />
+        onClick=${(e) => viewMenu(e, view, setView, cover, res, setRes, compare, delay, setDelay)} />
       <div class="pl-vol">
         <${IconButton} icon=${muted ? "volume-x" : "volume"} size=${16} title=${muted ? "取消靜音" : "靜音"}
           onClick=${() => setVolume({ level: volume.level || 1, muted: !muted })} />

@@ -134,6 +134,16 @@ def _media_file(v: Any) -> str:
     return v
 
 
+_SPEED_KEY = re.compile(r"^\d(\.\d{1,4})?$")
+
+
+def _speed_files(v: Any) -> dict:
+    """Audio copies of a file at other speeds, by speed key (audioproxy.speed_key)."""
+    if not isinstance(v, dict) or len(v) > 64 or not all(isinstance(k, str) and _SPEED_KEY.match(k) for k in v):
+        raise AppError("變速聲音檔格式不正確")
+    return {k: _media_file(f) for k, f in v.items()}
+
+
 def _alpha_codec(v: Any) -> str:
     if v not in ("vp8", "vp9"):  # media.ALPHA_DECODERS
         raise AppError("不支援的透明影片編碼")
@@ -153,7 +163,8 @@ def _char_times(v: Any) -> list:
 
 
 DERIVED_FIELDS = {"wave": _media_file, "thumb": _media_file, "strip": _media_file, "alphaCodec": _alpha_codec,
-                  "preview2": _media_file, "preview4": _media_file, "charTimes": _char_times}  # lowres.py, CP-13
+                  "preview2": _media_file, "preview4": _media_file, "charTimes": _char_times,  # lowres.py, CP-13
+                  "previewAudio": _media_file, "previewAudioSpeeds": _speed_files}  # audioproxy.py
 
 
 def _item_derive(p: dict, op: dict) -> dict | None:
