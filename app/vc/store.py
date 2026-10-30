@@ -171,6 +171,7 @@ class ProjectStore:
             "updated": project.get("updated"),
             "created": project.get("created"),
             "rev": project.get("rev", 0),
+            "folder": project.get("folder") or "",
             "shots": len(project["shots"]),
             "takes": len(project["takes"]),
             "thumb": thumb,
@@ -512,7 +513,8 @@ class ProjectStore:
         return {"rev": new_rev}
 
     # ------------------------------------------------------------ project files
-    def duplicate(self, pid: str) -> dict:
+    def duplicate(self, pid: str, name: str = "") -> dict:
+        """A copy in the same folder, named name (default: the original's name with （副本）)."""
         src = self.get(pid)
         new_pid = new_id("p")
         src_dir = self.project_dir(pid)
@@ -520,7 +522,8 @@ class ProjectStore:
         shutil.copytree(src_dir, dst_dir, ignore=shutil.ignore_patterns("history", "exports", "cache", JOURNAL))
         for sub in _SUBDIRS:
             (dst_dir / sub).mkdir(parents=True, exist_ok=True)
-        src.update({"id": new_pid, "name": f"{src['name']}（副本）", "rev": 0, "created": now(), "updated": now()})
+        name = str(name or "").strip()[:120] or f"{src['name']}（副本）"
+        src.update({"id": new_pid, "name": name, "rev": 0, "created": now(), "updated": now()})
         write_json_atomic(dst_dir / "project.json", src)
         with self._lock:
             self._entries[new_pid] = _Entry(src)

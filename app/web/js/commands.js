@@ -16,6 +16,7 @@ import { openScriptImport } from "./dialogs/script-import.js";
 import { openCastDialog } from "./dialogs/cast-dialog.js";
 import { openCaptionCondense } from "./dialogs/caption-condense.js";
 import { openTitleDialog } from "./dialogs/title-dialog.js";
+import { openRevisions } from "./dialogs/revisions-dialog.js";
 import { downloadReviewPage, pickReviewFile } from "./lib/review.js";
 import { generateMissing } from "./lib/voice.js";
 import { defineCommands, keysOf } from "./lib/keymap.js";
@@ -121,6 +122,10 @@ function appCommands(s, commands) {
     s.project && { id: "export:video", group: "輸出", label: "輸出影片…", icon: "film", run: commands.export },
     s.project && { id: "export:package", group: "輸出", label: "打包專案…", icon: "package", keywords: "zip 備份",
       run: () => openExportDialog("package") },
+    s.project && { id: "export:review", group: "輸出", label: "建立客戶審稿包…", icon: "message",
+      keywords: "審稿 客戶 意見 標註 插入 review zip", run: () => openExportDialog("review") },
+    s.project && { id: "review:revisions", group: "輸出", label: "修改意見…", icon: "message",
+      keywords: "客戶 審稿 修改 意見 zip 套用 revision", run: () => openRevisions() },
     s.project && { id: "review:page", group: "輸出", label: "下載客戶審稿網頁", icon: "message",
       keywords: "審稿 客戶 意見 留言 review comment html", run: () => downloadReviewPage() },
     s.project && { id: "review:import", group: "輸出", label: "匯入審稿意見…", icon: "upload",

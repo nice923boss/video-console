@@ -163,7 +163,8 @@ def register(router: Router, app: App) -> None:
 
     @router.route("POST", "/api/projects/{pid}/duplicate")
     def project_duplicate(req: Request) -> dict:
-        return {"project": store.duplicate(req.params["pid"])}
+        """body.name: the copy's name (optional), e.g. a delivery version such as 第一版交稿."""
+        return {"project": store.duplicate(req.params["pid"], str(req.json_object().get("name") or ""))}
 
     # ------------------------------------------------------------------ editing
     @router.route("POST", "/api/projects/{pid}/ops")

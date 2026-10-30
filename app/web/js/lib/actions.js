@@ -5,7 +5,7 @@ import { getState, setState } from "./store.js";
 import { applyTheme } from "./theme.js";
 import { newId, shotLabel, fmtBytes } from "./format.js";
 import { toast, updateToast, dismissToast, toastError } from "../components/toast.js";
-import { confirmDialog } from "../components/overlay.js";
+import { confirmDialog, promptDialog } from "../components/overlay.js";
 import { readPref } from "./prefs.js";
 import { watchRefuses } from "./watch.js";
 import { openDefaultUpdates } from "../dialogs/default-updates.js";
@@ -123,9 +123,17 @@ export async function createProject({ name, settings, starter = false, style = n
   }
 }
 
+// A copy kept as its own version (e.g. 第一版交稿); it is filed in the same home folder as the original.
 export async function duplicateProject(pid) {
+  const src = (getState().projects || []).find((p) => p.id === pid);
+  const name = await promptDialog({
+    title: "建立副本", label: "副本名稱", value: `${src ? src.name : "專案"}（副本）`, confirmLabel: "建立副本",
+    hint: "可以用版本命名，例如「第一版交稿」；生成的圖片與影片會一起複製，輸出的影片不會",
+    validate: (v) => (v.trim() ? "" : "名稱不能是空白"),
+  });
+  if (!name) return null;
   try {
-    const { project } = await api.post(`/api/projects/${enc(pid)}/duplicate`);
+    const { project } = await api.post(`/api/projects/${enc(pid)}/duplicate`, { name });
     toast(`已建立「${project.name}」`, { level: "success", action: { label: "開啟", fn: () => openProject(project.id) } });
     return project;
   } catch (err) {

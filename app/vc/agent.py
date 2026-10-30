@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import edits
 from .bilingual import MAX_TEXT
+from .sequence import video_take
 from .server import Request
 from .util import AppError, new_id
 
@@ -45,7 +46,8 @@ Use only ids that tool results gave you; never invent ids.
 - Make the smallest change that does what the user asked. Group one logical change into one apply_ops call \
 with a short Traditional Chinese label; the label becomes the undo step name.
 - Times are timeline seconds. The main caption row is track "main"; other rows are captionTracks ids.
-- apply_ops cheat sheet (ids of new items are filled in when omitted):
+- apply_ops cheat sheet (ids of new items are filled in when omitted). Every op is one object whose "op" field \
+names it, the other fields beside it, e.g. {"op": "caption.update", "id": "c_ab12cd34ef", "patch": {"text": "新字"}}:
   caption.add {"item": {"start", "end", "text", "track"?, "position"?: "bottom"|"middle"|"top", "style"?}} \
 (omit track for the main row)
   caption.update {"id", "patch": {fields to change}}   caption.delete {"id"}
@@ -53,9 +55,17 @@ with a short Traditional Chinese label; the label becomes the undo step name.
   captionTrack.delete {"id"} (also removes the captions on that row)
   marker.add {"item": {"start", "color": "blue"|"red"|"orange"|"yellow"|"green"|"purple", "name"}}
   marker.update {"id", "patch"}   marker.delete {"id"}
-  shot.update {"id", "patch": {"name"|"disabled"|"speed"|...}}: wrap shot ops as {"op": "linked", "ops": [...]} \
-so captions and audio follow the picture.
-- Cutting, trimming, freeze frames, detaching audio, volume and keyframes: use the edit tool, not raw ops.
+  shot.update {"id", "patch": {"name"|"duration"|"disabled"|"speed"|...}} (duration: still or blank shots only, \
+a video shot's length is its trim; speed 0.25 to 4, video shots only) \
+  shot.delete {"id"}   shot.move {"id", "index"} (index: the shot's new 0-based place in the shot list). \
+Captions and audio follow the picture when shots change length, go or move.
+- Text the client wants shown on screen (a phone number, a slogan, a price) is a caption; position picks bottom, \
+middle or top of the frame. New text: caption.add, never overwrite another caption. New wording or position of a \
+caption: one caption.update of that whole caption, no split or trim.
+- Playback speed: shot.update patch speed, no split. Reorder or swap shots: shot.move (a swap is one shot.move).
+- Cutting, trimming, freeze frames, detaching audio, volume and keyframes: use the edit tool, not raw ops. \
+Split or trim only when the user asked to cut, shorten or freeze. \
+A shot's freeze still is 5 seconds unless the freeze edit gets length (seconds).
 - import_bilingual puts a Chinese/English parallel text onto two caption rows (Chinese above, English below). \
 When the user attached a file, call it without text. english "double" keeps two English lines, "single" joins \
 them into one. align true then times the captions to the speech in the clips.
@@ -84,16 +94,21 @@ TOOLS = [
           "from/to: a window in seconds. limit up to 200, offset for the next page.",
           {"track": STR, "from": NUM, "to": NUM, "offset": {"type": "integer"}, "limit": {"type": "integer"}}),
     _tool("apply_ops", "Apply project ops as one undo step (see the cheat sheet in the instructions).",
-          {"ops": {"type": "array", "items": {"type": "object"}}, "label": STR}, ("ops", "label")),
-    _tool("edit", "One timeline edit. split {t, type?, id?}; splitAll {t}; trim {t, side: start|end, type?, id?}; "
-          "freeze {t, type?, id?} (shot, or an overlay video: the still goes in when its grab job is done); detach {id|t}; restore {id}; reverse {id|t}; stabilize {type?, id|t} (toggles; shot or overlay); "
+          # llama.cpp turns this into a grammar: without additionalProperties only "op" could be written
+          {"ops": {"type": "array", "items": {"type": "object", "properties": {"op": STR}, "required": ["op"],
+                                              "additionalProperties": True}},
+           "label": STR}, ("ops", "label")),
+    _tool("edit", "One timeline edit, for cutting and timing only: a caption's new wording or position is one "
+          "apply_ops caption.update, never a split. split {t, type?, id?};splitAll {t}; trim {t, side: start|end, type?, id?}; "
+          "freeze {t, type?, id?, length?} (shot, or an overlay video: the still goes in when its grab job is done; "
+          "length: seconds of a shot's still, default 5); detach {id|t}; restore {id}; reverse {id|t}; stabilize {type?, id|t} (toggles; shot or overlay); "
           "volume {type, id, db, in?, out?}; "
           "keyframe {type, id, t, values?}; roll/slip/slide {id, by} (picture only: other tracks stay, the shots' own sound is detached in place). type: shot (default), overlay, audio, "
           "caption, adjust. Without id the clip under t is used.",
           {"cmd": {"type": "string", "enum": ["split", "splitAll", "trim", "freeze", "detach", "restore", "reverse",
                                               "stabilize", "volume", "keyframe", "roll", "slip", "slide"]},
            "t": NUM, "type": STR, "id": STR, "side": STR, "by": NUM, "db": NUM, "in": NUM, "out": NUM,
-           "values": {"type": "object"}}, ("cmd",)),
+           "length": NUM, "values": {"type": "object"}}, ("cmd",)),
     _tool("import_bilingual", "Import a Chinese/English parallel text as captions on two rows (中文 above, English "
           "below), one after another from start. text: omit to use the user's attachment. replace: clear those "
           "two rows first. align: then queue speech alignment.",
@@ -113,7 +128,7 @@ class _Turn:
     pid: str
     chat_id: str
     attachment: str
-    made: set[str] = field(default_factory=set)  # undo labels of the steps this turn made
+    made: list[str] = field(default_factory=list)  # undo labels of the steps this turn made, oldest first
 
 
 class _Body:
@@ -153,6 +168,15 @@ def _capped(rows: list, key: str, out: dict) -> dict:
     return out
 
 
+def _main_row(op: dict) -> dict:
+    """list_captions calls the main row "main"; the project stores it as no track, so a model copying it back works."""
+    key = {"caption.add": "item", "caption.update": "patch"}.get(op["op"])
+    part = op.get(key) if key else None
+    if isinstance(part, dict) and part.get("track") == "main":
+        return {**op, key: {**part, "track": None}}
+    return op
+
+
 def history(messages: Any) -> list[dict]:
     """The client's earlier turns as model messages: user/assistant text only, the last one the user's."""
     if not isinstance(messages, list) or not messages:
@@ -181,7 +205,8 @@ class Agent:
         return bool(stop)
 
     def run(self, pid: str, data: dict) -> dict:
-        """{id?, messages: [{role, content}], attachment?: {name, text}} -> {id, reply, steps, stopped}."""
+        """{id?, messages: [{role, content}], attachment?: {name, text}} -> {id, reply, steps, stopped, made}
+        (made: the undo labels of the steps the turn left, oldest first)."""
         self._app.store.get(pid)  # 404 before the model is called
         chat_id = str(data.get("id") or new_id("ch"))
         if not CHAT_ID.match(chat_id):
@@ -203,7 +228,8 @@ class Agent:
         with self._lock:
             self._stops[chat_id] = stop
         try:
-            return {"id": chat_id, **self._loop(turn, [{"role": "system", "content": SYSTEM}, *messages], stop)}
+            out = self._loop(turn, [{"role": "system", "content": SYSTEM}, *messages], stop)
+            return {"id": chat_id, **out, "made": turn.made}
         finally:
             with self._lock:
                 self._stops.pop(chat_id, None)
@@ -319,21 +345,34 @@ class Agent:
         for op in ops:
             if not isinstance(op, dict):
                 raise AppError("每個 op 都要是物件")
+            if not isinstance(op.get("op"), str):
+                raise AppError('每個 op 物件都要有 "op" 欄位寫操作名稱，其他欄位放在旁邊，例如 '
+                               '{"op": "caption.update", "id": "c_ab12cd34ef", "patch": {"text": "新字"}}')
+            op = _main_row(op)
             key, prefix = ID_PREFIX.get(op.get("op"), (None, ""))
             if key and isinstance(op.get(key), dict) and not op[key].get("id"):
                 op = {**op, key: {**op[key], "id": new_id(prefix)}}
             filled.append(op)
+        p = self._app.store.get(turn.pid)
+        shots = {s["id"]: s for s in p["shots"]}
+        for o in filled:  # a video shot plays its trim whatever its duration field says
+            shot = shots.get(o.get("id")) if o["op"] == "shot.update" else None
+            if shot and "duration" in (o.get("patch") or {}) and video_take(p, shot):
+                raise AppError(f"鏡頭 {shot['id']} 是影片鏡頭，長度由修剪範圍決定，改 duration 不會變；"
+                               "要縮短請用 edit trim（side end，t 是時間軸上新的結尾秒數）")
+        if any(o["op"].startswith("shot.") for o in filled):  # as the edit route: the other tracks follow
+            filled = [{"op": "linked", "ops": filled}]
         label = (LABEL + (str(args.get("label") or "").strip() or "修改"))[:80]
         result = self._app.store.apply(turn.pid, filled, origin="user", label=label)
         if not result["changed"]:
             return {**result, "note": "沒有任何變更（要改的 id 可能不存在，或值本來就是這樣）"}
-        turn.made.add(label)
+        turn.made.append(label)
         return {**result, "label": label}
 
     def _t_edit(self, turn: _Turn, args: dict) -> dict:
         out = self._route("POST", f"/api/projects/{turn.pid}/edit", args)
         if out.get("changed"):
-            turn.made.add(out["label"])
+            turn.made.append(out["label"])
         return out
 
     def _t_import_bilingual(self, turn: _Turn, args: dict) -> dict:
@@ -341,7 +380,7 @@ class Agent:
         if not body["text"]:
             raise AppError("沒有要匯入的文字：使用者沒有附加檔案，也沒有給 text")
         out = self._route("POST", f"/api/projects/{turn.pid}/captions/bilingual", body)
-        turn.made.add("匯入雙語字幕")
+        turn.made.append("匯入雙語字幕")
         return {**out, "segments": out["segments"][:5]}  # the model needs the count, not every line back
 
     def _t_align_captions(self, turn: _Turn, args: dict) -> dict:
@@ -360,4 +399,7 @@ class Agent:
             raise AppError("沒有可以復原的步驟")
         if not label.startswith(LABEL) and label not in turn.made:
             raise AppError(f"最新一步「{label}」不是 AI 助理做的，請使用者自己按復原")
-        return self._app.store.undo(turn.pid)
+        out = self._app.store.undo(turn.pid)
+        if turn.made and turn.made[-1] == label:
+            turn.made.pop()
+        return out

@@ -14,6 +14,7 @@ import { JobRow } from "../components/job-row.js";
 import { useExportFolder } from "../components/export-folder.js";
 import { openExportDialog } from "../dialogs/export-dialog.js";
 import { pickReviewFile } from "../lib/review.js";
+import { openRevisions } from "../dialogs/revisions-dialog.js";
 
 const enc = encodeURIComponent;
 const KIND_ICON = { video: "film", image: "image", audio: "music", package: "package", file: "file" };
@@ -47,6 +48,16 @@ function DocLinks({ project }) {
       <${Icon} name="list" size=${18} />
       <span><b>鏡頭清單 CSV</b><small>${project.shots.length} 個鏡頭</small></span>
       <${Icon} name="download" size=${14} class="dim" />
+    </a>
+    <a class="exp-doc" href="#" role="button" title="重新輸出影片，和客戶審稿網頁放在同一個資料夾；客戶可在畫面上標註、插入自己的圖片或影片，再打包 ZIP 傳回來"
+        onClick=${(e) => { e.preventDefault(); openExportDialog("review"); }}>
+      <${Icon} name="message" size=${18} />
+      <span><b>客戶審稿包</b><small>含影片，客戶可標註、插入素材</small></span>
+    </a>
+    <a class="exp-doc" href="#" role="button" title="載入客戶從審稿包回傳的 ZIP（或解開後的資料夾），逐條審核後套用"
+        onClick=${(e) => { e.preventDefault(); openRevisions(); }}>
+      <${Icon} name="upload" size=${18} />
+      <span><b>修改意見</b><small>載入審稿包回傳的 ZIP，逐條套用</small></span>
     </a>
     <a class="exp-doc" href=${`${base}/review.html`} download title="單一網頁檔，傳給客戶用瀏覽器開啟，逐鏡留言後下載意見檔傳回來">
       <${Icon} name="message" size=${18} />

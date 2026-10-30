@@ -283,15 +283,15 @@ def trim(project: dict, t: float, side: str, kind: str = "shot", item_id: str | 
 
 
 # ---------------------------------------------------------------- picture and sound
-def freeze(project: dict, t: float) -> dict:
-    """Cut the video clip at t and put a FREEZE_LEN still of that frame in between (before or after at an edge)."""
+def freeze(project: dict, t: float, length: float = FREEZE_LEN) -> dict:
+    """Cut the video clip at t and put a still of that frame, `length` seconds, in between (before or after at an edge)."""
     clip = _clip_at(_clips(project), t)
     if not clip or clip["source"] != "video":
         raise AppError("這個時間點要是影片鏡頭才能定格")
     local = t - clip["start"]
     at = r3(min(clip["out"] - 0.04, clip["in"] + local * clip["speed"]))
     sid = new_id("s")
-    still = {"op": "shot.add", "shot": {"id": sid, "name": "定格", "duration": FREEZE_LEN}, "index": clip["index"] + 1}
+    still = {"op": "shot.add", "shot": {"id": sid, "name": "定格", "duration": r3(length)}, "index": clip["index"] + 1}
     if local < EDGE:
         ops, place = [{**still, "index": clip["index"]}], clip["start"]
     elif clip["length"] - local < EDGE:
@@ -299,7 +299,7 @@ def freeze(project: dict, t: float) -> dict:
     else:
         g = {"type": "shot", "item": clip["shot"], "clip": clip}
         ops, place = [*split_ops(g, t, local, project), still], t
-    ops += _detached_sound_ops(project, clip, place)
+    ops += _detached_sound_ops(project, clip, place, length)
     job = {"kind": "lastframe", "shotId": clip["shot"]["id"],
            "payload": {"source": clip["take"]["id"], "target": "shot", "targetShot": sid, "at": at}}
     return {"ops": ops, "label": "定格", "job": job, "id": sid}
@@ -337,7 +337,7 @@ def freeze_overlay(project: dict, t: float, item_id: str | None = None, still_id
     return {"ops": [*ops, {"op": "overlay.add", "item": frozen}], "label": "定格", "id": frozen["id"]}
 
 
-def _detached_sound_ops(project: dict, clip: dict, place: float) -> list[dict]:
+def _detached_sound_ops(project: dict, clip: dict, place: float, length: float) -> list[dict]:
     """Keep the shot's detached sound under its picture when a still goes in at `place`, whatever the link
     toggle: a clip across `place` is cut there and its tail moves past the still, later ones move by its length."""
     ops: list[dict] = []
@@ -346,9 +346,9 @@ def _detached_sound_ops(project: dict, clip: dict, place: float) -> list[dict]:
         local = place - start
         if local >= MIN_ITEM and audio_length(project, item) - local >= MIN_ITEM:
             head, tail = split_ops({"type": "audio", "item": item}, place, local, project)
-            ops += [head, {**tail, "item": {**tail["item"], "start": r3(place + FREEZE_LEN)}}]
+            ops += [head, {**tail, "item": {**tail["item"], "start": r3(place + length)}}]
         elif local < MIN_ITEM:
-            ops.append({"op": "audio.update", "id": item["id"], "patch": {"start": r3(start + FREEZE_LEN)}})
+            ops.append({"op": "audio.update", "id": item["id"], "patch": {"start": r3(start + length)}})
     return ops
 
 
@@ -667,7 +667,14 @@ def plan(project: dict, data: dict) -> dict:
     if cmd == "trim":
         return trim(project, _num(data, "t"), str(data.get("side") or ""), kind, _id(data))
     if cmd == "freeze":
-        return freeze_overlay(project, _num(data, "t"), _id(data)) if kind == "overlay" else freeze(project, _num(data, "t"))
+        length = _num(data, "length", False)
+        if kind == "overlay":
+            if length is not None:
+                raise AppError("定格長度只能用在鏡頭，上方影片片段的定格固定 5 秒")
+            return freeze_overlay(project, _num(data, "t"), _id(data))
+        if length is not None and not MIN_STILL <= length <= MAX_STILL:
+            raise AppError(f"定格長度要在 {MIN_STILL:g} 到 {MAX_STILL:g} 秒之間")
+        return freeze(project, _num(data, "t"), FREEZE_LEN if length is None else length)
     if cmd == "detach":
         return detach(project, _id(data), _num(data, "t", False))
     if cmd == "restore":

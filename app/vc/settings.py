@@ -18,6 +18,7 @@ log = logging.getLogger("vc.settings")
 LOCAL_COMFY_URL = "http://127.0.0.1:8000"
 DEFAULT_NEGATIVE = "blurry, low quality, deformed, distorted, watermark, text, logo, signature, jpeg artifacts"
 MAX_LABEL_COLORS = 12
+MAX_PROJECT_FOLDERS = 200
 MAX_GLOSSARY = 5000  # characters in the caption word list
 TEXT_SCALES = (1, 1.15, 1.3)  # interface text size: standard, large, larger
 NTFY_WHEN = ("all", "failed")
@@ -45,6 +46,8 @@ DEFAULTS: dict[str, Any] = {
             {"value": "#6ea8ff", "label": "藍色"},
             {"value": "#b28cff", "label": "紫色"},
         ],
+        # home page folders projects are filed under (a project's "folder" names one): {id, name}
+        "projectFolders": [],
     },
     "defaults": {
         "width": 1920,
@@ -113,6 +116,7 @@ _TOP_LEVEL = set(DEFAULTS) - {"version"}
 _ROUTE_ID = re.compile(r"^[A-Za-z0-9_-]{1,12}$")
 _SERVER_ID = re.compile(r"^[a-z0-9_-]{1,32}$")
 _HEX = re.compile(r"^#[0-9a-f]{6}$")
+_FOLDER_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
 def _label_colors(raw: Any) -> list[dict]:
@@ -125,8 +129,20 @@ def _label_colors(raw: Any) -> list[dict]:
     return picked[:MAX_LABEL_COLORS]
 
 
+def _project_folders(raw: Any) -> list[dict]:
+    """Keep the well-formed folders, like _label_colors: a bad entry is dropped, not fatal."""
+    picked: list[dict] = []
+    for f in raw if isinstance(raw, list) else []:
+        fid = str(f.get("id") or "") if isinstance(f, dict) else ""
+        name = str(f.get("name") or "").strip()[:60] if isinstance(f, dict) else ""
+        if _FOLDER_ID.match(fid) and name and all(x["id"] != fid for x in picked):
+            picked.append({"id": fid, "name": name})
+    return picked[:MAX_PROJECT_FOLDERS]
+
+
 def _validate(cfg: dict) -> None:
     cfg["ui"]["labelColors"] = _label_colors(cfg["ui"].get("labelColors"))
+    cfg["ui"]["projectFolders"] = _project_folders(cfg["ui"].get("projectFolders"))
     scale = cfg["ui"].get("textScale")
     if isinstance(scale, bool) or scale not in TEXT_SCALES:
         cfg["ui"]["textScale"] = 1

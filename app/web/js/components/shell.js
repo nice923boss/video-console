@@ -1,7 +1,7 @@
 // App frame: the navigation rail on the left, the top bar and the status bar.
 import { html, useMemo } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
-import { navigate, openProject, undo, redo, updateProject, saveSettings, revealInFolder } from "../lib/actions.js";
+import { navigate, openProject, undo, redo, updateProject, saveSettings, revealInFolder, duplicateProject } from "../lib/actions.js";
 import { fmtTime, fmtBytes } from "../lib/format.js";
 import { buildSequence, sequenceDuration } from "../lib/sequence.js";
 import { useTheme } from "../lib/theme.js";
@@ -10,6 +10,7 @@ import { setWatch } from "../lib/watch.js";
 import { Icon } from "./icons.js";
 import { Dot, Keys, Spinner, Button, IconButton } from "./ui.js";
 import { openMenu, promptDialog } from "./overlay.js";
+import { openRevisions } from "../dialogs/revisions-dialog.js";
 
 export const VIEWS = [
   { id: "home", label: "專案", icon: "home" },
@@ -104,6 +105,7 @@ function projectMenu(e, { project, projects, commands }) {
     })),
     recent.length && { divider: true },
     project && { label: "重新命名專案…", icon: "pencil", onClick: rename },
+    project && { label: "建立副本…", icon: "copy", onClick: () => duplicateProject(project.id) },
     project && { label: "開啟專案資料夾", icon: "folder-open", onClick: () => revealInFolder() },
     { label: "所有專案", icon: "home", onClick: () => navigate("home") },
     { label: "新增專案…", icon: "plus", onClick: commands.newProject },
@@ -172,6 +174,8 @@ export function TopBar({ commands }) {
           title=${u.redo ? `重做：${u.redoLabel || "下一步"}${keyHint("app.redo")}` : "沒有可以重做的步驟"} />
       </div>`}
       <${QueueChip} />
+      ${project && view !== "home" && !watch && html`<${Button} icon="message" onClick=${openRevisions}
+        title="載入客戶從審稿頁回傳的 ZIP，逐條審核、套用">修改意見<//>`}
       ${project && view !== "home" && !watch && html`<${Button} kind="primary" icon="film" onClick=${commands.export}>輸出影片<//>`}
     </div>
   </header>`;

@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__｜審稿</title>
+<style>__STYLE__</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-title">
+    <h1>__TITLE__</h1>
+    <div class="dim">__META_LINE__</div>
+  </div>
+  <details class="how">
+    <summary>怎麼使用</summary>
+    <ol>
+      <li>播放影片，看到要改的地方就暫停，可以用「上一格」「下一格」對準畫面。</li>
+      <li>按「在這一格加意見」，在畫面上拉出框線或箭頭、點一下放文字，再寫下要怎麼改。</li>
+      <li>想放進自己的圖片或影片，按「插入圖片」或「插入影片」，素材會從這一格開始播，後面的畫面往後移。</li>
+      <li>全部寫完，填上您的稱呼，按「打包回傳」，把下載的 ZIP 檔傳給製作方。</li>
+    </ol>
+    <p class="dim">寫到一半關掉也沒關係，用同一台電腦、同一個瀏覽器再打開這個檔案會接著寫。</p>
+  </details>
+</header>
+<div id="banner" class="banner" role="status" hidden></div>
+<main class="layout">
+  <section class="stage-col">
+    <div class="stage" id="stage">
+      <video id="video" src="__VIDEO__" preload="auto" playsinline></video>
+      <svg id="ink" class="ink" viewBox="__VIEWBOX__" preserveAspectRatio="none" aria-hidden="true"></svg>
+      <div id="stage-msg" class="stage-msg" hidden></div>
+    </div>
+    <div class="scrub">
+      <input type="range" id="scrub" min="0" max="1" step="0.001" value="0" aria-label="播放位置">
+      <div id="markers" class="markers"></div>
+    </div>
+    <div class="transport">
+      <button type="button" id="play" class="btn">播放</button>
+      <button type="button" id="prev" class="btn" title="上一格（←）">上一格</button>
+      <button type="button" id="next" class="btn" title="下一格（→）">下一格</button>
+      <span id="clock" class="clock">00:00.00</span>
+      <span id="shot-now" class="shot-now dim"></span>
+    </div>
+    <div class="actions">
+      <button type="button" id="add-note" class="btn primary">在這一格加意見</button>
+      <button type="button" id="add-image" class="btn">插入圖片</button>
+      <button type="button" id="add-video" class="btn">插入影片</button>
+      <input type="file" id="pick-image" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif" hidden>
+      <input type="file" id="pick-video" accept=".mp4,.webm,.mov,.mkv,.m4v,.avi" hidden>
+    </div>
+    <section id="editor" class="editor" hidden>
+      <div class="ed-head"><b id="ed-title"></b><span id="ed-where" class="dim"></span></div>
+      <div id="ed-tools" class="ed-tools">
+        <span class="dim">在畫面上標出位置：</span>
+        <button type="button" class="btn tool" data-tool="rect">框線</button>
+        <button type="button" class="btn tool" data-tool="arrow">箭頭</button>
+        <button type="button" class="btn tool" data-tool="text">文字</button>
+        <button type="button" id="ed-undo" class="btn ghost">復原一筆</button>
+        <button type="button" id="ed-clear" class="btn ghost">清除標註</button>
+      </div>
+      <div id="ed-insert" class="ed-insert" hidden>
+        <div id="ed-thumb" class="ed-thumb"></div>
+        <div class="ed-file">
+          <b id="ed-file-name"></b>
+          <span id="ed-file-meta" class="dim"></span>
+          <label class="inline">播放秒數 <input type="number" id="ed-dur" min="0.5" max="600" step="0.5"></label>
+          <button type="button" id="ed-repick" class="btn ghost">換一個檔案</button>
+        </div>
+      </div>
+      <label for="ed-text" id="ed-text-label">說明</label>
+      <textarea id="ed-text" rows="3" maxlength="2000"></textarea>
+      <div class="ed-actions">
+        <button type="button" id="ed-delete" class="btn danger">刪除這則</button>
+        <span class="grow"></span>
+        <button type="button" id="ed-cancel" class="btn">取消</button>
+        <button type="button" id="ed-save" class="btn primary">儲存</button>
+      </div>
+    </section>
+  </section>
+  <aside class="side">
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab is-on" data-tab="items" role="tab">修改意見 <span id="items-count" class="count">0</span></button>
+      <button type="button" class="tab" data-tab="shots" role="tab">鏡頭</button>
+    </div>
+    <ol id="items" class="list"></ol>
+    <ol id="shots" class="list" hidden></ol>
+    <div class="send">
+      <label for="by">您的稱呼（必填）</label>
+      <input id="by" maxlength="60" autocomplete="name">
+      <label for="note">整體意見</label>
+      <textarea id="note" rows="3" maxlength="2000" placeholder="不屬於某一格的意見，例如節奏、配樂、片長"></textarea>
+      <p id="draft-state" class="dim small"></p>
+      <button type="button" id="pack" class="btn primary wide">打包回傳</button>
+      <p id="pack-state" class="small" hidden></p>
+    </div>
+  </aside>
+</main>
+<script type="application/json" id="vc-meta">__META_JSON__</script>
+<script>__SCRIPT__</script>
+</body>
+</html>

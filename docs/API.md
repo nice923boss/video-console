@@ -64,6 +64,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用）；`musicOrder` 是音樂軌由上到下的代號（片段的 `track`，沒有 `track` 的用片段 id），沒列到的排在後面，只影響顯示 |
 | `markers` | 時間軸標記陣列 `{id, start, color, name}`，`start` 是序列秒數；color 可用 `blue`、`red`、`orange`、`yellow`、`green`、`purple` |
 | `review` | 整體的客戶意見，格式同鏡頭的 `review`；客戶寫的整體意見與已刪除鏡頭的意見放在這裡，用 `project.update` 的 `patch.review` 整組取代 |
+| `folder` | 首頁的專案資料夾代號（設定 `ui.projectFolders` 的 `{id, name}` 之一，最多 40 字），`""` 是不放資料夾；代號不在設定裡（資料夾已刪除）時顯示在最上層。用 `project.update` 的 `patch.folder` 修改 |
 | `media` | 素材庫。`tags` 是標籤陣列（每個最多 30 字、每個素材最多 20 個，重複的只留一個），用 `media.update` 的 `patch.tags` 整組取代 |
 
 鏡頭常用欄位：
@@ -163,7 +164,7 @@ POST /api/projects/{pid}/ops
 | `captionTrack.add` | `{"track": {"id": "ct_...", "name": "English", "hidden": false}, "index": 1}`：新增字幕軌，`index` 不給時加在最下面；名稱 40 字內 |
 | `captionTrack.update` | `{"id": "ct_...", "patch": {"name": "...", "hidden": true}}` |
 | `captionTrack.delete` | `{"id": "ct_..."}`：連同軌道上的字幕一起刪除，復原時一起回來 |
-| `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks", "review"}}` |
+| `project.update` | `{"patch": {"name", "notes", "settings", "style", "tracks", "review", "folder"}}` |
 | `batch` | `{"op": "batch", "ops": [...]}`：多個 op 包成一組 |
 | `linked` | `{"op": "linked", "ops": [...]}`：鏡頭變動時字幕、配音、上層畫面跟著移動；加 `"shift": false` 只收起、放回，不平移 |
 
@@ -248,7 +249,7 @@ POST /api/projects/{pid}/edit
 | `split` | `t`，可選 `type`、`id` | 在 `t` 切開片段；關鍵幀分到兩段，切點補一個關鍵幀保持值不變 | 後段 |
 | `splitAll` | `t` | 把 `t` 經過的每一軌一起切開 | |
 | `trim` | `t`、`side`（`start` 或 `end`），可選 `type`、`id` | `start` 刪掉 `t` 之前的部分，`end` 刪掉之後的部分；畫面軌後面的鏡頭往前補 | |
-| `freeze` | `t`，可選 `type`（`shot` 或 `overlay`）、`id` | 在 `t` 切開影片鏡頭，中間插 5 秒靜止畫面，並送出 `lastframe` 工作擷取那一格（回傳的 `job`）；`t` 在鏡頭頭尾時定格加在前面或後面。`type` 為 `overlay`（上方影片片段）時專案先不變，只送出 `lastframe` 工作；工作擷取那一格後，圖片加入素材庫、片段在 `t` 切開、後段往後移 5 秒、中間插入定格，算一個復原步驟。定格取 `t` 當下的位置、大小、透明度，不帶關鍵幀 | 定格鏡頭（`overlay` 時沒有） |
+| `freeze` | `t`，可選 `type`（`shot` 或 `overlay`）、`id`、`length` | 在 `t` 切開影片鏡頭，中間插靜止畫面（預設 5 秒，`length` 指定秒數，0.2 到 600），並送出 `lastframe` 工作擷取那一格（回傳的 `job`）；`t` 在鏡頭頭尾時定格加在前面或後面。`type` 為 `overlay`（上方影片片段）時專案先不變，只送出 `lastframe` 工作；工作擷取那一格後，圖片加入素材庫、片段在 `t` 切開、後段往後移 5 秒、中間插入定格，算一個復原步驟（固定 5 秒，不接受 `length`）。定格取 `t` 當下的位置、大小、透明度，不帶關鍵幀 | 定格鏡頭（`overlay` 時沒有） |
 | `detach` | `id` 或 `t` | 把鏡頭原聲拆成音訊片段，鏡頭改成無聲 | 新的音訊片段 |
 | `restore` | `id`（鏡頭或它的原聲片段） | 刪掉原聲片段，鏡頭恢復有聲 | |
 | `reverse` | `id` 或 `t` | 第一次送出 `reverse` 工作產生倒放影片（不改專案，回傳 `job`）；已有倒放版本時在正放、倒放之間切換，修剪範圍跟著鏡像 | |
@@ -441,6 +442,8 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 
 輸出視窗的平台預設組（YouTube、Shorts、Reels、LINE）就是換算成 `size` 與 `maxrate`，選擇記在設定 `export.preset`（`""`、`youtube`、`shorts`、`reels`、`line`）。沒選平台時的「輸出尺寸」記在 `export.resolution`：`""`（專案尺寸）、`1080`、`2160`（短邊像素，和專案同比例）。
 
+客戶審稿包：payload 加 `"review": true`（`format` 只能是 `mp4`，其他回 400）。影片輸出到匯出資料夾裡的新資料夾 `<專案>_審稿_<日期時間>`，旁邊寫入審稿網頁 `審稿.html`（vc/review_pack.py，頁面本身在 `app/vc/review_kit/`），輸出當下的鏡頭表存在專案的 `reviews/<id>.json`，回傳的修改意見靠它對回鏡頭。完成時 `result` 多一個 `review: {"id", "folder", "page"}`。
+
 首頁的「批次輸出」就是對每個勾選的專案各送一個 `export` 工作（`POST /api/jobs/batch`），輸出通道一次跑一個。
 
 輸出前可先 `GET /api/projects/{pid}/export-check`，回傳 `{"duration", "empty", "missing", "disabled", "missingAudio", "missingOverlays", "audioPastEnd", "captionsPastEnd", "videoHidden"}`：`empty`、`missing`、`disabled` 是鏡頭清單的編號（沒有畫面、檔案不見、停用；隱藏畫面或整段被滿版上層片段蓋住的鏡頭看不到文字卡，不列入 `empty`、`missing`），`missingAudio`、`missingOverlays` 是不見的檔名，`...PastEnd` 是超出影片結尾、會被切掉的數量。只列出問題，不會擋下輸出。
@@ -487,7 +490,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/import?name=x.zip` | 匯入打包的 ZIP（本文為檔案） |
 | GET／DELETE | `/api/projects/{pid}` | 讀取／移到垃圾桶（有工作時 409）。DELETE 加 `?exports=1` 一併刪掉匯出資料夾裡這個專案輸出的檔，回 `{"removedExports", "exportsInUse"}`（被其他程式開著刪不掉的檔數），這些檔無法從垃圾桶還原 |
 | POST | `/api/projects/{pid}/open` | 設為最近開啟的專案 |
-| POST | `/api/projects/{pid}/duplicate` | 複製專案，回傳 `{"project": {...}}`，鏡頭與字幕代號和原專案相同 |
+| POST | `/api/projects/{pid}/duplicate` | 複製專案 `{"name": "第一版交稿"}`（可省略，最多 120 字，預設原名加「（副本）」），回傳 `{"project": {...}}`，鏡頭與字幕代號和原專案相同，`folder` 與原專案相同；輸出檔、版本紀錄與快取不複製 |
 | POST | `/api/projects/{pid}/ops` | 修改（第 3 節） |
 | GET | `/api/projects/{pid}/timeline` | 時間軸位置（3.7 節） |
 | POST | `/api/projects/{pid}/edit` | 剪輯指令（3.7 節） |
@@ -513,6 +516,15 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
 | GET | `/api/projects/{pid}/review.html` | 客戶審稿網頁（SB-13）：序列中每個鏡頭的畫面（data: URI，單檔可離線開啟）、秒數、提示詞與字幕，以附件下載（檔名 `<專案>_審稿.html`）。客戶在頁面留言後下載 `{"vc": "review-comments", "version": 1, "project", "name", "by", "at", "note", "shots": [{"id", "no", "name", "text"}]}` 的 .json 檔 |
 | POST | `/api/projects/{pid}/review` | 匯入審稿意見檔（body 是 .json 原始內容，最多 2 MB，可有 BOM）：鏡頭意見加到該鏡頭的 `review`，`note` 與已刪除鏡頭的意見加到專案的 `review`，整批一個 undo 步驟（標籤「匯入審稿意見：<留言者>」）。回 `{"rev", "by", "shots", "general", "missing", "duplicate"}`（`duplicate` 是留言者、時間、文字都相同而略過的則數）。不是意見檔、屬於別的專案、全部已匯入過或沒有任何意見時回 400 |
+| GET | `/api/projects/{pid}/revisions` | 已載入的修改意見輪次（客戶從審稿包回傳的 ZIP），新的在前，不含意見內容：`{"rounds": [{"id", "review", "by", "at", "note", "loaded", "source", "count", "decided", "done", ...}]}`，`loaded` 是 epoch 秒。輪次存在專案的 `revisions/<rid>/`（`round.json` 加 `附件/`），建立副本時一起複製 |
+| POST | `/api/projects/{pid}/revisions` | 載入客戶回傳的 ZIP（body 是 ZIP 原始內容，最多 4 GB，`?name=` 檔名，要是 .zip）。ZIP 裡要有審稿頁產生的 `修改意見.json`（`"vc": "review-comments"`），附件在 `附件/`；ZIP 檔名可以是 UTF-8 或 CP950。回 `{"round": {...}}`。屬於別的專案、同一份已載入過回 409 |
+| POST | `/api/projects/{pid}/revisions/pick` | 用系統視窗選 ZIP 解開後的資料夾載入（只限 Windows，其他系統回 501），取消時回 `{"round": null}` |
+| GET | `/api/projects/{pid}/revisions/{rid}` | 一輪的完整內容 `{"round": {..., "items": [...]}}`。每條意見 `{id, kind, text, t, frame, shot, no, shotName, offset, marks, decision, extra, status, result}`：`kind` 是 `general`（整體意見，`id` 為 `all`、`t` 為 `null`）、`note`（文字意見）或 `insert`（插入素材，另有 `insert: {type, name, duration, file, size}`，`file` 為 `null` 時附件遺失）；`t` 是審稿影片秒數，`shot`、`offset` 是審稿當下的鏡頭與鏡頭內秒數；`marks` 是 `{type: "rect", x, y, w, h}`、`{type: "arrow", x1, y1, x2, y2}`、`{type: "text", x, y, text}`，座標是畫面寬高的比例 0~1；`decision` 是 `agree`、`tweak`、`skip` 或 `null`；`status` 是 `pending`、`done`、`manual`、`failed` |
+| DELETE | `/api/projects/{pid}/revisions/{rid}` | 移除這一輪（連同附件），不影響已套用的修改 |
+| GET | `/api/projects/{pid}/revisions/{rid}/video` | 這一輪對應的審稿影片（支援 Range）；審稿包被移動或刪除時 404 |
+| GET | `/api/projects/{pid}/revisions/{rid}/file` | 一個附件，`?path=附件/<檔名>` |
+| PATCH | `/api/projects/{pid}/revisions/{rid}/items/{cid}` | 記錄決定 `{"decision"?, "extra"?}`（`extra` 是微調的補充指示，最多 4000 字），回 `{"item"}`。已套用的回 409；附件遺失的插入意見不能選 `agree`、`tweak` |
+| POST | `/api/projects/{pid}/revisions/{rid}/items/{cid}/apply` | 套用一條已選 `agree` 或 `tweak` 的意見，回 `{"item"}`（`status`、`result`、`applied`）。插入素材：在那一格切開鏡頭、插入空白鏡頭（`shotId`），附件複製進專案後送 `ingest` 工作（`job`），整段一個 undo 步驟；鏡頭審稿後被刪除或移出序列時 `status` 為 `manual`。文字意見：交給 AI 助理（同 `/api/projects/{pid}/chat`，要先開啟文字模型），請求會等到模型做完；助理回覆以「需人工處理」開頭或專案沒有變更時 `manual`，用完步驟上限或被停止時 `failed`，否則 `done`（`steps` 是助理呼叫工具的次數）。`manual`、`failed` 時把助理這次留下的復原步驟從新到舊復原，`result` 後面註明「已復原」，最上面一步不是助理的（中途有人改了專案）就停下並註明沒能全部復原。沒選同意或微調回 400，已套用回 409 |
 | POST | `/api/projects/{pid}/reveal` | 在檔案總管開啟專案資料夾 |
 | GET | `/api/projects/{pid}/usage` | 檔案使用量 `{"used", "unused", "orphans"}`（位元組；`orphans` 是沒用到的檔案相對路徑，含過期的暫存與中斷存檔留下的檔） |
 | POST | `/api/projects/{pid}/purge` | 刪除 `orphans` 並清空復原堆疊，回 `{"freed"}` |
@@ -561,9 +573,10 @@ print(out["reply"])
 | `messages` | 對話紀錄 `[{"role": "user" 或 "assistant", "content"}]`，最後一則要是使用者的話。只取最後 20 則，每則前 4000 字 |
 | `attachment` | 選填 `{"name", "text"}`：附加的文字（30 萬字內，Word 檔先用 `/api/script/docx` 轉文字）。模型會看到開頭 1500 字，`import_bilingual` 不給 `text` 時用整份附件 |
 
-回應 `{"id", "reply", "steps", "stopped"}`：
+回應 `{"id", "reply", "steps", "stopped", "made"}`：
 
 - `reply` 是模型最後的回覆。`steps` 是這一輪執行過的工具 `[{"tool", "args", "ok", "error"?, "job"?}]`，`job` 是工具送出的背景工作 id。
+- `made` 是這一輪留在專案上的復原步驟標籤（舊到新，助理自己復原掉的不算）。
 - `stopped`：`null` 正常結束；`"cancel"` 被停止；`"limit"` 已用完 12 輪模型呼叫。
 - 請求會等到這一輪做完才回應，慢的模型可能要好幾分鐘，請把逾時拉長；進度可聽 SSE 的 `chat` 事件。
 - 錯誤：專案不存在 404；文字模型沒開 409；模型連不上、金鑰錯誤、回傳格式不對 502；附件太長 413；`messages` 格式不對 400。
@@ -575,7 +588,7 @@ print(out["reply"])
 | `project_info` | 專案名稱、尺寸、長度、鏡頭數、每條字幕軌的字幕數、字幕樣式、最近一個復原步驟 |
 | `timeline` | 鏡頭與其他軌道的片段、標記（可用 `from`、`to` 限定範圍） |
 | `list_captions` | 字幕（可指定軌道、範圍，一次最多 200 則，用 `offset` 翻頁） |
-| `apply_ops` | 送一批 ops（第 3 節），一個復原步驟，標籤自動加上「AI 助理：」 |
+| `apply_ops` | 送一批 ops（第 3 節），一個復原步驟，標籤自動加上「AI 助理：」。含 `shot.*` 時整批包成 `linked`，字幕與聲音跟著畫面移動。對影片鏡頭改 `duration` 會回錯誤（影片鏡頭長度由修剪範圍決定，請改用 `edit` 的 `trim`） |
 | `edit` | 一個剪輯指令（3.7 節） |
 | `import_bilingual` | 匯入中英對照（6.1 節） |
 | `align_captions`、`transcribe` | 送出語音對齊、語音轉字幕工作 |

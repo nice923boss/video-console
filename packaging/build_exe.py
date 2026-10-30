@@ -5,7 +5,8 @@
 
 The app is standard library plus numpy (降噪 / 去回音 in vc/voiceclean.py, which PyInstaller finds by itself), so
 it needs no hidden imports; only the web UI, the built-in
-ComfyUI workflow templates, the model menus (vc/providers/model_lists.json) and the tool versions (vc/deps.json) are added as data. ffmpeg and Video2X are not bundled: the settings page
+ComfyUI workflow templates, the model menus (vc/providers/model_lists.json), the tool versions (vc/deps.json) and the client review page
+(vc/review_kit) are added as data. ffmpeg and Video2X are not bundled: the settings page
 installs them into data/tools on first use.
 """
 from __future__ import annotations
@@ -43,6 +44,7 @@ def build() -> Path:
         "--add-data", f"{stamp};vc",
         "--add-data", f"{APP / 'vc' / 'providers' / 'model_lists.json'};vc/providers",
         "--add-data", f"{APP / 'vc' / 'deps.json'};vc",
+        "--add-data", f"{APP / 'vc' / 'review_kit'};vc/review_kit",
         "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
         str(APP / "main.py"),
     ], check=True)

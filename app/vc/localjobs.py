@@ -11,11 +11,12 @@ from typing import Any, Callable
 
 from .edits import freeze_overlay, track_busy
 from .export import AUDIO_CODECS, export_options, render
-from .exportdir import ensure_root, export_root, record_export
+from .exportdir import ensure_root, export_root, record_export, unique_path
 from .jobs import JobControl
 from .media import ALPHA_DECODERS, KENBURNS, KENBURNS_LABELS, Media
 from .opfields import new_overlay, valid_id
 from .package import build_package
+from .review_pack import folder_name, write_pack
 from .sequence import VOICE_TRACK, build_sequence
 from .settings import SettingsStore
 from .store import ProjectStore
@@ -456,12 +457,15 @@ class LocalJobs:
             raise AppError("不支援的影片編碼器")
         if (overrides.get("format") or "mp4") not in ("mp4", *AUDIO_CODECS):
             raise AppError("不支援的輸出格式")
+        review = bool(payload.get("review"))
+        if review and (overrides.get("format") or "mp4") != "mp4":
+            raise AppError("審稿包只能輸出 MP4 影片")
         opts = export_options(project, self._settings.section("export"), overrides)
         if not build_sequence(project):
             raise AppError("序列裡沒有任何鏡頭可以輸出（請確認鏡頭有勾選「放入序列」）")
-        what = "音訊" if opts["format"] in AUDIO_CODECS else "影片"
+        what = "審稿包" if review else "音訊" if opts["format"] in AUDIO_CODECS else "影片"
         return {"title": f"輸出{what}：{project['name']}", "lane": "local:export", "shotId": None,
-                "payload": {"options": opts}}
+                "payload": {"options": opts, **({"review": True} if review else {})}}
 
     def _run_export(self, ctl: JobControl, work: Path) -> dict:
         media = self._media()
@@ -472,11 +476,26 @@ class LocalJobs:
             pref = self._settings.section("ffmpeg").get("encoder") or "auto"
         ctl.progress(0.0, "準備輸出")
         pdir = self._store.project_dir(ctl.pid)
-        result = render(media, self._store.get(ctl.pid), pdir, opts, pref,
-                        on_progress=lambda f: ctl.progress(f, "輸出音訊中" if opts.get("format") in AUDIO_CODECS
-                                                           else "輸出影片中"), cancelled=ctl.cancelled,
-                        out_dir=self._export_root())
+        # One snapshot for both the video and a review page's shot table, so the two always agree.
+        project = self._store.get(ctl.pid)
+        out_dir = self._export_root()
+        if ctl.payload.get("review"):
+            out_dir = unique_path(out_dir, folder_name(project))
+            out_dir.mkdir()
+        try:
+            result = render(media, project, pdir, opts, pref,
+                            on_progress=lambda f: ctl.progress(f, "輸出音訊中" if opts.get("format") in AUDIO_CODECS
+                                                               else "輸出影片中"), cancelled=ctl.cancelled,
+                            out_dir=out_dir)
+        except BaseException:
+            if ctl.payload.get("review") and not any(out_dir.iterdir()):
+                out_dir.rmdir()
+            raise
         record_export(pdir, pdir / result["file"])
+        review = None
+        if ctl.payload.get("review"):
+            snap = write_pack(project, pdir, out_dir, pdir / result["file"], result["duration"], new_id("r"))
+            review = {"id": snap["id"], "folder": snap["folder"], "page": snap["page"]}
         if result["missing"]:
             ctl.note(f"有 {result['missing']} 個鏡頭的畫面檔案遺失，已用文字卡代替")
         if result["empty"]:
@@ -487,6 +506,9 @@ class LocalJobs:
         elif loud:
             ctl.note(f"響度從 {loud['measured']:g} 調整到 {loud['target']:g} LUFS"
                      + ("" if loud["linear"] else "（峰值太高，部分段落經過壓縮）"))
+        if review:
+            return {"file": result["file"], "export": result, "review": review,
+                    "message": f"審稿包完成：{Path(review['folder']).name}"}
         return {"file": result["file"], "export": result, "message": f"輸出完成：{result['name']}"}
 
     def _prepare_package(self, project: dict, shot_id: str | None, payload: dict) -> dict:

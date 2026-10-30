@@ -1,9 +1,9 @@
 // Project home: a hero with quick starts and live status, the project grid and the trash.
 import { html, useState, useEffect, useMemo } from "../lib/h.js";
-import { useStore } from "../lib/store.js";
+import { useStore, getState } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { usePref } from "../lib/prefs.js";
-import { openProject, duplicateProject, deleteProject, updateProject, navigate, pickProjectZip, revealSystemFolder } from "../lib/actions.js";
+import { openProject, duplicateProject, deleteProject, updateProject, navigate, pickProjectZip, revealSystemFolder, saveSettings } from "../lib/actions.js";
 import { fmtDuration, fmtRelTime, fmtDate } from "../lib/format.js";
 import { comfyTone } from "../components/shell.js";
 import { Icon } from "../components/icons.js";
@@ -47,6 +47,72 @@ async function renameProject(p, currentPid) {
   }
 }
 
+// Folders are a home page grouping only: settings ui.projectFolders lists them, a project's "folder" names
+// one (an unknown id, e.g. of a deleted folder, files it back at the top level). One level, no nesting.
+const DRAG_TYPE = "application/x-vc-project";
+const foldersOf = (s) => (s.settings && s.settings.ui && s.settings.ui.projectFolders) || [];
+const folderName = (v) => v.trim().slice(0, 60);
+const notBlank = (v) => (v.trim() ? "" : "名稱不能是空白");
+
+async function createFolder() {
+  const name = await promptDialog({
+    title: "新資料夾", label: "資料夾名稱", confirmLabel: "建立", placeholder: "例如：品牌形象片",
+    hint: "可以把同一支片的不同版本放在一起，例如第一版交稿、第二版交稿", validate: notBlank,
+  });
+  if (!name) return null;
+  const folder = { id: `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, name: folderName(name) };
+  return (await saveSettings({ ui: { projectFolders: [...foldersOf(getState()), folder] } })) ? folder : null;
+}
+
+async function renameFolder(f) {
+  const name = await promptDialog({ title: "重新命名資料夾", label: "資料夾名稱", value: f.name, confirmLabel: "儲存", validate: notBlank });
+  if (!name || folderName(name) === f.name) return;
+  const folders = foldersOf(getState()).map((x) => (x.id === f.id ? { ...x, name: folderName(name) } : x));
+  saveSettings({ ui: { projectFolders: folders } });
+}
+
+async function deleteFolder(f, count) {
+  const ok = await confirmDialog({
+    title: `刪除資料夾「${f.name}」？`, confirmLabel: "刪除資料夾",
+    message: count ? `裡面的 ${count} 個專案會移回「所有專案」，專案本身不會刪除。` : "這個資料夾是空的。",
+  });
+  if (ok) saveSettings({ ui: { projectFolders: foldersOf(getState()).filter((x) => x.id !== f.id) } });
+}
+
+async function moveToFolder(p, folder, currentPid) {
+  if ((p.folder || "") === folder) return;
+  if (p.id === currentPid) {
+    updateProject({ folder }, { label: "移到資料夾" });
+    return;
+  }
+  try {
+    await api.post(`/api/projects/${enc(p.id)}/ops`, { ops: [{ op: "project.update", patch: { folder } }], undoable: false });
+  } catch (err) {
+    toastError(err, "無法移動專案");
+  }
+}
+
+function folderPicker(at, p, currentPid) {
+  const folders = foldersOf(getState());
+  const here = folders.some((f) => f.id === p.folder) ? p.folder : "";
+  openMenu(at, [
+    { header: "移到資料夾" },
+    ...folders.map((f) => ({ label: f.name, checked: f.id === here, onClick: () => moveToFolder(p, f.id, currentPid) })),
+    folders.length > 0 && { divider: true },
+    { label: "不放資料夾", checked: !here, onClick: () => moveToFolder(p, "", currentPid) },
+    { label: "新資料夾…", icon: "folder-plus", onClick: () => createFolder().then((f) => f && moveToFolder(p, f.id, currentPid)) },
+  ]);
+}
+
+function folderMenu(e, f, count) {
+  e.preventDefault();
+  e.stopPropagation();
+  openMenu(e, [
+    { label: "重新命名…", icon: "pencil", onClick: () => renameFolder(f) },
+    { label: "刪除資料夾", icon: "trash", danger: true, onClick: () => deleteFolder(f, count) },
+  ]);
+}
+
 // Packaging works on the open project, so make this one current (staying on the home page) first.
 async function exportProject(pid) {
   if (await openProject(pid, "home")) openExportDialog("package", { fullBackup: true });
@@ -55,12 +121,16 @@ async function exportProject(pid) {
 function projectMenu(e, p, currentPid) {
   e.preventDefault();
   e.stopPropagation();
+  // the folder list opens as a second menu where this one was, once this one has closed
+  const r = e.type === "contextmenu" ? null : e.currentTarget.getBoundingClientRect();
+  const at = r ? { x: r.left, y: r.bottom + 4 } : { x: e.clientX, y: e.clientY };
   openMenu(e, [
     { label: "開啟", icon: "folder-open", onClick: () => openProject(p.id) },
     { label: "開啟剪輯頁", icon: "scissors", onClick: () => openProject(p.id, "edit") },
     { divider: true },
     { label: "重新命名…", icon: "pencil", onClick: () => renameProject(p, currentPid) },
-    { label: "建立副本", icon: "copy", onClick: () => duplicateProject(p.id) },
+    { label: "建立副本…", icon: "copy", onClick: () => duplicateProject(p.id) },
+    { label: "移到資料夾…", icon: "folder", onClick: () => folderPicker(at, p, currentPid) },
     { label: "匯出專案…", icon: "download", onClick: () => exportProject(p.id) },
     { divider: true },
     { label: "移到垃圾桶", icon: "trash", danger: true, onClick: () => deleteProject(p.id, p.name) },
@@ -123,7 +193,8 @@ function Hero({ projects, jobs, comfy, lastProject }) {
 function ProjectCard({ p, current }) {
   const { width, height } = p.settings || {};
   const ready = (p.videos || 0) + (p.stills || 0);
-  return html`<article class=${`proj-card ${current ? "is-current" : ""}`} tabindex="0" aria-label=${p.name}
+  return html`<article class=${`proj-card ${current ? "is-current" : ""}`} tabindex="0" aria-label=${p.name} draggable="true"
+      onDragStart=${(e) => { e.dataTransfer.setData(DRAG_TYPE, p.id); e.dataTransfer.effectAllowed = "move"; }}
       onClick=${() => openProject(p.id)} onContextMenu=${(e) => projectMenu(e, p, current ? p.id : null)}
       onKeyDown=${(e) => {
         if (e.key === "Enter") openProject(p.id);
@@ -151,6 +222,41 @@ function ProjectCard({ p, current }) {
         <span class="dim" title=${`建立於 ${fmtDate(p.created)}`}>${fmtRelTime(p.updated)}</span>
       </div>
     </div>
+  </article>`;
+}
+
+// A folder: click to open it; drop a project card on it to file the project there.
+function FolderTile({ f, inside, pid, onOpen }) {
+  const [over, setOver] = useState(false);
+  const accepts = (e) => e.dataTransfer && e.dataTransfer.types.includes(DRAG_TYPE);
+  const latest = inside.reduce((t, p) => Math.max(t, p.updated || 0), 0);
+  return html`<article class=${`folder-tile ${over ? "is-over" : ""}`} tabindex="0" aria-label=${`資料夾：${f.name}`}
+      onClick=${onOpen} onContextMenu=${(e) => folderMenu(e, f, inside.length)}
+      onKeyDown=${(e) => {
+        if (e.key === "Enter") onOpen();
+        else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) folderMenu(e, f, inside.length);
+      }}
+      onDragOver=${(e) => {
+        if (!accepts(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setOver(true);
+      }}
+      onDragLeave=${(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOver(false); }}
+      onDrop=${(e) => {
+        setOver(false);
+        if (!accepts(e)) return;
+        e.preventDefault();
+        const p = getState().projects.find((x) => x.id === e.dataTransfer.getData(DRAG_TYPE));
+        if (p) moveToFolder(p, f.id, pid);
+      }}>
+    <span class="folder-icon"><${Icon} name="folder" size=${20} /></span>
+    <span class="folder-body">
+      <b class="folder-name" title=${f.name}>${f.name}</b>
+      <span class="dim">${inside.length} 個專案${latest ? `，${fmtRelTime(latest)}修改` : ""}</span>
+    </span>
+    <${IconButton} icon="more" size=${16} title="資料夾動作" class="proj-more"
+      onClick=${(e) => folderMenu(e, f, inside.length)} />
   </article>`;
 }
 
@@ -218,13 +324,19 @@ export function HomeView() {
     projects: s.projects, jobs: s.jobs, comfy: s.comfy, pid: s.pid,
     lastId: s.settings && s.settings.ui ? s.settings.ui.lastProjectId : null,
   }));
+  const folders = useStore(foldersOf);
   const [sort, setSort] = usePref("vc.home.sort", "recent", (v) => SORT_IDS.includes(v));
   const [query, setQuery] = useState("");
+  const [folderId, setFolderId] = usePref("vc.home.folder", "", (v) => typeof v === "string");
+  const folder = folders.find((f) => f.id === folderId) || null;
+  // a search looks through every folder; otherwise the open folder, or the projects filed in none
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const hit = q ? projects.filter((p) => p.name.toLowerCase().includes(q)) : projects;
+    const known = new Set(folders.map((f) => f.id));
+    const hit = q ? projects.filter((p) => p.name.toLowerCase().includes(q))
+      : projects.filter((p) => (folder ? p.folder === folder.id : !known.has(p.folder)));
     return [...hit].sort(SORTERS[sort]);
-  }, [projects, sort, query]);
+  }, [projects, sort, query, folders, folder]);
   const lastProject = projects.find((p) => p.id === (pid || lastId)) || null;
 
   return html`<div class="view view-home">
@@ -232,7 +344,16 @@ export function HomeView() {
       <${Hero} projects=${projects} jobs=${jobs} comfy=${comfy} lastProject=${lastProject} />
       ${projects.length
         ? html`<div class="home-toolbar">
-            <h2>所有專案<span class="count">${projects.length}</span></h2>
+            ${folder && !query
+              ? html`<h2 class="home-crumbs">
+                  <button type="button" class="crumb" onClick=${() => setFolderId("")} title="回到所有專案">
+                    <${Icon} name="arrow-left" size=${15} />所有專案</button>
+                  <${Icon} name="chevron-right" size=${14} class="dim" />
+                  <span class="crumb-here" title=${folder.name}>${folder.name}</span><span class="count">${list.length}</span>
+                </h2>`
+              : html`<h2>所有專案<span class="count">${projects.length}</span></h2>`}
+            ${!folder && html`<${Button} size="sm" kind="ghost" icon="folder-plus" title="建一個資料夾，把同一支片的不同版本收在一起"
+              onClick=${createFolder}>新資料夾<//>`}
             <${Button} size="sm" kind="ghost" icon="folder-open" title="開啟存放所有專案的資料夾"
               onClick=${() => revealSystemFolder("projects")}>專案資料夾<//>
             <${Button} size="sm" kind="ghost" icon="film" title="開啟所有專案輸出的影片、音訊與 ZIP 所在的資料夾"
@@ -248,11 +369,17 @@ export function HomeView() {
             </label>
             <${Segmented} size="sm" value=${sort} onChange=${setSort} options=${SORTS} />
           </div>
+          ${!query && !folder && folders.length > 0 && html`<div class="folder-grid">
+            ${folders.map((f) => html`<${FolderTile} key=${f.id} f=${f} pid=${pid}
+              inside=${projects.filter((p) => p.folder === f.id)} onOpen=${() => setFolderId(f.id)} />`)}
+          </div>`}
           <div class="proj-grid">
-            ${!query && html`<${NewTile} />`}
+            ${!query && !folder && html`<${NewTile} />`}
             ${list.map((p) => html`<${ProjectCard} key=${p.id} p=${p} current=${p.id === pid} />`)}
           </div>
-          ${query && !list.length && html`<${Empty} icon="search" title="找不到符合的專案">換個關鍵字試試。<//>`}`
+          ${query && !list.length && html`<${Empty} icon="search" title="找不到符合的專案">換個關鍵字試試。<//>`}
+          ${!query && folder && !list.length && html`<${Empty} icon="folder" title="資料夾是空的">
+            在專案的「更多動作」選「移到資料夾…」，或在「所有專案」把專案卡片拖到這個資料夾上。<//>`}`
         : html`<${Empty} icon="clapper" title="還沒有任何專案" class="home-empty"
             actions=${html`<${Button} kind="primary" icon="plus" onClick=${() => openNewProject()}>新增專案<//>
               <${Button} icon="sparkles" onClick=${() => openNewProject({ starter: true })}>從範例開始<//>

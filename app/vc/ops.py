@@ -34,6 +34,9 @@ def _project_update(p: dict, op: dict) -> dict | None:
     if "notes" in patch:
         inverse["notes"] = p.get("notes", "")
         p["notes"] = _str(8000)(patch["notes"])
+    if "folder" in patch:  # the home page folder it is filed under (settings ui.projectFolders); "" = none
+        inverse["folder"] = p.get("folder", "")
+        p["folder"] = _str(40)(patch["folder"])
     if "review" in patch:  # the client's comments on the whole film (review.py)
         inverse["review"] = p.get("review", [])
         p["review"] = _review(patch["review"])

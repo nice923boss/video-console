@@ -1,5 +1,6 @@
 // Export dialog: render the sequence to one MP4 (platform preset, quality, encoder, captions, fades, clip audio,
-// framing) after a pre-export check and with a time estimate, render only its sound to WAV / MP3, or zip the project for hand-off. Quality and caption choices can be kept as the app defaults.
+// framing) after a pre-export check and with a time estimate, render only its sound to WAV / MP3, render a client review
+// package (the MP4 in a folder of its own beside 審稿.html, vc/review_pack.py), or zip the project for hand-off. Quality and caption choices can be kept as the app defaults.
 import { html, useState, useMemo } from "../lib/h.js";
 import { getState } from "../lib/store.js";
 import { saveSettings, updateProject, navigate } from "../lib/actions.js";
@@ -34,6 +35,7 @@ const FIT = [
 const MODES = [
   { id: "video", label: "輸出影片", icon: "film" },
   { id: "audio", label: "輸出音訊", icon: "music" },
+  { id: "review", label: "客戶審稿", icon: "message" },
   { id: "package", label: "打包專案", icon: "package" },
 ];
 const AUDIO_FORMATS = [
@@ -247,6 +249,49 @@ function useAudioForm(project, clips, close) {
   return { body, footer };
 }
 
+// The same MP4 as 輸出影片 with the app's export defaults, in a folder of its own beside the client's review page.
+function useReviewForm(project, clips, close) {
+  const { settings, system } = getState();
+  const defaults = (settings && settings.export) || {};
+  const ffmpegOk = !!(system && system.ffmpeg && system.ffmpeg.available);
+  const hasCaptions = (project.captions || []).some((c) => (c.text || "").trim());
+  const [quality, setQuality] = useState("standard");
+  const [burn, setBurn] = useState(defaults.burnCaptions !== false);
+  const [busy, setBusy] = useState(false);
+  const blocked = !clips.length ? "序列裡沒有任何鏡頭，請確認鏡頭有勾選「放入序列」" : !ffmpegOk ? "找不到 ffmpeg" : "";
+  const submit = async () => {
+    setBusy(true);
+    const job = await submitJob("export", null, { options: { format: "mp4", quality, burnCaptions: burn && hasCaptions },
+      review: true }, { quiet: true });
+    setBusy(false);
+    if (!job) return;
+    queued(job);
+    close(job);
+  };
+  const footer = html`
+    <${ExportFolderNote} class="modal-foot-note" label="審稿資料夾存到" />
+    <${Button} onClick=${() => close(null)}>取消<//>
+    <${Button} kind="primary" icon="message" busy=${busy} disabled=${!!blocked} title=${blocked || undefined}
+      onClick=${submit}>建立審稿包<//>`;
+  const body = html`
+    <p class="dim exp-lede">重新輸出一支 MP4，和客戶審稿網頁「審稿.html」放在同一個新資料夾。把整個資料夾壓縮傳給客戶，客戶用瀏覽器開啟網頁就能：</p>
+    <ul class="exp-contents">
+      <li><${Icon} name="pencil" size=${15} />在指定畫面畫框線、箭頭、寫備註</li>
+      <li><${Icon} name="image" size=${15} />在某一格插入自己的圖片或影片</li>
+      <li><${Icon} name="package" size=${15} />一鍵打包成 ZIP 傳回來</li>
+      <li><${Icon} name="inbox" size=${15} />回來後在「修改意見」逐條審核</li>
+    </ul>
+    ${blocked && html`<div class="note note-warn">
+      <${Icon} name="alert" size=${15} /><span class="note-text">${blocked}</span>
+    </div>`}
+    <${Field} label="畫質" hint="審稿用，標準畫質檔案較小、方便傳送">
+      <${Segmented} value=${quality} onChange=${setQuality} options=${QUALITY} />
+    <//>
+    <${Toggle} checked=${burn && hasCaptions} disabled=${!hasCaptions} onChange=${setBurn} label="把字幕燒進畫面"
+      hint=${hasCaptions ? "客戶看得到字幕，才能對字幕提意見" : "這個專案沒有字幕"} />`;
+  return { body, footer };
+}
+
 function usePackageForm(project, close, fullBackup) {
   const [videos, setVideos] = useState(true);
   const [latest, setLatest] = useState(true);
@@ -286,15 +331,16 @@ function ExportBody({ project, initial, fullBackup, close }) {
   const clips = useMemo(() => buildSequence(project), [project]);
   const video = useVideoForm(project, clips, close);
   const audio = useAudioForm(project, clips, close);
+  const review = useReviewForm(project, clips, close);
   const pack = usePackageForm(project, close, fullBackup);
-  const form = mode === "package" ? pack : mode === "audio" ? audio : video;
+  const form = mode === "package" ? pack : mode === "audio" ? audio : mode === "review" ? review : video;
   return html`<${Modal} title="輸出" width=${600} backdropClose=${false} onClose=${() => close(null)} footer=${form.footer} class="export-dialog">
     <${Tabs} class="exp-modes" value=${mode} tabs=${MODES} onChange=${setMode} />
     ${form.body}
   <//>`;
 }
 
-// mode: "video", "audio" or "package"; fullBackup starts the package as a restorable backup (匯出專案).
+// mode: "video", "audio", "review" or "package"; fullBackup starts the package as a restorable backup (匯出專案).
 // Resolves with the submitted job, or null when canceled.
 export function openExportDialog(mode = "video", { fullBackup = false } = {}) {
   const project = getState().project;
@@ -302,6 +348,6 @@ export function openExportDialog(mode = "video", { fullBackup = false } = {}) {
     toast("請先開啟專案", { level: "warn" });
     return Promise.resolve(null);
   }
-  const initial = ["package", "audio"].includes(mode) ? mode : "video";
+  const initial = ["package", "audio", "review"].includes(mode) ? mode : "video";
   return openModal((close) => html`<${ExportBody} project=${project} initial=${initial} fullBackup=${fullBackup} close=${close} />`);
 }
