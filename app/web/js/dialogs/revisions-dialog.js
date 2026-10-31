@@ -1,12 +1,14 @@
 // Client revision notes (vc/revisions.py): load what the client packed on the review page (a ZIP, or the folder
 // it unpacks to), go through each note on its frame, mark it 同意修改 / 微調 / 不採用, then apply the accepted ones.
-// A picture or clip goes in on a blank shot at its frame; a written note goes to the AI assistant.
+// A picture or clip goes in on a blank shot at its frame, a soundtrack replaces the background music; a written
+// note goes to the AI assistant. Right after loading, the notes can move to a copy so the original stays as it was.
 import { html, useState, useEffect, useRef } from "../lib/h.js";
 import { getState } from "../lib/store.js";
 import { api, request, upload } from "../lib/api.js";
+import { openProject } from "../lib/actions.js";
 import { fmtTime, fmtDateTime } from "../lib/format.js";
 import { openModal, Modal, confirmDialog } from "../components/overlay.js";
-import { Button, Badge, DraftText, Empty, Progress, Segmented, Select, Spinner, Toggle } from "../components/ui.js";
+import { Button, Badge, DraftText, Empty, Progress, Segmented, Select, Spinner } from "../components/ui.js";
 import { toast, toastError } from "../components/toast.js";
 
 const enc = encodeURIComponent;
@@ -23,12 +25,14 @@ const accepted = (item) => (item.decision === "agree" || item.decision === "twea
 
 function kindLabel(item) {
   if (item.kind === "general") return "整體意見";
+  if (item.kind === "music") return "更換配樂";
   if (item.kind === "insert") return item.insert && item.insert.type === "video" ? "插入影片" : "插入圖片";
   return "文字意見";
 }
 
 function where(item) {
   if (item.kind === "general") return "整支影片";
+  if (item.kind === "music") return "整支影片的配樂";
   return `${fmtTime(item.t)}，鏡頭 #${item.no}${item.shotName ? `「${item.shotName}」` : ""}`;
 }
 
@@ -106,26 +110,45 @@ function Attachment({ url, insert }) {
   </div>`;
 }
 
+function MusicFile({ url, music }) {
+  if (!music.file) {
+    return html`<div class="note note-warn"><span class="note-text">配樂檔遺失或格式不正確（${music.name || "未命名"}），請客戶重新傳送。</span></div>`;
+  }
+  return html`<div class="rv-attach">
+    <div class="rv-attach-meta">
+      <b>${music.name}</b>
+      <audio src=${url} controls preload="metadata" />
+      <span>${music.volume == null ? "客戶沒調音量，套用時沿用原本配樂的音量"
+        : `客戶要的音量：${Math.round(music.volume * 100)}%（在審稿頁試聽調好的，套用時照這個音量）`}</span>
+      <span class="dim">套用時換掉原本的配樂：有標「背景音樂」的音軌只換那幾軌，沒標就換掉所有音樂軌，配音與分離的原聲不動。
+        新配樂從 0 秒開始，比影片長的部分在片尾截斷並淡出。</span>
+    </div>
+  </div>`;
+}
+
 function Detail({ base, rid, item, busy, onDecide, onExtra, onApply }) {
   const status = STATUS[item.status];
   const locked = item.status === "done" || busy;
-  const noFile = item.kind === "insert" && !(item.insert && item.insert.file);
+  const file = item.kind === "insert" || item.kind === "music" ? (item[item.kind] || {}).file : "";
+  const noFile = (item.kind === "insert" || item.kind === "music") && !file;
+  const fileUrl = `${base}/${enc(rid)}/file?path=${enc(file || "")}`;
+  const music = item.kind === "music";
   return html`<div class="rv-detail">
     <div class="rv-detail-head">
       <b>${where(item)}</b>
-      <${Badge} tone=${item.kind === "insert" ? "accent" : "neutral"}>${kindLabel(item)}<//>
+      <${Badge} tone=${item.kind === "insert" || music ? "accent" : "neutral"}>${kindLabel(item)}<//>
       ${status && html`<${Badge} tone=${status[0]}>${status[1]}<//>`}
     </div>
-    ${item.kind !== "general" && html`<${Frame} key=${rid} src=${`${base}/${enc(rid)}/video`} t=${item.t} marks=${item.marks} />`}
-    ${item.kind === "insert" && html`<${Attachment} url=${`${base}/${enc(rid)}/file?path=${enc((item.insert && item.insert.file) || "")}`}
-      insert=${item.insert} />`}
+    ${item.kind !== "general" && !music && html`<${Frame} key=${rid} src=${`${base}/${enc(rid)}/video`} t=${item.t} marks=${item.marks} />`}
+    ${item.kind === "insert" && html`<${Attachment} url=${fileUrl} insert=${item.insert} />`}
+    ${music && html`<${MusicFile} url=${fileUrl} music=${item.music} />`}
     <div class="rv-said">
-      <span class="dim">客戶原話</span>
-      <p>${item.text || (item.marks.length ? "（沒有文字，只有畫面標註）" : "（沒有文字）")}</p>
+      <span class="dim">${music ? "客戶的配樂說明（只給你看，套用時不會讀）" : "客戶原話"}</span>
+      <p>${item.text || (item.marks.length ? "（沒有文字，只有畫面標註）" : music ? "（沒有說明）" : "（沒有文字）")}</p>
     </div>
     <div class="rv-decide">
       <${Segmented} value=${item.decision} disabled=${locked}
-        options=${DECISIONS.map((d) => ({ ...d, disabled: noFile && d.value !== "skip" }))}
+        options=${DECISIONS.map((d) => ({ ...d, disabled: (noFile && d.value !== "skip") || (music && d.value === "tweak") }))}
         onChange=${onDecide} />
       ${accepted(item) && html`<${Button} size="sm" icon="sparkles" busy=${busy === item.id} disabled=${!!busy}
         onClick=${onApply}>套用這條<//>`}
@@ -151,7 +174,6 @@ function RevisionsBody({ pid, close }) {
   const [loading, setLoading] = useState("");
   const [busy, setBusy] = useState(null); // the id of the note being applied
   const [run, setRun] = useState(null); // {i, n} while applying the accepted notes
-  const [backup, setBackup] = useState(true);
   const stop = useRef(false);
   useEffect(() => () => { stop.current = true; }, []); // closing the dialog stops after the current note
 
@@ -192,9 +214,37 @@ function RevisionsBody({ pid, close }) {
     }
   };
 
-  const loaded = (r) => {
+  // The copy takes the round along (store.duplicate copies revisions/), and this project drops it, so the
+  // original keeps no trace of the notes.
+  const moveToCopy = async (r) => {
+    const name = `${getState().project.name}（${r.by || "客戶"}修改）`;
+    let project;
+    try {
+      ({ project } = await api.post(`/api/projects/${enc(pid)}/duplicate`, { name }));
+    } catch (err) {
+      toastError(err, "無法建立副本，修改意見留在這個專案");
+      return false;
+    }
+    try {
+      await api.del(`${base}/${enc(r.id)}`);
+    } catch (err) {
+      toastError(err, "副本已建立，但沒能從原專案移除這一輪修改意見");
+    }
+    close(null);
+    if (await openProject(project.id, getState().view)) {
+      toast(`已開啟副本「${project.name}」，修改意見會套用在這裡`, { level: "success" });
+      openRevisions();
+    }
+    return true;
+  };
+  const loaded = async (r) => {
     if (!r) return;
     toast(`已載入 ${r.by || "客戶"} 的修改意見，共 ${r.items.length} 條`, { level: "success" });
+    const copy = await confirmDialog({
+      title: "要複製成新專案再修改嗎？", confirmLabel: "複製新專案", cancelLabel: "直接改這個專案",
+      message: `選「複製新專案」會把「${getState().project.name}」複製一份並開啟，修改意見只套用在副本，原版本保持不變。`,
+    });
+    if (copy && await moveToCopy(r)) return;
     refresh(r.id);
   };
   const loadZip = () => {
@@ -243,23 +293,12 @@ function RevisionsBody({ pid, close }) {
     }
   };
 
-  // Later notes first, so a picture cut in early in the film never moves the place of one after it; the
-  // overall note goes last, on the edited film.
+  // Later notes first, so a picture cut in early in the film never moves the place of one after it; then the
+  // soundtrack, and the overall note last, on the edited film.
   const applyAll = async () => {
-    const queue = round.items.filter(accepted)
-      .sort((a, b) => (b.t ?? -1) - (a.t ?? -1));
+    const order = (i) => i.t ?? (i.kind === "music" ? -1 : -2);
+    const queue = round.items.filter(accepted).sort((a, b) => order(b) - order(a));
     if (!queue.length) return;
-    if (backup) {
-      const name = `${getState().project.name}（套用修改意見前）`;
-      try {
-        await api.post(`/api/projects/${enc(pid)}/duplicate`, { name });
-        toast(`已建立副本「${name}」`, { level: "success" });
-        setBackup(false);
-      } catch (err) {
-        toastError(err, "無法建立副本，沒有套用任何意見");
-        return;
-      }
-    }
     stop.current = false;
     const out = [];
     for (let i = 0; i < queue.length && !stop.current; i += 1) {
@@ -307,12 +346,13 @@ function RevisionsBody({ pid, close }) {
           return html`<li key=${i.id}><button type="button" class=${`rv-row${i.id === cid ? " is-on" : ""}`}
               onClick=${() => setCid(i.id)}>
             <span class="rv-row-head">
-              <b>${i.kind === "general" ? "整體" : fmtTime(i.t)}</b>
+              <b>${i.kind === "general" ? "整體" : i.kind === "music" ? "配樂" : fmtTime(i.t)}</b>
               <span class="dim">${kindLabel(i)}</span>
               ${status ? html`<${Badge} tone=${status[0]}>${status[1]}<//>`
                 : i.decision && html`<${Badge} tone=${i.decision === "skip" ? "neutral" : "accent"}>${DECIDED[i.decision]}<//>`}
             </span>
-            <span class="rv-row-text">${i.text || "（只有標註）"}</span>
+            <span class="rv-row-text">${i.kind === "music" ? (i.music.name || "（未命名）")
+              + (i.music.volume == null ? "" : `，音量 ${Math.round(i.music.volume * 100)}%`) : i.text || "（只有標註）"}</span>
           </button></li>`;
         })}
       </ol>
@@ -326,7 +366,6 @@ function RevisionsBody({ pid, close }) {
       : run ? html`<span class="modal-foot-note rv-run"><${Progress} value=${(run.i - 1) / run.n} />
         正在套用第 ${run.i} / ${run.n} 條（文字意見交給 AI 助理，每條可能要等一會兒）</span>`
       : html`<span class="modal-foot-note dim">${round ? `${undecided} 條還沒決定，${todo} 條待套用` : ""}</span>`}
-    ${round && !run && html`<${Toggle} checked=${backup} onChange=${setBackup} label="套用前先建立副本" />`}
     ${run ? html`<${Button} icon="stop" onClick=${() => { stop.current = true; }}>做完這條就停止<//>`
       : round && html`<${Button} kind="primary" icon="sparkles" disabled=${!todo || !!busy} onClick=${applyAll}>
         套用勾選的意見${todo ? `（${todo}）` : ""}<//>`}

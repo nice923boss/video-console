@@ -28,6 +28,12 @@ body { margin: 0; background: var(--bg); color: var(--ink);
 .ink.drawing { pointer-events: auto; cursor: crosshair; touch-action: none; }
 .ink text { font-family: "Microsoft JhengHei", "Noto Sans TC", "PingFang TC", sans-serif; font-weight: 700;
   paint-order: stroke; }
+/* An insert the client added, shown in place of the video while the preview plays through its frame. */
+.cue { position: absolute; inset: 0; background: var(--frame); cursor: pointer; }
+.cue img, .cue video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cue-tag { position: absolute; left: 10px; top: 10px; max-width: calc(100% - 20px); padding: 2px 8px;
+  border-radius: 4px; color: #fff; background: var(--accent); font-size: 13px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stage-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 24px; color: #fff; background: rgba(0,0,0,.78); text-align: center; font-size: 15px; }
 .scrub { position: relative; margin: 10px 0 2px; }
@@ -93,6 +99,14 @@ textarea { resize: vertical; min-height: 60px; }
 .tag.insert { background: var(--accent); }
 .tag.warn { background: var(--warn); }
 .empty { color: var(--muted); padding: 16px 10px; font-size: 13px; }
+.music { border-top: 1px solid var(--line); padding: 10px 12px; }
+.music-head { display: flex; gap: 8px; align-items: baseline; }
+.music p { margin: 2px 0 6px; }
+.music-file { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.music-file b { overflow-wrap: anywhere; }
+label.inline.music-vol input { flex: 1; width: auto; padding: 0; border: 0; accent-color: var(--accent); }
+.vol-text { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+.music-actions { display: flex; gap: 8px; }
 .send { border-top: 1px solid var(--line); padding: 10px 12px 12px; }
 #pack-state.ok { color: #1c7a3e; }
 #pack-state.err { color: var(--danger); }

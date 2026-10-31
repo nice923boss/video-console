@@ -17,7 +17,8 @@
     <ol>
       <li>播放影片，看到要改的地方就暫停，可以用「上一格」「下一格」對準畫面。</li>
       <li>按「在這一格加意見」，在畫面上拉出框線或箭頭、點一下放文字，再寫下要怎麼改。</li>
-      <li>想放進自己的圖片或影片，按「插入圖片」或「插入影片」，素材會從這一格開始播，後面的畫面往後移。</li>
+      <li>想放進自己的圖片或影片，按「插入圖片」或「插入影片」，素材會從這一格開始播，後面的畫面往後移。按「播放」就能預覽插入後的樣子。</li>
+      <li>想換背景音樂，在右邊「更換配樂」上傳您要的音樂檔，按「播放」試聽，用音量滑桿調到您要的大小。</li>
       <li>全部寫完，填上您的稱呼，按「打包回傳」，把下載的 ZIP 檔傳給製作方。</li>
     </ol>
     <p class="dim">寫到一半關掉也沒關係，用同一台電腦、同一個瀏覽器再打開這個檔案會接著寫。</p>
@@ -29,6 +30,7 @@
     <div class="stage" id="stage">
       <video id="video" src="__VIDEO__" preload="auto" playsinline></video>
       <svg id="ink" class="ink" viewBox="__VIEWBOX__" preserveAspectRatio="none" aria-hidden="true"></svg>
+      <div id="cue" class="cue" hidden></div>
       <div id="stage-msg" class="stage-msg" hidden></div>
     </div>
     <div class="scrub">
@@ -85,11 +87,30 @@
     </div>
     <ol id="items" class="list"></ol>
     <ol id="shots" class="list" hidden></ol>
+    <div class="music">
+      <div class="music-head"><b>更換配樂</b><span class="dim small">選填</span></div>
+      <p id="music-empty" class="dim small">想換掉影片的背景音樂，直接上傳您要的音樂檔，會取代原本的配樂。</p>
+      <div id="music-file" class="music-file" hidden>
+        <b id="music-name"></b>
+        <span id="music-meta" class="dim small"></span>
+        <label class="inline music-vol" for="music-vol">音量
+          <input type="range" id="music-vol" min="0" max="100" step="1" value="100">
+          <span id="music-vol-text" class="vol-text">100%</span></label>
+        <p id="music-hint" class="dim small"></p>
+        <label for="music-text">配樂說明（選填）</label>
+        <textarea id="music-text" rows="2" maxlength="2000" placeholder="例如：曲名、授權來源"></textarea>
+      </div>
+      <div class="music-actions">
+        <button type="button" id="music-pick" class="btn">上傳配樂</button>
+        <button type="button" id="music-remove" class="btn ghost danger" hidden>移除</button>
+      </div>
+      <input type="file" id="pick-music" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" hidden>
+    </div>
     <div class="send">
       <label for="by">您的稱呼（必填）</label>
       <input id="by" maxlength="60" autocomplete="name">
       <label for="note">整體意見</label>
-      <textarea id="note" rows="3" maxlength="2000" placeholder="不屬於某一格的意見，例如節奏、配樂、片長"></textarea>
+      <textarea id="note" rows="3" maxlength="2000" placeholder="不屬於某一格的意見，例如節奏、片長"></textarea>
       <p id="draft-state" class="dim small"></p>
       <button type="button" id="pack" class="btn primary wide">打包回傳</button>
       <p id="pack-state" class="small" hidden></p>

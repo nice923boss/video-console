@@ -14,6 +14,7 @@ from .. import folderpick, revisions
 from ..agent import Agent
 from ..review_pack import load_pack
 from ..server import FileResponse, Request, Router
+from ..takes import IMPORT_DIR, new_media, stage_file
 from ..util import AppError, new_id, now
 
 if TYPE_CHECKING:
@@ -129,7 +130,8 @@ def register(router: Router, app: App) -> None:
     @router.route("POST", "/api/projects/{pid}/revisions/{rid}/items/{cid}/apply")
     def item_apply(req: Request) -> dict:
         """Make the edit for an accepted note. A picture or clip goes in on a blank shot of its own (its import
-        runs as a job); a written note goes to the assistant, which blocks until the model is done."""
+        runs as a job), a soundtrack replaces the background music; a written note goes to the assistant, which
+        blocks until the model is done."""
         pid, rid = req.params["pid"], req.params["rid"]
         item = get_item(get_round(pid, rid), req.params["cid"])
         if item["decision"] not in ("agree", "tweak"):
@@ -137,7 +139,12 @@ def register(router: Router, app: App) -> None:
         if item["status"] == "done":
             raise AppError("這條意見已經套用過了", 409)
         try:
-            out = apply_insert(pid, rid, item) if item["kind"] == "insert" else apply_note(pid, item)
+            if item["kind"] == "insert":
+                out = apply_insert(pid, rid, item)
+            elif item["kind"] == "music":
+                out = apply_music(pid, rid, item)
+            else:
+                out = apply_note(pid, item)
         except AppError as exc:
             out = {"status": "manual" if exc.message == revisions.MOVED else "failed", "result": exc.message}
         except Exception as exc:  # the round keeps a readable reason; the log keeps the trace
@@ -171,6 +178,32 @@ def register(router: Router, app: App) -> None:
                     "result": f"已在 {plan['t']:.2f} 秒插入空白鏡頭，但{what}匯入失敗：{exc.message}"}
         return {"status": "done", "shotId": plan["id"], "job": job["id"],
                 "result": f"已在 {plan['t']:.2f} 秒插入空白鏡頭，{what}「{ins['name']}」在背景匯入中"}
+
+    def apply_music(pid: str, rid: str, item: dict) -> dict:
+        """Staged here, not as an import job, so the swap is one step the user can undo."""
+        pdir = store.project_dir(pid)
+        src = pdir / revisions.ROUNDS / rid / item["music"]["file"]
+        if not src.is_file():
+            raise AppError("找不到客戶的配樂檔（可能已被刪除）")
+        mid = new_id("m")
+        tmp = pdir / "media" / "cache" / f"upload-{mid}{src.suffix.lower()}"
+        tmp.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, tmp)
+        try:
+            staged = stage_file(app.media(), pdir, tmp, IMPORT_DIR, mid)
+        finally:
+            tmp.unlink(missing_ok=True)
+        media = new_media(staged, item["music"]["name"] or src.name, mid)
+        try:
+            with store.locked(pid):
+                plan = revisions.music_plan(store.get(pid), item, media)
+                store.apply(pid, plan["ops"], origin="user", label=plan["label"])
+        except BaseException:
+            for rel in (staged["file"], staged.get("wave")):
+                if rel:
+                    (pdir / rel).unlink(missing_ok=True)
+            raise
+        return {"status": "done", "result": plan["result"]}
 
     def apply_note(pid: str, item: dict) -> dict:
         before = store.get(pid)

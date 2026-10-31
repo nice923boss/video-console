@@ -11,8 +11,9 @@ import re
 import time
 from pathlib import Path
 
+from .duck import speech_rows
 from .export import export_filename
-from .sequence import build_sequence
+from .sequence import VOICE_TRACK, audio_track, build_sequence
 from .storyboard import _esc
 from .util import fmt_seconds, read_json, write_json_atomic
 
@@ -39,6 +40,22 @@ def shot_table(project: dict) -> list[dict]:
     return rows
 
 
+def music_clips(project: dict) -> list[dict]:
+    """The background music, by start: the clips on a row marked 背景音樂, or with none marked, any music row's
+    clips that are not voice. Voice-over lines and a shot's own sound split off to a row are not music. A review
+    package plays the cut without these under a soundtrack the client tries; revisions.music_plan swaps them."""
+    tracks = project.get("tracks") or {}
+    bgm, speech = set(tracks.get("bgmRows") or []), set(speech_rows(tracks))
+
+    def music(clip: dict) -> bool:
+        key = audio_track(clip)
+        if key == VOICE_TRACK or clip.get("shotId") or clip.get("takeId"):
+            return False
+        return key in bgm if bgm else key not in speech and not clip.get("speech")
+
+    return sorted((a for a in project.get("audio") or [] if music(a)), key=lambda a: float(a.get("start") or 0.0))
+
+
 def _kit(name: str) -> str:
     return (KIT / name).read_text(encoding="utf-8")
 
@@ -47,7 +64,8 @@ def render_page(snap: dict, video_name: str, stem: str) -> str:
     settings = {k: snap[k] for k in ("width", "height", "fps")}
     meta = {"vc": "review", "version": 2, "project": snap["project"], "name": snap["name"], "review": snap["id"],
             "exported": snap["exported"], "video": video_name, "duration": snap["duration"], **settings,
-            "file": f"{stem}_修改意見_{{by}}.zip", "shots": snap["shots"]}
+            "file": f"{stem}_修改意見_{{by}}.zip", "shots": snap["shots"], "stem": snap.get("stem"),
+            "musicVolume": snap.get("musicVolume")}
     title = _esc(snap["name"] or "未命名專案")
     line = (f"{len(snap['shots'])} 個鏡頭，總長 {fmt_seconds(snap['duration'])}，"
             f"{snap['exported'].replace('T', ' ')[:16]} 匯出")
@@ -58,21 +76,26 @@ def render_page(snap: dict, video_name: str, stem: str) -> str:
         "__VIEWBOX__": f"0 0 {settings['width']} {settings['height']}",
         "__STYLE__": _kit("page.css"),
         "__META_JSON__": json.dumps(meta, ensure_ascii=False).replace("<", "\\u003c"),
-        "__SCRIPT__": _kit("page.js"),
+        "__SCRIPT__": _kit("zip.js") + _kit("page.js"),
     }
     # One pass, so a project named like a placeholder is not filled in again.
     return _SLOT.sub(lambda m: fills.get(m.group(0), m.group(0)), _kit("page.html"))
 
 
-def write_pack(project: dict, project_dir: Path, folder: Path, video: Path, duration: float, rid: str) -> dict:
+def write_pack(project: dict, project_dir: Path, folder: Path, video: Path, duration: float, rid: str,
+               stem: str | None = None) -> dict:
     """Write 審稿.html next to the exported video and keep the export's shot table in the project. project is
-    the same snapshot the video was rendered from, so the table matches the picture."""
+    the same snapshot the video was rendered from, so the table matches the picture. stem names the sound of the
+    cut without its background music beside the video, which the page plays under a soundtrack the client tries
+    (musicVolume: the music's own volume, where the page's volume slider starts)."""
     settings = project.get("settings") or {}
+    music = music_clips(project)
     snap = {"id": rid, "project": project["id"], "name": project.get("name") or "",
             "exported": time.strftime("%Y-%m-%dT%H:%M:%S"), "folder": str(folder), "page": str(folder / PAGE),
             "video": str(video), "duration": round(float(duration), 3),
             "width": int(settings.get("width") or 1920), "height": int(settings.get("height") or 1080),
-            "fps": settings.get("fps") or 30, "shots": shot_table(project)}
+            "fps": settings.get("fps") or 30, "shots": shot_table(project), "stem": stem,
+            "musicVolume": round(min(1.0, max(0.0, float(music[0].get("volume", 1.0)))), 2) if music else None}
     (folder / PAGE).write_text(render_page(snap, video.name, video.stem), encoding="utf-8")
     write_json_atomic(project_dir / REVIEWS / f"{rid}.json", snap)
     return snap

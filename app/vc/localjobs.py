@@ -16,7 +16,7 @@ from .jobs import JobControl
 from .media import ALPHA_DECODERS, KENBURNS, KENBURNS_LABELS, Media
 from .opfields import new_overlay, valid_id
 from .package import build_package
-from .review_pack import folder_name, write_pack
+from .review_pack import folder_name, music_clips, write_pack
 from .sequence import VOICE_TRACK, build_sequence
 from .settings import SettingsStore
 from .store import ProjectStore
@@ -482,19 +482,28 @@ class LocalJobs:
         if ctl.payload.get("review"):
             out_dir = unique_path(out_dir, folder_name(project))
             out_dir.mkdir()
+        # A review package with background music also gets the cut's sound without it (see _review_stem).
+        music = {a["id"] for a in music_clips(project)} if ctl.payload.get("review") else set()
+        share = 0.9 if music else 1.0
+        label = "輸出音訊中" if opts.get("format") in AUDIO_CODECS else "輸出影片中"
+        result = stem = None
         try:
-            result = render(media, project, pdir, opts, pref,
-                            on_progress=lambda f: ctl.progress(f, "輸出音訊中" if opts.get("format") in AUDIO_CODECS
-                                                               else "輸出影片中"), cancelled=ctl.cancelled,
-                            out_dir=out_dir)
+            result = render(media, project, pdir, opts, pref, on_progress=lambda f: ctl.progress(f * share, label),
+                            cancelled=ctl.cancelled, out_dir=out_dir)
+            if music:
+                stem = self._review_stem(ctl, media, project, pdir, opts, pref, out_dir, music,
+                                         (pdir / result["file"]).stem)
         except BaseException:
-            if ctl.payload.get("review") and not any(out_dir.iterdir()):
-                out_dir.rmdir()
+            if ctl.payload.get("review"):
+                if result:
+                    (pdir / result["file"]).unlink(missing_ok=True)
+                if not any(out_dir.iterdir()):
+                    out_dir.rmdir()
             raise
         record_export(pdir, pdir / result["file"])
         review = None
         if ctl.payload.get("review"):
-            snap = write_pack(project, pdir, out_dir, pdir / result["file"], result["duration"], new_id("r"))
+            snap = write_pack(project, pdir, out_dir, pdir / result["file"], result["duration"], new_id("r"), stem)
             review = {"id": snap["id"], "folder": snap["folder"], "page": snap["page"]}
         if result["missing"]:
             ctl.note(f"有 {result['missing']} 個鏡頭的畫面檔案遺失，已用文字卡代替")
@@ -510,6 +519,26 @@ class LocalJobs:
             return {"file": result["file"], "export": result, "review": review,
                     "message": f"審稿包完成：{Path(review['folder']).name}"}
         return {"file": result["file"], "export": result, "message": f"輸出完成：{result['name']}"}
+
+    def _review_stem(self, ctl: JobControl, media: Media, project: dict, pdir: Path, opts: dict, pref: str,
+                     out_dir: Path, music: set[str], video_stem: str) -> str | None:
+        """The cut's sound without its background music, <video>_無配樂.mp3 beside the review video, so the page
+        can play a soundtrack the client tries under the voice and the shots' own sound. Not loudness-matched, so
+        it keeps the mix's balance against the new music. None when it fails: the page then plays the new music
+        over the video's own sound, old music and all."""
+        quiet = {**project, "audio": [a for a in project.get("audio") or [] if a["id"] not in music]}
+        try:
+            out = render(media, quiet, pdir, {**opts, "format": "mp3", "loudness": None}, pref,
+                         on_progress=lambda f: ctl.progress(0.9 + f * 0.1, "輸出去掉配樂的音軌中"),
+                         cancelled=ctl.cancelled, out_dir=out_dir)
+        except AppError as exc:
+            if exc.status == 499:
+                raise
+            log.warning("Review package sound without music failed: %s", exc.message)
+            ctl.note("沒能輸出去掉配樂的音軌，客戶在審稿頁試聽新配樂時會同時聽到原本的配樂")
+            return None
+        path = pdir / out["file"]
+        return path.replace(path.with_name(f"{video_stem}_無配樂.mp3")).name
 
     def _prepare_package(self, project: dict, shot_id: str | None, payload: dict) -> dict:
         return {"title": f"打包專案：{project['name']}", "lane": "local:export", "shotId": None,

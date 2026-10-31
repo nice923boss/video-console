@@ -2,8 +2,9 @@
 was unpacked to, comes back as a round kept in the project (revisions/<id>/round.json, the attachments beside it
 in 附件/). Each note is listed for us to accept (同意), accept with our own instruction (微調) or leave (不採用).
 An accepted note becomes an edit: an inserted picture or clip goes in at its frame on a blank shot of its own,
-with no model involved; a written note becomes a prompt for the in-app assistant (agent.py), which makes the
-change with its tools or answers that a person has to do it."""
+and a soundtrack the client sent replaces the background music, both with no model involved; a written note
+becomes a prompt for the in-app assistant (agent.py), which makes the change with its tools or answers that a
+person has to do it."""
 from __future__ import annotations
 
 import json
@@ -16,8 +17,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from . import edits
-from .review_pack import load_pack
+from .review_pack import load_pack, music_clips
+from .sequence import audio_track
 from .util import (
+    AUDIO_EXTS,
     IMAGE_EXTS,
     VIDEO_EXTS,
     AppError,
@@ -133,13 +136,14 @@ def _mark(raw: Any) -> dict | None:
 
 
 def attachment_path(rel: Any, kind: str | None = None) -> str | None:
-    """附件/<name> with a picture or video extension (of kind, when given); None for anything else."""
+    """附件/<name> with a picture, video or sound extension (of kind, when given); None for anything else."""
     rel = str(rel or "")
     name = rel[len(FILES) + 1:] if rel.startswith(FILES + "/") else ""
     if not name or "/" in name or "\\" in name or name in (".", "..") or ":" in name:
         return None
     ext = PurePosixPath(name).suffix.lower()
-    exts = {"image": IMAGE_EXTS, "video": VIDEO_EXTS}.get(kind or "", IMAGE_EXTS | VIDEO_EXTS)
+    exts = {"image": IMAGE_EXTS, "video": VIDEO_EXTS, "audio": AUDIO_EXTS}.get(
+        kind or "", IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS)
     return rel if ext in exts else None
 
 
@@ -174,6 +178,28 @@ def _item(raw: dict, index: int, seen: set[str], duration: float, src: _Zip | _D
     return item
 
 
+def _music(raw: Any, src: _Zip | _Dir) -> dict | None:
+    """The soundtrack the client sent to replace the background music, one more item to decide on."""
+    if not isinstance(raw, dict):
+        return None
+    rel = attachment_path(raw.get("file"), "audio")
+    size = src.size(rel) if rel else None
+    item = {"id": "music", "kind": "music", "text": _text(raw.get("text"), MAX_TEXT), "t": None, "frame": 0,
+            "shot": "", "no": 0, "shotName": "", "offset": 0.0, "marks": [], "decision": None, "extra": "",
+            "status": "pending", "result": "",
+            "music": {"name": _text(raw.get("name"), 200) or (PurePosixPath(rel).name if rel else ""), "file": None,
+                      "size": size or 0,
+                      # the volume the client set on the review page; None when they left it alone
+                      "volume": None if raw.get("volume") is None else round(_num(raw.get("volume"), 0, 1, 1.0), 2)}}
+    if not rel or size is None:
+        item.update(status="manual", result="配樂檔遺失或格式不正確，請客戶重新傳送")
+    elif size > MAX_FILE:
+        item.update(status="manual", result="配樂檔超過 1 GB，沒有載入，請另外向客戶索取")
+    else:
+        item["music"]["file"] = rel
+    return item
+
+
 def _read_data(src: _Zip | _Dir) -> dict:
     size = src.size(DATA)
     if size is None or size > MAX_DATA:
@@ -203,10 +229,13 @@ def import_round(pdir: Path, project: dict, src: _Zip | _Dir, source: str) -> di
                            "要重新載入請先移除那一輪", 409)
     duration = float(pack["duration"]) if pack else 36000.0
     raws = data.get("items") if isinstance(data.get("items"), list) else []
-    seen: set[str] = {"all"}
+    seen: set[str] = {"all", "music"}
     items = [i for i in (_item(r, n, seen, duration, src) for n, r in enumerate(raws[:MAX_ITEMS])
                          if isinstance(r, dict)) if i]
     items.sort(key=lambda i: i["t"])
+    music = _music(data.get("music"), src)
+    if music:
+        items.insert(0, music)
     note = _text(data.get("note"), MAX_TEXT)
     if note:  # the client's overall note, one more item to decide on
         items.insert(0, {"id": "all", "kind": "general", "text": note, "t": None, "frame": 0, "shot": "", "no": 0,
@@ -222,8 +251,9 @@ def import_round(pdir: Path, project: dict, src: _Zip | _Dir, source: str) -> di
     (folder / FILES).mkdir(parents=True)
     try:
         for item in items:
-            if (item.get("insert") or {}).get("file"):
-                src.copy(item["insert"]["file"], folder / item["insert"]["file"])
+            rel = (item.get("insert") or item.get("music") or {}).get("file")
+            if rel:
+                src.copy(rel, folder / rel)
         write_json_atomic(folder / ROUND, round_)
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
@@ -282,7 +312,8 @@ def set_decision(item: dict, data: dict) -> dict:
     if "decision" in data:
         if data["decision"] not in DECISIONS:
             raise AppError("decision 只能是 agree、tweak、skip 或 null")
-        if data["decision"] in ("agree", "tweak") and item["kind"] == "insert" and not item["insert"]["file"]:
+        if data["decision"] in ("agree", "tweak") and item["kind"] in ("insert", "music") \
+                and not item[item["kind"]]["file"]:
             raise AppError("這條意見的附件遺失，無法自動套用")
         out["decision"] = data["decision"]
     if "extra" in data:
@@ -323,6 +354,34 @@ def insert_plan(project: dict, item: dict) -> dict:
     what = "圖片" if ins["type"] == "image" else "影片"
     return {"ops": [*ops, {"op": "shot.add", "shot": shot, "index": index}], "id": sid, "t": spot["t"],
             "label": f"修改意見：插入{what}「{ins['name']}」"[:80]}
+
+
+MUSIC_FADE = 2.0
+
+
+def music_plan(project: dict, item: dict, media: dict) -> dict:
+    """The ops that swap the background music for the client's soundtrack (media, already staged): the music
+    clips go and the new one starts at 0 on the first one's row at its volume, cut at the end of the video with
+    a fade when it runs longer. Its volume is the one the client set on the review page, or the old music's."""
+    old = music_clips(project)
+    name = item["music"]["name"] or media["name"]
+    volume = item["music"].get("volume")
+    if volume is None:
+        volume = float(old[0].get("volume", 1.0)) if old else 1.0
+    clip = {"id": new_id("a"), "mediaId": media["id"], "name": name[:120], "start": 0.0, "volume": volume}
+    if old:
+        clip["track"] = audio_track(old[0])  # keeps the row's 背景音樂 mark and its place among the tracks
+    length = float(edits.timeline(project)["duration"])
+    cut = length > 0.5 and float(media.get("duration") or 0.0) > length + 0.05
+    if cut:
+        clip.update(out=round(length, 3), fadeOut=round(min(MUSIC_FADE, length / 2), 3))
+    ops = [{"op": "media.add", "media": media}, *({"op": "audio.delete", "id": a["id"]} for a in old),
+           {"op": "audio.add", "item": clip}]
+    result = ((f"已移除原本的配樂 {len(old)} 段，" if old else "專案原本沒有配樂，") + f"從 0 秒放入「{name}」"
+              + (f"，音量 {round(volume * 100)}%（客戶設定）" if item["music"].get("volume") is not None else ""))
+    if cut:
+        result += f"，超過片長的部分已截斷，片尾淡出 {clip['fadeOut']:g} 秒"
+    return {"ops": ops, "label": f"修改意見：更換配樂「{name}」"[:80], "result": result}
 
 
 def _pct(v: float) -> str:

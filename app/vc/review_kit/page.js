@@ -1,6 +1,8 @@
 // Client review page (審稿.html, see review_pack.py). Plays the exported video beside its shot list; a note sits
 // on one frame with boxes, arrows and labels drawn on the picture (coordinates 0-1 of the frame), an insert puts
-// the client's own picture or clip at a frame. 打包回傳 downloads one ZIP: 修改意見.json + 附件/. Drafts and the
+// the client's own picture or clip at a frame, and 更換配樂 sends a soundtrack to replace the background music.
+// Playing previews both: an insert holds the video for its seconds, the soundtrack plays at the client's volume.
+// 打包回傳 downloads one ZIP: 修改意見.json + 附件/. Drafts and the
 // attached files are kept in this browser's IndexedDB; a browser that refuses it keeps them for this visit only.
 (() => {
   "use strict";
@@ -18,14 +20,27 @@
   const MAX_ZIP = 3.9 * 1024 ** 3; // no ZIP64: every size and offset must fit in 32 bits
   const IMAGE = /\.(png|jpe?g|webp|bmp|gif)$/i;
   const CLIP = /\.(mp4|webm|mov|mkv|m4v|avi)$/i;
+  const SOUND = /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i;
+  const MUSIC = "music"; // the soundtrack's key in the files store, beside the item ids
 
-  const state = { by: "", note: "", items: [], seq: 0 };
+  // music: { name, size, text, volume } (volume 0-1, null until the client moves the slider)
+  const state = { by: "", note: "", items: [], seq: 0, music: null };
   const blobs = new Map(); // item id -> the picture or clip it inserts
-  const unsaved = new Set(); // item ids whose file did not fit in the browser's storage
+  let musicBlob = null;
+  let musicUrl = "";
+  const unsaved = new Set(); // item ids (or MUSIC) whose file did not fit in the browser's storage
   let db = null;
   let editing = null; // { item, isNew, tool, blob, url }
   let draft = null; // the box or arrow being dragged out
   let origin = null;
+  const tune = new Audio(); // the client's soundtrack, played beside the video
+  // The cut's sound without its music (審稿匯出 writes it when the cut has music): with a new soundtrack the video
+  // is muted and this plays in its place, so the old music drops out.
+  let stem = meta.stem ? new Audio(encodeURIComponent(meta.stem)) : null;
+  let cue = null; // { queue, i, timer, url }: the inserts of one frame, shown in place of the video
+  let from = 0; // the preview has passed every insert at or before this time
+  let resuming = false; // the video starts again after a cue, so `from` stays
+  let looping = false;
 
   // ---------------------------------------------------------------- helpers
   const pad = (n) => String(n).padStart(2, "0");
@@ -116,12 +131,14 @@
     try {
       const saved = await run("drafts", "readonly", (s) => s.get(meta.review));
       if (!saved || !Array.isArray(saved.items)) return;
-      Object.assign(state, { by: saved.by || "", note: saved.note || "", seq: saved.seq || 0, items: saved.items });
+      Object.assign(state, { by: saved.by || "", note: saved.note || "", seq: saved.seq || 0, items: saved.items,
+        music: saved.music || null });
       for (const item of state.items) {
         if (item.kind !== "insert") continue;
         const blob = await run("files", "readonly", (s) => s.get(fileKey(item.id)));
         if (blob) blobs.set(item.id, blob);
       }
+      if (state.music) musicBlob = (await run("files", "readonly", (s) => s.get(fileKey(MUSIC)))) || null;
     } catch (err) {
       banner("讀不到上次的草稿，請重新填寫。");
     }
@@ -132,6 +149,7 @@
     if (!db) text = "這個瀏覽器不能暫存草稿，關閉網頁前請先按「打包回傳」。";
     else if (unsaved.size) text = `有 ${unsaved.size} 個附件太大，沒能暫存，關閉網頁前請先按「打包回傳」。`;
     if (lost) text += `有 ${lost} 則插入的檔案遺失，請點開重新選擇檔案。`;
+    if (state.music && !musicBlob) text += "配樂檔案遺失，請重新上傳。";
     $("draft-state").textContent = text;
   }
 
@@ -228,14 +246,104 @@
     $("clock").textContent = `${clock(frameTime(frameOf(t)))} / ${clock(video.duration || meta.duration)}`;
     $("scrub").value = t;
     const s = shotAt(t);
-    $("shot-now").textContent = s ? `#${pad(s.no)} ${s.name}` : "";
+    $("shot-now").textContent = cue ? `插入素材：${cue.queue[cue.i].insert.name}` : s ? `#${pad(s.no)} ${s.name}` : "";
     document.querySelectorAll("#shots .row").forEach((r) => r.classList.toggle("is-on", s && r.dataset.id === s.id));
-    $("play").textContent = video.paused ? "播放" : "暫停";
+    $("play").textContent = video.paused && !cue ? "播放" : "暫停";
+  }
+  // One frame's work. timeupdate runs it too: it keeps firing in a background tab, where requestAnimationFrame stops.
+  function step() {
+    if (!video.paused && !cue) follow(video.currentTime);
+    if (!video.paused) syncSound();
+    tuneVolume();
+    tick();
   }
   function loop() {
-    tick();
-    if (!video.paused) requestAnimationFrame(loop);
+    step();
+    looping = !video.paused || !!cue;
+    if (looping) requestAnimationFrame(loop);
   }
+  function startLoop() {
+    if (!looping) requestAnimationFrame(loop);
+    looping = true;
+  }
+
+  // ---------------------------------------------------------------- preview (inserts and the new soundtrack)
+  const cues = () => sorted().filter((i) => i.kind === "insert" && blobs.has(i.id));
+  // Seconds of inserts that play before time t: where the soundtrack is when the video is at t.
+  const before = (t) => cues().reduce((n, i) => n + (frameTime(i.frame) <= t ? i.insert.duration : 0), 0);
+  const musicVolume = () => (state.music && state.music.volume != null ? state.music.volume : meta.musicVolume ?? 1);
+  function follow(t) {
+    const due = cues().filter((i) => frameTime(i.frame) > from && frameTime(i.frame) <= t);
+    if (!due.length) {
+      from = t;
+      return false;
+    }
+    const f = due[0].frame;
+    cue = { queue: due.filter((i) => i.frame === f), i: 0, timer: 0, url: "" };
+    video.pause();
+    seekFrame(f);
+    showCue();
+    if (musicUrl && tune.paused) tune.play().catch(() => {});
+    startLoop();
+    return true;
+  }
+  function showCue() {
+    const ins = cue.queue[cue.i].insert;
+    if (cue.url) URL.revokeObjectURL(cue.url);
+    cue.url = URL.createObjectURL(blobs.get(cue.queue[cue.i].id));
+    const media = ins.type === "image" ? Object.assign(el("img"), { src: cue.url, alt: "" })
+      : Object.assign(el("video"), { src: cue.url, playsInline: true, autoplay: true });
+    $("cue").replaceChildren(media, el("span", "cue-tag", `${ins.type === "image" ? "插入圖片" : "插入影片"}：${ins.name}`));
+    $("cue").hidden = false;
+    cue.timer = setTimeout(nextCue, ins.duration * 1000);
+  }
+  function endCue() {
+    clearTimeout(cue.timer);
+    URL.revokeObjectURL(cue.url);
+    $("cue").replaceChildren();
+    $("cue").hidden = true;
+    cue = null;
+  }
+  function nextCue() {
+    cue.i += 1;
+    if (cue.i < cue.queue.length) return showCue();
+    const f = cue.queue[0].frame;
+    endCue();
+    from = frameTime(f) + 1e-6;
+    resuming = true;
+    seekFrame(f);
+    video.play().catch(() => { resuming = false; halt(); });
+  }
+  function halt() {
+    if (cue) endCue();
+    video.pause();
+    tune.pause();
+    tick();
+  }
+  const togglePlay = () => (video.paused && !cue ? video.play().catch(() => {}) : halt());
+  function syncSound() {
+    const t = video.currentTime;
+    if (video.muted && stem && Math.abs(stem.currentTime - t) > 0.15) stem.currentTime = t;
+    if (!musicUrl) return;
+    const at = t + before(from);
+    if (at >= tune.duration) tune.pause();
+    else if (Math.abs(tune.currentTime - at) > 0.25) tune.currentTime = at;
+  }
+  function tuneVolume() {
+    // Cut at the end of the video with a fade, as 套用 does (revisions.music_plan).
+    const length = (video.duration || meta.duration) + before(Infinity);
+    const fade = tune.duration > length + 0.05 ? Math.min(2, length / 2) : 0;
+    tune.volume = musicVolume() * (fade ? clamp01((length - tune.currentTime) / fade) : 1);
+  }
+  function renderSound() {
+    video.muted = !!(musicUrl && stem);
+    if (stem && !video.muted) stem.pause();
+    $("music-hint").hidden = !musicUrl;
+    $("music-hint").textContent = stem ? "按「播放」試聽，影片會改配這首音樂，旁白和現場聲音照常。"
+      : meta.musicVolume != null ? "這份審稿影片沒有附去掉配樂的音軌，試聽時會同時聽到原本的配樂。"
+        : "按「播放」試聽，這首音樂會加在影片原本的聲音下面。";
+  }
+  if (stem) stem.addEventListener("error", () => { stem = null; renderSound(); });
   video.addEventListener("loadedmetadata", () => {
     $("scrub").max = video.duration || meta.duration;
     renderMarkers();
@@ -243,13 +351,28 @@
   });
   video.addEventListener("error", () => stageMsg(`找不到或無法播放影片「${meta.video}」。請把收到的資料夾整個解壓縮，`
     + "讓「審稿.html」和影片在同一個資料夾，再重新開啟這個網頁。"));
-  video.addEventListener("play", () => requestAnimationFrame(loop));
-  ["pause", "seeked", "timeupdate"].forEach((ev) => video.addEventListener(ev, tick));
-  video.addEventListener("click", () => !editing && (video.paused ? video.play() : video.pause()));
-  $("play").addEventListener("click", () => (video.paused ? video.play() : video.pause()));
-  $("prev").addEventListener("click", () => { video.pause(); seekFrame(frameOf(video.currentTime) - 1); });
-  $("next").addEventListener("click", () => { video.pause(); seekFrame(frameOf(video.currentTime) + 1); });
-  $("scrub").addEventListener("input", (e) => { video.pause(); video.currentTime = Number(e.target.value); });
+  video.addEventListener("play", () => {
+    if (!resuming) from = frameTime(frameOf(video.currentTime)) - 1e-6;
+    resuming = false;
+    syncSound();
+    if (video.muted && stem) stem.play().catch(() => {});
+    tuneVolume();
+    if (musicUrl && !(video.currentTime + before(from) >= tune.duration)) tune.play().catch(() => {});
+    startLoop();
+  });
+  video.addEventListener("pause", () => {
+    if (stem) stem.pause();
+    if (!cue) tune.pause();
+  });
+  video.addEventListener("ended", () => follow(Infinity)); // an insert on the last frame
+  ["pause", "seeked"].forEach((ev) => video.addEventListener(ev, tick));
+  video.addEventListener("timeupdate", step);
+  video.addEventListener("click", () => !editing && togglePlay());
+  $("cue").addEventListener("click", togglePlay);
+  $("play").addEventListener("click", togglePlay);
+  $("prev").addEventListener("click", () => { halt(); seekFrame(frameOf(video.currentTime) - 1); });
+  $("next").addEventListener("click", () => { halt(); seekFrame(frameOf(video.currentTime) + 1); });
+  $("scrub").addEventListener("input", (e) => { halt(); video.currentTime = Number(e.target.value); });
   document.addEventListener("keydown", (e) => {
     if (e.target.closest("input, textarea, select") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (editing) {
@@ -258,11 +381,10 @@
     }
     if (e.key === " ") {
       e.preventDefault();
-      if (video.paused) video.play();
-      else video.pause();
+      togglePlay();
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
-      video.pause();
+      halt();
       const step = (e.shiftKey ? FPS : 1) * (e.key === "ArrowLeft" ? -1 : 1);
       seekFrame(frameOf(video.currentTime) + Math.round(step));
     }
@@ -324,7 +446,7 @@
       body.append(el("b", "", s.name), el("span", "dim small", `${clock(s.start)} 起，${s.length.toFixed(1)} 秒`
         + (n ? `，${n} 則意見` : "")));
       row.append(el("span", "row-time", `#${pad(s.no)}`), body);
-      row.addEventListener("click", () => { if (!editing) { video.pause(); seekFrame(frameOf(s.start)); } });
+      row.addEventListener("click", () => { if (!editing) { halt(); seekFrame(frameOf(s.start)); } });
       li.append(row);
       return li;
     }));
@@ -358,7 +480,7 @@
   }
   function openEditor(item, isNew, blob) {
     if (editing) return;
-    video.pause();
+    halt();
     editing = { item: JSON.parse(JSON.stringify(item)), isNew, tool: "rect", blob: blob || blobs.get(item.id), url: "" };
     seekFrame(item.frame);
     document.body.classList.add("editing");
@@ -497,56 +619,73 @@
   $("pick-image").addEventListener("change", (e) => picked(e.target, "image"));
   $("pick-video").addEventListener("change", (e) => picked(e.target, "video"));
 
-  // ---------------------------------------------------------------- pack (store-only ZIP, UTF-8 names)
-  const CRC = new Uint32Array(256).map((_, n) => {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    return c >>> 0;
+  // ---------------------------------------------------------------- soundtrack (更換配樂)
+  function renderMusic() {
+    const m = state.music;
+    halt();
+    if (musicUrl) URL.revokeObjectURL(musicUrl);
+    musicUrl = m && musicBlob ? URL.createObjectURL(musicBlob) : "";
+    if (musicUrl) tune.src = musicUrl;
+    else tune.removeAttribute("src");
+    tune.load();
+    renderSound();
+    $("music-empty").hidden = !!m;
+    $("music-file").hidden = !m;
+    $("music-remove").hidden = !m;
+    $("music-pick").textContent = m ? "換一首" : "上傳配樂";
+    if (!m) return;
+    $("music-name").textContent = m.name;
+    $("music-meta").textContent = musicBlob ? fmtSize(m.size) : "檔案遺失，請按「換一首」重新上傳";
+    $("music-text").value = m.text || "";
+    showVolume();
+  }
+  function showVolume() {
+    const pct = Math.round(musicVolume() * 100);
+    $("music-vol").value = pct;
+    $("music-vol-text").textContent = `${pct}%`;
+  }
+  $("music-pick").addEventListener("click", () => $("pick-music").click());
+  $("pick-music").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!SOUND.test(file.name)) {
+      alert("請選 MP3、WAV、M4A、AAC、FLAC、OGG 或 OPUS 音樂檔");
+      return;
+    }
+    if (file.size > MAX_FILE) {
+      alert(`「${file.name}」超過 1 GB，請壓小一點再上傳，或另外傳給製作方`);
+      return;
+    }
+    state.music = { name: file.name.slice(-120), size: file.size, text: state.music ? state.music.text : "",
+      volume: state.music ? state.music.volume : null };
+    musicBlob = file;
+    renderMusic();
+    await keepFile(MUSIC, file);
+    save(true);
   });
-  async function crcOf(blob, onBytes) {
-    let c = 0xffffffff;
-    for (let pos = 0; pos < blob.size; pos += 8 * 1024 * 1024) {
-      const buf = new Uint8Array(await blob.slice(pos, pos + 8 * 1024 * 1024).arrayBuffer());
-      for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-      onBytes(buf.length);
-    }
-    return (c ^ 0xffffffff) >>> 0;
-  }
-  async function makeZip(entries, onProgress) {
-    const enc = new TextEncoder();
-    const d = new Date();
-    const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
-    const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
-    const total = entries.reduce((n, e) => n + e.blob.size, 0) || 1;
-    const parts = [];
-    const central = [];
-    let offset = 0;
-    let done = 0;
-    for (const e of entries) {
-      const name = enc.encode(e.name);
-      const size = e.blob.size;
-      const crc = await crcOf(e.blob, (n) => { done += n; onProgress(done / total); });
-      const local = new DataView(new ArrayBuffer(30));
-      [[0, 0x04034b50, 4], [4, 20, 2], [6, 0x0800, 2], [8, 0, 2], [10, time, 2], [12, date, 2], [14, crc, 4],
-        [18, size, 4], [22, size, 4], [26, name.length, 2], [28, 0, 2]]
-        .forEach(([at, v, n]) => (n === 4 ? local.setUint32(at, v, true) : local.setUint16(at, v, true)));
-      const cen = new DataView(new ArrayBuffer(46));
-      [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [8, 0x0800, 2], [10, 0, 2], [12, time, 2], [14, date, 2],
-        [16, crc, 4], [20, size, 4], [24, size, 4], [28, name.length, 2], [42, offset, 4]]
-        .forEach(([at, v, n]) => (n === 4 ? cen.setUint32(at, v, true) : cen.setUint16(at, v, true)));
-      parts.push(local, name, e.blob);
-      central.push(cen, name);
-      offset += 30 + name.length + size;
-    }
-    const cdSize = central.reduce((n, p) => n + p.byteLength, 0);
-    const end = new DataView(new ArrayBuffer(22));
-    end.setUint32(0, 0x06054b50, true);
-    end.setUint16(8, entries.length, true);
-    end.setUint16(10, entries.length, true);
-    end.setUint32(12, cdSize, true);
-    end.setUint32(16, offset, true);
-    return new Blob([...parts, ...central, end], { type: "application/zip" });
-  }
+  $("music-remove").addEventListener("click", async () => {
+    if (!confirm("移除上傳的配樂？影片會沿用原本的配樂。")) return;
+    state.music = null;
+    musicBlob = null;
+    renderMusic();
+    await dropFile(MUSIC);
+    save(true);
+  });
+  $("music-vol").addEventListener("input", (e) => {
+    if (!state.music) return;
+    state.music.volume = Number(e.target.value) / 100;
+    showVolume();
+    tuneVolume();
+    save();
+  });
+  $("music-text").addEventListener("input", (e) => {
+    if (!state.music) return;
+    state.music.text = e.target.value;
+    save();
+  });
+
+  // ---------------------------------------------------------------- pack (makeZip: zip.js)
   function download(blob, name) {
     const a = el("a");
     a.href = URL.createObjectURL(blob);
@@ -574,13 +713,17 @@
     }
     const items = sorted();
     const note = $("note").value.trim();
-    if (!items.length && !note) {
+    if (!items.length && !note && !state.music) {
       alert("還沒有任何意見");
       return;
     }
     const lost = items.filter((i) => i.kind === "insert" && !blobs.has(i.id));
     if (lost.length) {
       alert(`有 ${lost.length} 則插入的檔案遺失，請點開那幾則，按「換一個檔案」重新選擇`);
+      return;
+    }
+    if (state.music && !musicBlob) {
+      alert("配樂檔案遺失，請按「換一首」重新上傳，或按「移除」");
       return;
     }
     const files = [];
@@ -592,8 +735,14 @@
       files.push({ name: file, blob: blobs.get(item.id) });
       return { ...rest, marks: [], insert: { ...insert, file } };
     });
+    let music = null;
+    if (state.music) {
+      music = { name: state.music.name, size: state.music.size, file: `附件/配樂_${safeName(state.music.name)}`,
+        text: (state.music.text || "").trim().slice(0, 2000), volume: state.music.volume ?? null };
+      files.push({ name: music.file, blob: musicBlob });
+    }
     const data = { vc: "review-comments", version: 2, project: meta.project, name: meta.name, review: meta.review,
-      exported: meta.exported, video: meta.video, by, at: new Date().toISOString(), note, items: out };
+      exported: meta.exported, video: meta.video, by, at: new Date().toISOString(), note, music, items: out };
     const entries = [{ name: "修改意見.json", blob: new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }) },
       ...files];
     if (entries.reduce((n, e) => n + e.blob.size, 0) > MAX_ZIP) {
@@ -619,7 +768,7 @@
   $("by").addEventListener("input", (e) => { state.by = e.target.value; save(); });
   $("note").addEventListener("input", (e) => { state.note = e.target.value; save(); });
   window.addEventListener("beforeunload", (e) => {
-    if ((!db || unsaved.size) && (state.items.length || state.note)) {
+    if ((!db || unsaved.size) && (state.items.length || state.note || state.music)) {
       e.preventDefault();
       e.returnValue = "";
     }
@@ -631,6 +780,7 @@
   restore().then(() => {
     $("by").value = state.by;
     $("note").value = state.note;
+    renderMusic();
     renderItems();
     renderShots();
     tick();
