@@ -10,16 +10,15 @@ import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/form
 import { buildSequence, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK } from "../lib/sequence.js";
 import { shiftKeys, keyPatch, takeKeys } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
-import { liftOps, dropOps } from "../lib/lift.js";
 import { fitStart, fitGap, edgeRoom, layerSpans } from "../lib/track-fit.js";
 import { parseGlossary, glossaryHits, hitText } from "../lib/glossary.js";
-import { takeFromMedia } from "../lib/media-actions.js";
 import { Icon } from "./icons.js";
 import { toast } from "./toast.js";
 import { AudioVolumeLine, SourceVolumeLine } from "./tl-volume-line.js";
 import { Wave } from "./tl-wave.js";
 import { toggleAudioSel, rangeAudioSel } from "./tl-audio-sel.js";
 import { trimDown } from "./tl-roll.js";
+import { liftShot, overlayToShot } from "./tl-lift.js";
 import { inView } from "./tl-view.js";
 
 // Row heights in CSS pixels; timeline.js uses the same numbers for the label column.
@@ -148,14 +147,6 @@ function moveTarget(project, id, rest, k) {
   const others = project.shots.filter((s) => s.id !== id);
   if (k < rest.length) return others.findIndex((s) => s.id === rest[k].shot.id);
   return others.findIndex((s) => s.id === rest[rest.length - 1].shot.id) + 1;
-}
-
-function liftShot(project, clip, { target, start }) {
-  const res = liftOps(project, clip, target, start);
-  if (res.error) return toast(res.error, { level: "warn" });
-  ops(res.ops, { label: "移到上層軌", link: false }).then((ok) => {
-    if (ok) setState({ editSel: { type: "overlay", id: res.id } });
-  });
 }
 
 function commitTrim(clip, patch) {
@@ -669,15 +660,6 @@ function pipLaneAt(ev) {
   return target === "new-layer" || target === "video" || target.startsWith("layer:") ? { lane, target } : null;
 }
 
-// An overlay dropped on the picture lane becomes a new shot at `index` (dropOps keeps its placement for a lift back).
-function overlayToShot(item, media, index) {
-  const project = getState().project;
-  const { ops: list, shot } = dropOps(project, item, media, index, takeFromMedia(media, newId("s")));
-  ops(list, { label: "移到畫面軌" }).then((res) => {
-    if (res) selectShot(shot.id, false);
-  });
-}
-
 export function OverlayClip({ project, item, ctx, selected }) {
   const [drag, setDrag] = useState(null);
   const { pps } = ctx;
@@ -757,7 +739,7 @@ export function OverlayClip({ project, item, ctx, selected }) {
         }
         if (cancelled || !next) return;
         if (insert) {
-          overlayToShot(item, media, insert.index);
+          overlayToShot(getState().project, item, media, insert.index);
           return;
         }
         const patch = {};

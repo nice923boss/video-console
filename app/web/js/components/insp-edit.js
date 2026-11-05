@@ -331,17 +331,17 @@ export function EditTab({ project, shot, busy = NONE }) {
 
   return html`
     <${SourceInfo} vid=${vid} img=${img} />
-    <${SequenceSection} shot=${shot} clip=${clip} position=${pos + 1} total=${clips.length} />
-    <${MarkSection} shot=${shot} />
+    ${(vid || img) && html`<${GradeSection} shot=${shot} />`}
+    ${vid
+      ? html`<${StabilizeSection} shot=${shot} vid=${vid} busy=${busy} />
+        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`
+      : html`<${StillSection} shot=${shot} img=${img} />`}
     <${ReviewSection} id="insp-review" items=${shot.review}
       onChange=${(review) => updateShot(shot.id, { review }, { label: "刪除客戶意見" })} />
-    ${vid
-      ? html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />
-        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />
-        <${StabilizeSection} shot=${shot} vid=${vid} busy=${busy} />`
-      : html`<${StillSection} shot=${shot} img=${img} />`}
-    ${(vid || img) && html`<${GradeSection} shot=${shot} />`}
     ${(vid || img) && html`<${MaskSection} shot=${shot} />`}
     <${TransitionSection} shot=${shot} clip=${clip} isLast=${pos >= 0 && pos === clips.length - 1} transitions=${transitions} />
-    <${TranscribeSection} project=${project} shot=${shot} vid=${vid} clip=${clip} busy=${busy} />`;
+    <${TranscribeSection} project=${project} shot=${shot} vid=${vid} clip=${clip} busy=${busy} />
+    <${SequenceSection} shot=${shot} clip=${clip} position=${pos + 1} total=${clips.length} />
+    <${MarkSection} shot=${shot} />
+    ${vid && html`<${TrimSection} project=${project} shot=${shot} vid=${vid} clip=${clip} />`}`;
 }

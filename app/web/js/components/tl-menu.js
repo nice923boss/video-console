@@ -9,35 +9,64 @@ import { rippleOps } from "../lib/ripple.js";
 import { copyItem, pasteItem } from "./tl-clipboard.js";
 import { splitAtPlayhead } from "./tl-edit.js";
 import {
-  current, OFF_FIELD, KEYABLE, toggleEnabled, rangeFromClip, freezeFrame, detachAudio, reverseClip, isReverse, focusSpeed,
-  addKeyframe,
+  current, OFF_FIELD, KEYABLE, toggleEnabled, together, rangeFromClip, freezeFrame, detachAudio, reverseClip, isReverse,
+  focusSpeed, addKeyframe,
 } from "./tl-commands.js";
 import { openMenu } from "./overlay.js";
 import { labelColors } from "./insp-content.js";
 
+const LISTS = { caption: "captions", audio: "audio", overlay: "overlays", adjust: "adjustments" };
 const NAMES = { shot: "鏡頭", audio: "音訊片段", overlay: "上方畫面", caption: "字幕", adjust: "調整圖層" };
 const OFF_LABELS = { disabled: ["停用片段", "啟用片段"], muted: ["靜音", "取消靜音"], hidden: ["隱藏", "顯示"] };
 const PLAYHEAD_OFF = "先把播放頭移到這個片段上";
 const EPS = 1e-3;
 
-export function deleteSelection(sel) {
+// Delete and Shift+Delete take every clip Shift or Ctrl+clicked together with `sel` (tl-commands together).
+const ids = (project, sel) => together(project, sel, { id: sel.id }).map((x) => x.id);
+
+export function deleteSelection(project, sel) {
   if (!sel) return false;
-  if (sel.type === "shot") deleteShots([sel.id]);
+  if (sel.type === "shot") deleteShots(ids(project, sel));
   else if (sel.type === "caption") ops([{ op: "caption.delete", id: sel.id }], { label: "刪除字幕" });
-  else if (sel.type === "audio") ops([{ op: "audio.delete", id: sel.id }], { label: "移除音軌" });
-  else if (sel.type === "overlay") ops([{ op: "overlay.delete", id: sel.id }], { label: "移除片段" });
+  else if (sel.type === "audio") {
+    const list = ids(project, sel);
+    ops(list.map((id) => ({ op: "audio.delete", id })), { label: list.length > 1 ? `移除 ${list.length} 段音訊` : "移除音軌" });
+  } else if (sel.type === "overlay") ops([{ op: "overlay.delete", id: sel.id }], { label: "移除片段" });
   else if (sel.type === "adjust") ops([{ op: "adjust.delete", id: sel.id }], { label: "刪除調整圖層" });
   else return false;
   return true;
 }
 
-// Shift+Delete: what comes after the clip on its track moves back to close the gap.
+// `list` applied to the lists of `project`, so the next ripple works out its moves from where things are by then.
+function applied(project, list) {
+  const next = { ...project };
+  for (const o of list) {
+    const [type, verb] = o.op.split(".");
+    const key = LISTS[type];
+    const items = next[key] || [];
+    next[key] = verb === "delete" ? items.filter((x) => x.id !== o.id) : items.map((x) => (x.id === o.id ? { ...x, ...o.patch } : x));
+  }
+  return next;
+}
+
+// Shift+Delete: what comes after the clip on its track moves back to close the gap. Several audio clips go
+// last first, each closing its own gap, as one undo step.
 export function rippleDelete(project, sel) {
   if (!sel) return false;
-  if (sel.type === "shot") return deleteShots([sel.id], { ripple: true }), true;
-  const list = rippleOps(project, sel);
-  if (!list) return false;
-  ops(list, { label: "漣漪刪除" });
+  if (sel.type === "shot") return deleteShots(ids(project, sel), { ripple: true }), true;
+  const many = sel.type === "audio"
+    ? (project.audio || []).filter((a) => ids(project, sel).includes(a.id)).sort((a, b) => Number(b.start || 0) - Number(a.start || 0))
+    : [sel];
+  let now = project;
+  const list = [];
+  for (const x of many) {
+    const step = rippleOps(now, { type: sel.type, id: x.id });
+    if (!step) continue;
+    list.push(...step);
+    now = applied(now, step);
+  }
+  if (!list.length) return false;
+  ops(list, { label: many.length > 1 ? `漣漪刪除 ${many.length} 段音訊` : "漣漪刪除" });
   return true;
 }
 
@@ -95,6 +124,10 @@ function clipItems(data, sel, cur) {
   const field = OFF_FIELD[sel.type];
   const [offLabel, onLabel] = OFF_LABELS[field];
   const detachedSound = sel.type === "audio" && !!cur.item.shotId;
+  // Matches toggleEnabled: the selected clips go off when any is on, else all come back on.
+  const group = together(project, sel, cur.item);
+  const allOff = !group.some((x) => !x[field]);
+  const count = group.length > 1 ? `（${group.length} 個）` : "";
   return [
     { header: NAMES[sel.type] },
     { label: "複製", icon: "copy", hint: keyLabel("edit.copy"), onClick: run(copyItem) },
@@ -107,13 +140,13 @@ function clipItems(data, sel, cur) {
     ...(KEYABLE.includes(sel.type) ? [{ label: "添加關鍵幀", icon: "diamond", hint: keyLabel("edit.keyframeAdd"),
       onClick: run(addKeyframe), disabled: !at, title: at ? undefined : PLAYHEAD_OFF }] : []),
     { divider: true },
-    { label: cur.item[field] ? onLabel : offLabel, icon: cur.item[field] ? "eye" : "eye-off", hint: keyLabel("edit.toggleEnabled"),
+    { label: `${allOff ? onLabel : offLabel}${count}`, icon: allOff ? "eye" : "eye-off", hint: keyLabel("edit.toggleEnabled"),
       onClick: run(toggleEnabled) },
     ...(sel.type === "shot" ? [pictureItem(cur.item)] : []),
     { label: "以片段設定區域", icon: "range-x", hint: keyLabel("edit.rangeFromClip"), onClick: run(rangeFromClip) },
     { divider: true },
-    { label: "刪除", icon: "trash", danger: true, hint: keyLabel("edit.delete"), onClick: () => deleteSelection(sel) },
-    { label: "漣漪刪除", icon: "trash", danger: true, hint: keyLabel("edit.rippleDelete"),
+    { label: `刪除${count}`, icon: "trash", danger: true, hint: keyLabel("edit.delete"), onClick: () => deleteSelection(data().project, sel) },
+    { label: `漣漪刪除${count}`, icon: "trash", danger: true, hint: keyLabel("edit.rippleDelete"),
       onClick: () => rippleDelete(data().project, sel), disabled: sel.type !== "shot" && !rippleOps(project, sel) },
     ...(sel.type === "shot" ? colorItems(cur.item) : []),
   ];
@@ -133,6 +166,8 @@ export function timelineMenu(e, data) {
   if (!cur) return;
   const now = getState().editSel;
   if (!now || now.type !== type || now.id !== id) setState({ editSel: sel });
-  if (type === "shot") focusShot(id, { tab: "edit" });
+  // A right-click inside a Shift or Ctrl selection keeps it, so the menu acts on all of it.
+  if (type === "shot" && getState().selected.length > 1 && getState().selected.includes(id)) setState({ focus: id, inspectorTab: "edit" });
+  else if (type === "shot") focusShot(id, { tab: "edit" });
   openMenu(e, clipItems(data, sel, cur));
 }

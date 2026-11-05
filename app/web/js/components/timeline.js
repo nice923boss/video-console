@@ -27,8 +27,9 @@ import { toast, toastError } from "./toast.js";
 import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.js";
 import {
   MARKER_COLORS, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
-  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet,
+  markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet, slipFrame,
 } from "./tl-commands.js";
+import { liftSelected, dropSelected } from "./tl-lift.js";
 import { openMenu, openModal, Modal, promptDialog } from "./overlay.js";
 import { Button, IconButton, Field, Select, Segmented, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
@@ -434,7 +435,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     setScale(TRACK_SCALES[i]);
   };
   const keys = {
-    "edit.delete": () => deleteSelection(selRef.current),
+    "edit.delete": () => deleteSelection(dataRef.current.project, selRef.current),
     "edit.rippleDelete": () => rippleDelete(dataRef.current.project, selRef.current),
     "edit.deselect": () => (selRef.current ? setState({ editSel: null }) : false),
     "edit.copy": on(copyItem),
@@ -446,6 +447,10 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.toolSelect": () => setState({ editTool: "select" }),
     "edit.toolBlade": () => setState({ editTool: "blade" }),
     "edit.toolTrim": () => setState({ editTool: "trim" }),
+    "edit.slipBack": on((p, c, sel) => slipFrame(p, c, sel, -1)),
+    "edit.slipForward": on((p, c, sel) => slipFrame(p, c, sel, 1)),
+    "edit.liftUp": on(liftSelected),
+    "edit.dropDown": on((p, c, sel) => dropSelected(p, c, sel, (t) => shotIndexAt(p, c, t))),
     "edit.toggleEnabled": on(toggleEnabled),
     "edit.addCaption": () => addCaption(),
     "edit.markerAdd": on(markerAdd),

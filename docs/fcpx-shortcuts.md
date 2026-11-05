@@ -38,6 +38,8 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | Trim End | Option-] | 向右裁剪（刪掉播放頭後面的部分） | F3 | Alt+] | 作用的軌道同分割；沒有選取時 Final Cut Pro 裁剪最上層的片段，Video Console 裁剪畫面軌 |
 | Select 工具 | A | 選擇模式 | A | A | |
 | Blade 工具 | B | 分割模式 | B | B | 點片段就在點的位置切開；切回選擇模式才能拖曳與選取 |
+| 無 | 無 | 滑動內容：入點與出點往前一格 | Ctrl+Alt+← | Ctrl+Alt+← | 片段位置與長度不變，畫面內容往前一格（依素材格率）；鏡頭的原聲會先分離留在原位。Final Cut Pro 沒有單鍵，要用修剪工具拖曳片段中間 |
+| 無 | 無 | 滑動內容：入點與出點往後一格 | Ctrl+Alt+→ | Ctrl+Alt+→ | 同上，往後一格 |
 
 ## 片段、字幕與標記
 
@@ -52,6 +54,8 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | Raise Volume 1 dB | Control-= | 選取片段音量加 1dB | Ctrl+. | 無 | 只作用在音訊與上方影片；有區域時只調區域內 |
 | Lower Volume 1 dB | Control-- | 選取片段音量減 1dB | Ctrl+, | 無 | 同上 |
 | Detach Audio | Control-Shift-S | 分離或還原鏡頭的原聲 | Ctrl+Shift+S | 無 | 變速鏡頭的原聲照速度分離；分離期間不能改速度 |
+| Lift from Primary Storyline | Option-Command-Up | 把鏡頭移到上層軌 | Ctrl+Alt+↑ | Ctrl+Alt+↑ | 時間不變，放到同時段有空位的最低一層（跳過隱藏與靜音的軌），沒有就新增一層；原位留下同長度的「空白」鏡頭並保留轉場 |
+| Overwrite to Primary Storyline | Option-Command-Down | 把上層軌的片段移回畫面軌 | Ctrl+Alt+↓ | Ctrl+Alt+↓ | 下方是「空白」鏡頭時填回原位並恢復轉場，後面的鏡頭不動；沒有空白時穿插到最近的剪接點，後面的鏡頭往後退 |
 
 ## 區域
 
@@ -94,7 +98,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | 無 | 無 | 降低軌道 | _（Shift+-） | 無 | |
 | Snapping | N | 開關磁吸對齊 | N | N | |
 | 無 | 無 | 開關連動上下軌 | Shift+N | Shift+N | |
-| Delete | Delete | 刪除選取的片段 | Delete、Backspace、F2 | Delete、Backspace | 刪除鏡頭時會先跳確認框；F2 是 Video Console 自訂 |
+| Delete | Delete | 刪除選取的片段 | Delete、Backspace、F2 | Delete、Backspace | 用 Shift 或 Ctrl 多選時一次刪掉全部，一步復原；刪除鏡頭時會先跳確認框；F2 是 Video Console 自訂 |
 | Undo Change | Command-Z | 復原 | Ctrl+Z | Ctrl+Z | 全部頁面 |
 | Redo Change | Shift-Command-Z | 重做 | Ctrl+Shift+Z、Ctrl+Y | Ctrl+Shift+Z、Ctrl+Y | 全部頁面 |
 | Select All | Command-A | 全選 | Ctrl+A | Ctrl+A | 只在分鏡頁；剪輯頁沒有全選 |

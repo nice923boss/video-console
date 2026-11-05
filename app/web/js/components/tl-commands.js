@@ -8,10 +8,12 @@ import { getState, setState } from "../lib/store.js";
 import { clock, setTime, setPlaying, onClock } from "../lib/clock.js";
 import { newId, round, clamp, fmtTime } from "../lib/format.js";
 import { clipIndexAt, audioLength, audioMedia, videoTake } from "../lib/sequence.js";
+import { slipRange } from "../lib/roll.js";
 import { showQueued, upsertJobs } from "../lib/jobs-actions.js";
 import { keyHint } from "../lib/keymap.js";
 import { readPref } from "../lib/prefs.js";
 import { toast } from "./toast.js";
+import { multiAudio } from "./tl-audio-sel.js";
 
 const LISTS = { audio: "audio", overlay: "overlays", caption: "captions", adjust: "adjustments" };
 export const OFF_FIELD = { shot: "disabled", overlay: "disabled", caption: "disabled", audio: "muted", adjust: "hidden" };
@@ -44,12 +46,27 @@ export function current(project, clips, sel) {
 // Picture commands (reverse, speed) use the selected shot, else the shot under the playhead.
 const currentShot = (project, clips, sel) => current(project, clips, sel && sel.type === "shot" ? sel : null);
 
+// The items Shift or Ctrl+clicked together with `sel` (shots, or audio clips on one track), else just `item`.
+export function together(project, sel, item) {
+  const s = getState();
+  if (sel && sel.type === "shot" && s.selected.length > 1 && s.selected.includes(sel.id)) {
+    return project.shots.filter((x) => s.selected.includes(x.id));
+  }
+  const audio = sel && sel.type === "audio" && multiAudio(s);
+  if (audio && audio.includes(sel.id)) return (project.audio || []).filter((a) => audio.includes(a.id));
+  return [item];
+}
+
+// With several clips selected, one press turns them all off when any is on, else all back on; one undo step.
 export function toggleEnabled(project, clips, sel) {
   const cur = current(project, clips, sel);
   if (!cur) return warn("播放頭下方沒有片段");
   const field = OFF_FIELD[cur.type];
-  const off = !cur.item[field];
-  ops([{ op: `${cur.type}.update`, id: cur.item.id, patch: { [field]: off } }], { label: off ? "停用片段" : "啟用片段" });
+  const items = together(project, sel, cur.item);
+  const off = items.some((x) => !x[field]);
+  const what = items.length > 1 ? ` ${items.length} 個片段` : "片段";
+  ops(items.map((x) => ({ op: `${cur.type}.update`, id: x.id, patch: { [field]: off } })),
+    { label: `${off ? "停用" : "啟用"}${what}` });
 }
 
 // ---------------------------------------------------------------- volume
@@ -217,6 +234,44 @@ export function focusSpeed(project, clips, sel) {
     const el = document.querySelector(".insp-speed select");
     if (el) el.focus();
   }));
+}
+
+// ---------------------------------------------------------------- slip by one frame
+// Ctrl+Alt+Left/Right: the clip keeps its place and length while its in and out points move one frame of its
+// footage earlier or later (dir -1 or 1). A shot goes through the trim tool's slip (POST /edit "slip", picture
+// only: its own sound is detached and stays put); an upper-track video clip moves its `in`. Presses in a row
+// make one undo step. The project here can lag the presses already sent, so an upper-track clip counts on from
+// the last `in` it was given.
+let slipping = null;
+const frameRate = (project, fps) => (Number(fps) > 0 ? Number(fps) : Math.max(1, Number(project.settings.fps) || 24));
+// The next frame start from `t` in direction `dir`: one frame on when `t` sits on a frame start (within a
+// twentieth of a frame, since in points keep 3 decimals), else the nearest frame start that way.
+const stepFrame = (t, fps, dir) => (dir > 0 ? Math.floor(t * fps + 0.05) + 1 : Math.ceil(t * fps - 0.05) - 1) / fps;
+
+export function slipFrame(project, clips, sel, dir) {
+  const cur = sel && sel.type === "overlay" ? current(project, clips, sel) : currentShot(project, clips, sel);
+  if (!cur || (cur.type !== "shot" && cur.type !== "overlay")) return warn("滑動內容只能用在影片鏡頭或上方軌的影片片段");
+  const edge = dir > 0 ? "已經是素材最後面的畫面" : "已經是素材最前面的畫面";
+  if (cur.type === "overlay") {
+    const item = cur.item;
+    const media = project.media[item.mediaId] || {};
+    if (media.kind !== "video") return warn("滑動內容只能用在影片片段（圖片沒有其他畫面）");
+    const fps = frameRate(project, media.fps);
+    const base = slipping && slipping.id === item.id && Date.now() - slipping.at < 1500 ? slipping.in : Number(item.in || 0);
+    const hi = Math.max(0, Number(media.duration || 0) - cur.length);
+    const target = stepFrame(base, fps, dir);
+    const next = dir > 0 ? Math.min(target, hi) : Math.max(target, 0);
+    if (dir > 0 ? next <= base + 1e-3 : next >= base - 1e-3) return warn(edge);
+    slipping = { id: item.id, in: next, at: Date.now() };
+    ops([{ op: "overlay.update", id: item.id, patch: { in: round(next, 3) } }], { label: "滑動內容", coalesce: `${item.id}:slip-frame` });
+    return;
+  }
+  const clip = cur.clip;
+  if (!clip || clip.source !== "video") return warn("滑動內容只能用在影片鏡頭");
+  const fps = frameRate(project, clip.take.fps);
+  const by = clamp((stepFrame(clip.in, fps, dir) - clip.in) / clip.speed, ...slipRange(clip));
+  if (Math.abs(by) < 1e-3) return warn(edge);
+  editCmd({ cmd: "slip", id: clip.shot.id, by: round(by, 4) }, { coalesce: `${clip.shot.id}:slip-frame` });
 }
 
 // ---------------------------------------------------------------- keyframes
