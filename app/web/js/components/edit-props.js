@@ -5,7 +5,8 @@ import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round, shotLabel } from "../lib/format.js";
-import { audioLength, audioMedia, audioSpeed, audioTrack, VOICE_TRACK, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt } from "../lib/sequence.js";
+import { audioLength, audioMedia, audioSpeed, audioTrack, VOICE_TRACK, overlayHeight, fitFrame, fillFrame, buildSequence, clipIndexAt, clipSpeed } from "../lib/sequence.js";
+import { overlaySpeedPatch, speedOptions } from "../lib/overlay-speed.js";
 import { rowRole, roleOp, duckDb, ROLE_LABELS, DUCK_LEVELS } from "../lib/duck.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
 import { withDips } from "../lib/declip.js";
@@ -23,8 +24,11 @@ import { VoicePanel } from "./voice-panel.js";
 import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe, isStabilized, stabilizeClip } from "./tl-commands.js";
-import { clipKeysHint, keyHint, undoKeyText } from "../lib/keymap.js";
+import { StabilizeSettings } from "./stab-panel.js";
+import { P5TextField } from "./p5-panel.js";
+import { clipKeysHint, keyHint, keyLabel, undoKeyText } from "../lib/keymap.js";
 import { multiAudio } from "./tl-audio-sel.js";
+import { multiClip } from "./tl-clip-sel.js";
 import { findLoud, playGain } from "./tl-wave.js";
 import { toast } from "./toast.js";
 import { CHOICES as GAIN_CHOICES, dbToGain } from "../dialogs/import-gain.js";
@@ -185,6 +189,9 @@ function OverlayPanel({ project, item }) {
   const start = Number(item.start || 0);
   const tIn = Number(item.in || 0);
   const len = Number(item.length || 0);
+  const speed = video ? clipSpeed(item, "video") : 1; // file seconds per timeline second
+  // Timeline seconds left in the file from file second `v` at this speed (3 decimals, rounded down).
+  const fileLeft = (v) => Math.floor(((full - v) / speed) * 1000 + 1e-6) / 1000;
   const layers = project.layers || [];
   const li = layers.findIndex((l) => l.id === item.layer);
   const track = li >= 0 ? layers[li].name || `畫面 ${li + 2}` : "畫面軌";
@@ -217,10 +224,18 @@ function OverlayPanel({ project, item }) {
     closePanel();
     ops([{ op: "overlay.delete", id: item.id }], { label: "移除片段" });
   };
+  // Same footage at another speed: the length on the timeline follows, up to the next clip on the track.
+  const changeSpeed = async (v) => {
+    if (v === speed) return;
+    const { patch, cut } = overlaySpeedPatch(project, item, media, v);
+    if (!(await update(patch, "變速")) || !cut) return;
+    toast(cut === "next" ? `放慢後會蓋到同一軌的下一個片段，長度停在 ${fmtSeconds(patch.length, 2)}，後段畫面沒有放進來`
+      : `素材到結尾為止，長度停在 ${fmtSeconds(patch.length, 2)}`, { level: "warn", duration: 4000 });
+  };
 
   return html`<div class="insp-shot">
     <${Head} icon=${video ? "video" : "image"} title=${name}
-      sub=${html`${track}<i></i>開始 ${fmtSeconds(start, 2)}<i></i>長 ${fmtSeconds(len, 2)}`} />
+      sub=${html`${track}<i></i>${speed !== 1 ? html`${speed}x<i></i>` : ""}開始 ${fmtSeconds(start, 2)}<i></i>長 ${fmtSeconds(len, 2)}`} />
     <div class="insp-scroll">
       ${!media && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
         <span class="note-text">找不到這個片段的素材檔，可能已從素材庫刪除。匯出時會略過它。</span></div>`}
@@ -233,14 +248,20 @@ function OverlayPanel({ project, item }) {
           <${Seconds} value=${start} onCommit=${(v) => update({ start: v }, "移動片段")} />
         <//>
         <${Field} label="長度">
-          <${Seconds} value=${len} min=${MIN_LEN} max=${video ? (full > 0 ? full - tIn : MAX_TIME) : 600}
+          <${Seconds} value=${len} min=${MIN_LEN} max=${video ? (full > 0 ? fileLeft(tIn) : MAX_TIME) : 600}
             onCommit=${(v) => update({ length: v }, "修剪片段")} />
         <//>
       </div>
-      ${video && html`<${Field} label="入點（檔案內）">
-        <${Seconds} value=${tIn} max=${full > 0 ? Math.max(0, full - MIN_LEN) : MAX_TIME}
-          onCommit=${(v) => update(full > 0 ? { in: v, length: round(Math.min(len, full - v), 3) } : { in: v }, "修改片段入點")} />
-      <//>`}
+      ${video && html`<div class="row-2">
+        <${Field} label="入點（檔案內）">
+          <${Seconds} value=${tIn} max=${full > 0 ? Math.max(0, full - MIN_LEN) : MAX_TIME}
+            onCommit=${(v) => update(full > 0 ? { in: v, length: Math.min(len, fileLeft(v)) } : { in: v }, "修改片段入點")} />
+        <//>
+        <${Field} label=${`速度${keyHint("edit.speed")}`}
+          hint="同一段畫面播快或播慢，聲音一起變速；放慢時片段變長，碰到同一軌下一個片段就停住">
+          <${Select} class="insp-speed" value=${speed} options=${speedOptions(speed)} onChange=${changeSpeed} />
+        <//>
+      </div>`}
       <${Field} label="位置" hint=${keyed ? "這個片段有關鍵幀：下面顯示播放頭位置的值，有關鍵幀的項目會改寫播放頭位置的關鍵幀"
         : "以畫面左上角為起點；滿版顯示整張素材，填滿蓋滿畫面並裁掉超出的部分"}>
         <div class="row">
@@ -267,6 +288,7 @@ function OverlayPanel({ project, item }) {
       <//>
       <${ChromaField} chroma=${item.chroma} update=${update} />
       ${video && html`<${StabilizeField} item=${item} media=${media} />`}
+      ${video && (media.alphaCodec || media.p5) && html`<${P5TextField} key=${media.id} media=${media} />`}
       ${video && media.hasAudio && html`<${Field} label="音量" hint="100% 是原始音量，最高 400%；預覽播放最高只到 100%">
         <${Slider} value=${at("volume", 1)} min=${0} max=${4} step=${0.05} format=${pct}
           onCommit=${(v) => set({ volume: round(v, 2) }, "片段音量")} />
@@ -299,6 +321,8 @@ function StabilizeField({ item, media }) {
   return html`<${Field} label="防抖" hint="只處理片段用到的範圍，前後各多留 1 秒，處理好的影片會放進素材庫；畫面會稍微放大來裁掉晃動的黑邊。之後片段拉長超過多留的部分，要取消再重新勾選">
     <${Toggle} checked=${isStabilized(media) || rendering} disabled=${rendering}
       label=${rendering ? "防抖處理中" : "防抖"} onChange=${() => stabilizeClip(item.id, "overlay")} />
+    <${StabilizeSettings} current=${isStabilized(media) ? media.source.settings || {} : null} disabled=${rendering}
+      onApply=${(settings) => stabilizeClip(item.id, "overlay", settings)} />
   <//>`;
 }
 
@@ -516,8 +540,128 @@ function AudioBatchPanel({ project, items }) {
   </div>`;
 }
 
+// Upper-track clips picked together share one speed, place, size and opacity: each field sets the same value on
+// every clip (the place buttons work out each clip's own corner from its size), in one undo step. A clip with keys
+// on a field it sets loses those keys, as an audio set's volume does. Pictures have no speed and skip it.
+const BATCH_FIELDS = ["x", "y", "w", "opacity"];
+const keysWithout = (x, fields) => (x.keyframes || [])
+  .map((k) => Object.fromEntries(Object.entries(k).filter(([f]) => !fields.includes(f))))
+  .filter((k) => Object.keys(k).some((f) => f !== "t"));
+
+function OverlayBatchFields({ project, items, anchor }) {
+  const fw = Number(project.settings.width);
+  const fh = Number(project.settings.height);
+  const mediaOf = (x) => (project.media || {})[x.mediaId];
+  const videos = items.filter((x) => (mediaOf(x) || {}).kind === "video");
+  const lead = items.find((x) => x.id === anchor) || items[0];
+  const at = (x, f, fallback) => Number(valueAt(x, f, 0, fallback));
+  const differ = (f, fallback) => new Set(items.map((x) => round(at(x, f, fallback), 4))).size > 1;
+  const label = (text, f, fallback) => (differ(f, fallback) ? `${text}（各段不同）` : text);
+  const keyed = items.filter((x) => BATCH_FIELDS.some((f) => hasKeys(x, f))).length;
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  // values(x) gives the patch for clip x
+  const apply = (values, what) => ops(items.map((x) => {
+    const patch = values(x);
+    const fields = Object.keys(patch);
+    return { op: "overlay.update", id: x.id,
+      patch: { ...patch, ...(fields.some((f) => hasKeys(x, f)) ? { keyframes: keysWithout(x, fields) } : {}) } };
+  }), { label: `${items.length} 個片段${what}` });
+  const wOf = (x) => at(x, "w", 0.35);
+  const hOf = (x) => overlayHeight({ ...x, w: wOf(x) }, mediaOf(x), fw, fh);
+  const mx = 0.03;
+  const my = (0.03 * fw) / fh;
+  const spots = [
+    ["滿版", (x) => fitFrame(mediaOf(x), fw, fh)],
+    ["填滿", (x) => fillFrame(mediaOf(x), fw, fh)],
+    ["左上", () => ({ x: mx, y: my })],
+    ["右上", (x) => ({ x: 1 - wOf(x) - mx, y: my })],
+    ["置中", (x) => ({ x: (1 - wOf(x)) / 2, y: (1 - hOf(x)) / 2 })],
+    ["左下", (x) => ({ x: mx, y: 1 - hOf(x) - my })],
+    ["右下", (x) => ({ x: 1 - wOf(x) - mx, y: 1 - hOf(x) - my })],
+  ];
+  const place = (spot) => apply((x) => {
+    const s = spot(x);
+    return { x: round(clamp(s.x, -4, 4), 4), y: round(clamp(s.y, -4, 4), 4), ...(s.w ? { w: s.w } : {}) };
+  }, "位置");
+  const speeds = new Set(videos.map((x) => clipSpeed(x, "video")));
+  const speed = speeds.size === 1 ? [...speeds][0] : null;
+  const changeSpeed = async (v) => {
+    const changes = videos.filter((x) => clipSpeed(x, "video") !== v)
+      .map((x) => ({ id: x.id, ...overlaySpeedPatch(project, x, mediaOf(x), v) }));
+    if (!changes.length) return;
+    const done = await ops(changes.map(({ id, patch }) => ({ op: "overlay.update", id, patch })),
+      { label: `${changes.length} 個片段改成 ${v}x` });
+    const cut = changes.filter((c) => c.cut).length;
+    if (done && cut) toast(`其中 ${cut} 段放慢後碰到同一軌下一個片段或素材結尾，長度停在放得下的位置`, { level: "warn", duration: 4000 });
+  };
+  const x0 = at(lead, "x", 0);
+  const y0 = at(lead, "y", 0);
+  const w0 = wOf(lead);
+  return html`
+    ${videos.length > 0 && html`<${Field} label=${`速度${keyHint("edit.speed")}`}
+      hint=${`影片片段改成同一個速度，長度跟著改，放慢時碰到同一軌下一個片段就停住${videos.length < items.length ? `；${items.length - videos.length} 張圖片沒有速度，會略過` : ""}`}>
+      <${Select} class="insp-speed" value=${speed} options=${speedOptions(speed ?? 1)} placeholder="各段不同" onChange=${changeSpeed} />
+    <//>`}
+    <${Field} label="位置" hint="每段依自己的大小放到同一個角落；滿版、填滿也會改大小">
+      <div class="row">
+        ${spots.map(([text, spot]) => html`<${Button} size="sm" kind="ghost" onClick=${() => place(spot)}>${text}<//>`)}
+      </div>
+    <//>
+    <div class="row-2">
+      <${Field} label=${label("水平", "x", 0)}>
+        <${Slider} value=${x0} min=${Math.min(-1, x0)} max=${Math.max(1, x0)} step=${0.005} format=${pct}
+          onCommit=${(v) => apply(() => ({ x: round(v, 4) }), "位置")} />
+      <//>
+      <${Field} label=${label("垂直", "y", 0)}>
+        <${Slider} value=${y0} min=${Math.min(-1, y0)} max=${Math.max(1, y0)} step=${0.005} format=${pct}
+          onCommit=${(v) => apply(() => ({ y: round(v, 4) }), "位置")} />
+      <//>
+    </div>
+    <${Field} label=${label("大小", "w", 0.35)} hint="畫面寬度的百分比，高度依各自素材比例">
+      <${Slider} value=${w0} min=${0.05} max=${Math.max(2, w0)} step=${0.01} format=${pct}
+        onCommit=${(v) => apply(() => ({ w: round(v, 4) }), "大小")} />
+    <//>
+    <${Field} label=${label("不透明度", "opacity", 1)}>
+      <${Slider} value=${at(lead, "opacity", 1)} min=${0} max=${1} step=${0.01} format=${pct}
+        onCommit=${(v) => apply(() => ({ opacity: round(v, 2) }), "不透明度")} />
+    <//>
+    ${keyed > 0 && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
+      <span class="note-text">其中 ${keyed} 段有位置、大小或不透明度關鍵幀，改哪一項就清除那一項的關鍵幀（${undoKeyText()}可還原）。</span></div>`}`;
+}
+
+// Upper-track clips or adjustment layers Ctrl or Shift+clicked together: what is in the set, and the keys
+// that act on all of it (Delete, Shift+Delete, V), each one undo step. Upper-track clips also share speed,
+// place, size and opacity (OverlayBatchFields); adjustment layers have only their grade, not shared yet.
+function ClipBatchPanel({ project, type, items, anchor }) {
+  const adjust = type === "adjust";
+  const what = adjust ? "個調整圖層" : "個片段";
+  const off = adjust ? "hidden" : "disabled";
+  const name = (x) => (adjust ? x.name || "調整圖層" : x.name || ((project.media || {})[x.mediaId] || {}).name || "片段");
+  const keys = [[keyLabel("edit.delete"), "一起刪除"], [keyLabel("edit.rippleDelete"), "漣漪刪除"],
+    [keyLabel("edit.toggleEnabled"), "一起停用或啟用"]].filter(([k]) => k).map(([k, v]) => `${k} ${v}`).join("，");
+  return html`<div class="insp-shot">
+    <${Head} icon=${adjust ? "palette" : "layers"} title=${`已選 ${items.length} ${what}`}
+      sub=${`Ctrl+點擊逐一加選或取消，Shift+點擊選取同一軌中間的${adjust ? "調整圖層" : "片段"}`} />
+    <div class="insp-scroll">
+      ${keys && html`<p class="insp-hint dim">${keys}，${undoKeyText()}一次還原。</p>`}
+      ${!adjust && html`<${OverlayBatchFields} project=${project} items=${items} anchor=${anchor} />`}
+      <ul class="batch-list">${[...items].sort((a, b) => Number(a.start || 0) - Number(b.start || 0)).map((x) => html`<li key=${x.id}>
+        ${name(x)}<span class="dim">${fmtSeconds(Number(x.start || 0), 2)} 開始${x[off] ? "，已停用" : ""}</span></li>`)}</ul>
+      <${Button} size="sm" onClick=${() => setState({ clipSel: null })}>取消多選<//>
+    </div>
+  </div>`;
+}
+
 export function EditProps({ project, sel }) {
   const together = useStore(multiAudio);
+  const clips = useStore(multiClip);
+  if (clips && sel && (sel.type === "overlay" || sel.type === "adjust")) {
+    const items = (project[sel.type === "overlay" ? "overlays" : "adjustments"] || []).filter((x) => clips.includes(x.id));
+    if (items.length > 1) {
+      return html`<aside class="inspector" aria-label=${sel.type === "overlay" ? "多個片段" : "多個調整圖層"}>
+        <${ClipBatchPanel} project=${project} type=${sel.type} items=${items} anchor=${sel.id} /></aside>`;
+    }
+  }
   if (sel && sel.type === "audio") {
     const items = together ? (project.audio || []).filter((a) => together.includes(a.id)) : [];
     if (items.length > 1) return html`<aside class="inspector" aria-label="多段音訊"><${AudioBatchPanel} project=${project} items=${items} /></aside>`;

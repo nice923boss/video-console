@@ -5,7 +5,7 @@
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
 // clock; nothing here re-renders through Preact. The sound is played by player-audio.js.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { clipIndexAt, clipSpeed, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged, shownCaptions } from "../lib/caption-style.js";
 import { litCount, fillCaption } from "../lib/karaoke.js";
@@ -13,6 +13,7 @@ import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
 import { chromaMarkup } from "../lib/chroma.js";
 import { maskMarkup } from "../lib/masks.js";
+import { placeCss } from "../lib/transform.js";
 import { routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
 import { release, seekTo, follow, DRIFT_PAUSED, CUE_LEAD, MAX_RATE } from "./player-media.js";
 import { createSound, clipSounds, clipFades, clipLevel } from "./player-audio.js";
@@ -57,7 +58,7 @@ function makeSlot(host, rerender) {
   const sub = el("div", "pl-slate-sub", slate);
   const masks = el("div", "pl-masks", root);
   const slot = { root, video, img, title, sub, masks, key: "", clip: null, mode: "", pendingSeek: null, filterCss: "",
-    maskKey: "" };
+    maskKey: "", placeKey: "" };
 
   const setMode = (mode) => {
     slot.mode = mode;
@@ -151,6 +152,7 @@ export function createEngine(host, hooks = {}) {
   let capsFilterCss = "";
   let gradeDraft = null; // {id, grade} while a grade control (adjustment layer or shot) is being dragged
   let maskDraft = null; // {id, masks} while a shot's mask control is being dragged
+  let transformDraft = null; // {id, transform} while a shot's transform control is being dragged (ED-30)
   let compare = false; // grades filter only the right half of the picture (GR-06)
   const caps = el("div", "pl-caps", host);
   const zones = Object.fromEntries(ZONES.map((z) => [z, el("div", `pl-cap-zone pos-${z}`, caps)]));
@@ -292,6 +294,7 @@ export function createEngine(host, hooks = {}) {
     if (overlap) slateFade(other, ci - 1, t);
     slots.forEach(shadeSlot);
     slots.forEach(maskSlot);
+    slots.forEach(placeSlot);
   }
 
   // A shot's own grade (GR-01) on the picture of the slot showing it. It filters the video or picture element
@@ -321,6 +324,29 @@ export function createEngine(host, hooks = {}) {
     if (key === slot.maskKey) return;
     slot.maskKey = key;
     slot.masks.innerHTML = maskMarkup(list, Number(width), Number(height), px, () => `${filterPrefix}-${++filterSeq}`);
+  }
+
+  // A shot's opacity, move, scale, rotate, trim and distort (ED-30) on the slot showing it: one matrix3d on the
+  // picture and on its mask boxes, as export.py places the masked frame, the trim as a clip-path, and the slot
+  // black behind it, as the export's main track is, so transitions blend the same flattened frames.
+  function placeSlot(slot) {
+    const shot = slot.clip && slot.clip.shot;
+    const shown = shot && (slot.mode === "video" || slot.mode === "image");
+    const t = !shown ? null : transformDraft && transformDraft.id === shot.id ? transformDraft.transform : shot.transform;
+    const { width, height } = project.settings;
+    const css = t ? placeCss(t, Number(width), Number(height), slot.root.clientWidth, slot.root.clientHeight) : null;
+    const key = css ? `${css.transform}|${css.clipPath}|${css.opacity}` : "";
+    if (key === slot.placeKey) return;
+    slot.placeKey = key;
+    for (const node of [slot.video, slot.img, slot.masks]) {
+      node.style.transform = css ? css.transform : "";
+      node.style.transformOrigin = css ? "0 0" : "";
+    }
+    for (const node of [slot.video, slot.img]) {
+      node.style.clipPath = css ? css.clipPath : "";
+      node.style.opacity = css ? css.opacity : "";
+    }
+    slot.root.style.background = css ? "#000" : "";
   }
 
   // Slate text as export.py burns it: off the frames a transition shares with a neighbour, fading at both ends.
@@ -606,7 +632,8 @@ export function createEngine(host, hooks = {}) {
       node.style.display = on && !layer.hidden ? "block" : "";
       if (on && item.keyframes && item.keyframes.length) place(ov, local);
       if (!ov.video) continue;
-      const speed = Math.min(MAX_RATE, last.rate);
+      const clipRate = clipSpeed(item, "video"); // file seconds per timeline second
+      const speed = Math.min(MAX_RATE, last.rate * clipRate);
       if (!on || !playing) {
         if (!node.paused) node.pause();
         if (!on) {
@@ -621,7 +648,7 @@ export function createEngine(host, hooks = {}) {
         }
       }
       if (!node.hasAttribute("src")) node.src = ov.src;
-      const target = Number(item.in || 0) + local;
+      const target = Number(item.in || 0) + local * clipRate;
       const silent = layer.muted || (lead && sound.owns(`p:${item.id}`)); // the sample clock plays its sound
       setGain(node, silent ? 0 : Number(valueAt(item, "volume", local, 1)) * g, layer.id);
       if (playing) {
@@ -707,6 +734,11 @@ export function createEngine(host, hooks = {}) {
     // draft: {id, masks} shown in place of that shot's saved masks while one is being edited; null ends it.
     setMaskDraft(draft) {
       maskDraft = draft;
+      rerender();
+    },
+    // draft: {id, transform} shown in place of that shot's saved transform while it is being edited; null ends it.
+    setTransformDraft(draft) {
+      transformDraft = draft;
       rerender();
     },
     // on: every grade (shots and adjustment layers) shows on the right half only, the left half ungraded.

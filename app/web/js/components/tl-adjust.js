@@ -3,7 +3,7 @@
 // under it (the picture lane and the upper picture tracks) for as long as it lasts. Clicking the button
 // covers the clip under the playhead; dragging it onto the timeline covers the clip it is let go over.
 import { html, useState } from "../lib/h.js";
-import { setState } from "../lib/store.js";
+import { setState, useStore } from "../lib/store.js";
 import { ops } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { fmtSeconds, newId, round, clamp } from "../lib/format.js";
@@ -12,6 +12,7 @@ import { defaultGrade, isNeutral } from "../lib/grade.js";
 import { shiftKeys, keyPatch } from "../lib/keyframes.js";
 import { Icon } from "./icons.js";
 import { dragPointer, snapRange, Tip, Handles, KeyMarks, clipActions } from "./tl-tracks.js";
+import { clickClip, multiClip } from "./tl-clip-sel.js";
 
 export const ADJUST_H = 30;
 
@@ -65,6 +66,7 @@ export function AdjustAddButton({ clips, pps, onGhost }) {
 
 export function AdjustTrack({ project, ctx, editSel }) {
   const [drag, setDrag] = useState(null);
+  const together = useStore(multiClip);
   const { pps } = ctx;
 
   const begin = (e, item, mode) => {
@@ -90,7 +92,7 @@ export function AdjustTrack({ project, ctx, editSel }) {
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
         if (!moved) {
-          setState({ editSel: { type: "adjust", id: item.id } });
+          clickClip(ev, project, "adjust", item);
           return;
         }
         if (cancelled || !next) return;
@@ -109,14 +111,14 @@ export function AdjustTrack({ project, ctx, editSel }) {
     const base = { start: Number(item.start || 0), length: Number(item.length || MIN_ITEM) };
     const mine = drag && drag.id === item.id ? drag : null;
     const cur = mine || base;
-    const sel = !!editSel && editSel.type === "adjust" && editSel.id === item.id;
+    const sel = !!editSel && editSel.type === "adjust" && (together ? together.includes(item.id) : editSel.id === item.id);
     const plain = isNeutral(item.grade);
     const cls = ["tl-adj", sel && "is-selected", item.hidden && "is-off", drag && drag.id === item.id && "is-dragging"]
       .filter(Boolean).join(" ");
     return html`<div key=${item.id} class=${cls} style=${`left:${cur.start * pps}px;width:${Math.max(4, cur.length * pps)}px`}
       data-sel=${`adjust:${item.id}`}
       title=${`${adjustName(item)}${item.hidden ? "（已停用）" : ""}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n調色套用到下方所有畫面；${
-        clipActions(ctx, "拖曳移動，拖曳左右邊緣改長度，雙擊跳到開頭", "雙擊跳到開頭")}`}
+        clipActions(ctx, "拖曳移動，拖曳左右邊緣改長度，雙擊跳到開頭，Ctrl+點擊逐一加選，Shift+點擊選取中間的調整圖層", "雙擊跳到開頭")}`}
       onPointerDown=${(e) => begin(e, item, "move")} onDblClick=${() => setTime(cur.start)}>
       <${Icon} name=${item.hidden ? "eye-off" : "palette"} size=${12} class="tl-adj-icon" />
       <span class="tl-adj-name">${adjustName(item)}</span>

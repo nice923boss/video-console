@@ -50,6 +50,12 @@ def clip_speed(shot: dict, source: str) -> float:
     return min(4.0, max(0.25, float(shot.get("speed") or 1.0))) if source == "video" else 1.0
 
 
+def overlay_speed(project: dict, item: dict) -> float:
+    """File seconds an upper-track video plays per timeline second; pictures always play at 1."""
+    media = (project.get("media") or {}).get(item.get("mediaId")) or {}
+    return clip_speed(item, "image" if media.get("kind") == "image" else "video")
+
+
 def audio_media(project: dict, item: dict) -> dict | None:
     """The file an audio clip plays: a library item, or the take a shot's sound was detached from."""
     return project["media"].get(item.get("mediaId")) or project["takes"].get(item.get("takeId"))

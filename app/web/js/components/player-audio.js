@@ -6,7 +6,7 @@
 // media elements, kept in step with the timeline as before; playing backwards, the sounds of the scheduler play
 // backwards in short grains (P2-4).
 import { fileUrl } from "../lib/format.js";
-import { audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK } from "../lib/sequence.js";
+import { audioLength, audioSpeed, audioMedia, audioTrack, clipSpeed, VOICE_TRACK, SOURCE_TRACK } from "../lib/sequence.js";
 import { valueAt, takeKeys } from "../lib/keyframes.js";
 import { wakeMix, unroute, mixContext, mixInput, buildVoice, tuneVoice } from "../lib/audio-mix.js";
 import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
@@ -111,9 +111,11 @@ export function createSound(view, hooks) {
       if (layer.muted) continue;
       for (const item of project.overlays || []) {
         const media = (project.media || {})[item.mediaId];
-        if (item.layer !== layer.id || item.disabled || !media || media.kind !== "video" || !media.previewAudio) continue;
+        const sp = clipSpeed(item, "video");
+        const file = media && speedCopy(media, sp); // without a copy at its speed the clip's element plays it
+        if (item.layer !== layer.id || item.disabled || !media || media.kind !== "video" || !file) continue;
         const start = Number(item.start || 0);
-        add({ id: `p:${item.id}`, url: fileUrl(project.id, media.previewAudio), s0: toFrame(Number(item.in || 0)),
+        add({ id: `p:${item.id}`, url: fileUrl(project.id, file), s0: toFrame(Number(item.in || 0) / Number(speedKey(sp))),
           f0: toFrame(start), f1: toFrame(Math.min(start + Number(item.length || 0), total)), fi: 0, fo: 0,
           track: layer.id, level: (t) => Number(valueAt(item, "volume", t - start, 1)) * hooks.fade(t) });
       }

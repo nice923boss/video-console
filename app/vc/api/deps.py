@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .. import video2x
+from .. import gyro, video2x
 from ..deps import version_key
 from ..server import Request, Router
 
@@ -15,6 +15,7 @@ def deps_status(app: App) -> dict[str, Any]:
     media = app.media()
     tasks = app.deps.tasks()
     upscaler = video2x.find()
+    steadier = gyro.find()
     comfy_online = [s["name"] for s in app.comfy.status() if s.get("online")]
 
     def package(pkg_id: str, required: bool, ready: bool, path: str, version: str) -> dict[str, Any]:
@@ -29,6 +30,7 @@ def deps_status(app: App) -> dict[str, Any]:
     return {"items": [
         package("ffmpeg", True, media.available, media.exe or "", media.version()),
         package("video2x", False, upscaler is not None, str(upscaler or ""), ""),
+        package("gyroflow", False, steadier is not None, str(steadier or ""), ""),
         {"id": "comfyui", "required": False, "ready": bool(comfy_online), "path": "、".join(comfy_online),
          "version": "", "installable": False, "task": None},
     ]}

@@ -7,7 +7,7 @@ import { ops, updateShot, moveShot, focusShot, clickShot } from "../lib/actions.
 import { setTime } from "../lib/clock.js";
 import { releaseFocus } from "../lib/keys.js";
 import { fileUrl, fmtSeconds, shotLabel, newId, round, clamp } from "../lib/format.js";
-import { buildSequence, audioLength, audioSpeed, audioMedia, audioTrack, VOICE_TRACK } from "../lib/sequence.js";
+import { buildSequence, audioLength, audioSpeed, audioMedia, audioTrack, clipSpeed, VOICE_TRACK } from "../lib/sequence.js";
 import { shiftKeys, keyPatch, takeKeys } from "../lib/keyframes.js";
 import { VOICE_STATES, voiceState, castMember } from "../lib/voice.js";
 import { fitStart, fitGap, edgeRoom, layerSpans } from "../lib/track-fit.js";
@@ -17,6 +17,7 @@ import { toast } from "./toast.js";
 import { AudioVolumeLine, SourceVolumeLine } from "./tl-volume-line.js";
 import { Wave } from "./tl-wave.js";
 import { toggleAudioSel, rangeAudioSel } from "./tl-audio-sel.js";
+import { clickClip } from "./tl-clip-sel.js";
 import { trimDown } from "./tl-roll.js";
 import { liftShot, overlayToShot } from "./tl-lift.js";
 import { inView } from "./tl-view.js";
@@ -263,7 +264,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
           const len = snap(clip.start + clip.length + shift, ev) - clip.start;
           let text;
           if (video) {
-            const out = clamp(clip.in + len, clip.in + MIN_VIDEO, end);
+            const out = clamp(clip.in + len * clip.speed, clip.in + MIN_VIDEO, end); // file seconds at the shot's speed
             patch = { trimOut: out };
             text = `出點 ${out.toFixed(2)} 秒`;
           } else {
@@ -278,8 +279,8 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
           let s = snap(clip.start + shift, ev) - clip.start;
           let text;
           if (video) {
-            const tIn = clamp(clip.in + s, 0, clip.out - MIN_VIDEO);
-            s = tIn - clip.in;
+            const tIn = clamp(clip.in + s * clip.speed, 0, clip.out - MIN_VIDEO);
+            s = (tIn - clip.in) / clip.speed;
             patch = { trimIn: tIn };
             text = `入點 ${tIn.toFixed(2)} 秒`;
           } else {
@@ -288,7 +289,7 @@ export function VideoTrack({ project, clips, ctx, editSel, focus, picked }) {
             patch = { duration: d };
             text = `片長 ${d.toFixed(2)} 秒`;
           }
-          const geo = { start: clip.start + s, length: clip.length - s, in: clip.in + s };
+          const geo = { start: clip.start + s, length: clip.length - s, in: clip.in + s * clip.speed };
           setDrag({ id, geo, tip: { t: geo.start, text } });
         }
       },
@@ -666,6 +667,7 @@ export function OverlayClip({ project, item, ctx, selected }) {
   const media = (project.media || {})[item.mediaId];
   const still = !!media && media.kind === "image";
   const full = !still && media && media.duration ? Number(media.duration) : 0;
+  const sp = still ? 1 : clipSpeed(item, "video"); // file seconds per timeline second
   const base = { start: Number(item.start || 0), in: Number(item.in || 0), length: Number(item.length || MIN_ITEM) };
   const cur = drag || base;
 
@@ -713,14 +715,14 @@ export function OverlayClip({ project, item, ctx, selected }) {
           }
         } else if (mode === "l") {
           const end = base.start + base.length;
-          const lo = Math.max(room.lo, still ? end - MAX_STILL : base.start - base.in);
+          const lo = Math.max(room.lo, still ? end - MAX_STILL : base.start - base.in / sp);
           const start = round(clamp(snap(base.start + shift, ev), lo, end - minLen), 3);
-          const tIn = still ? base.in : round(base.in + start - base.start, 3);
+          const tIn = still ? base.in : round(Math.max(0, base.in + (start - base.start) * sp), 3);
           next = { start, in: tIn, length: round(end - start, 3) };
           text = still ? `長度 ${next.length.toFixed(2)} 秒` : `入點 ${tIn.toFixed(2)} 秒`;
           if (room.lo > 0 && Math.abs(start - room.lo) < 1e-3) text += "，碰到相鄰片段";
         } else {
-          const hi = Math.min(room.hi - base.start, still ? MAX_STILL : full > 0 ? full - base.in : MAX_TIME);
+          const hi = Math.min(room.hi - base.start, still ? MAX_STILL : full > 0 ? (full - base.in) / sp : MAX_TIME);
           const length = round(clamp(snap(base.start + base.length + shift, ev) - base.start, minLen, hi), 3);
           next = { ...base, length };
           text = `長度 ${length.toFixed(2)} 秒`;
@@ -734,7 +736,7 @@ export function OverlayClip({ project, item, ctx, selected }) {
         setDrag(null);
         ctx.onPipGap(null);
         if (!moved) {
-          setState({ editSel: { type: "overlay", id: item.id } });
+          clickClip(ev, project, "overlay", item);
           return;
         }
         if (cancelled || !next) return;
@@ -768,11 +770,12 @@ export function OverlayClip({ project, item, ctx, selected }) {
   const style = `left:${cur.start * pps}px;width:${width}px` + (drag && drag.dy ? `;transform:translateY(${drag.dy}px)` : "");
   return html`<div class=${cls} style=${style} data-sel=${`overlay:${item.id}`}
     title=${`${name}\n${fmtSeconds(cur.start, 2)} 開始，長 ${fmtSeconds(cur.length, 2)}\n${clipActions(ctx,
-      "拖曳移動，上下拖曳換軌道，拖進「畫面」軌可穿插成鏡頭，拖曳左右邊緣修剪，雙擊跳到開頭", "雙擊跳到開頭")}`}
+      "拖曳移動，上下拖曳換軌道，拖進「畫面」軌可穿插成鏡頭，拖曳左右邊緣修剪，雙擊跳到開頭，Ctrl+點擊逐一加選，Shift+點擊選取同一軌中間的片段",
+      "雙擊跳到開頭")}`}
     onPointerDown=${(e) => begin(e, "move")} onDblClick=${() => setTime(cur.start)}>
     ${thumb && html`<div class="tl-tiles" style=${`background-image:url("${fileUrl(project.id, thumb)}");background-size:auto 100%`}></div>`}
     <div class="tl-clip-label"><${Icon} name=${still ? "image" : "video"} size=${12} /><span>${media ? name : "找不到素材檔"}</span></div>
-    <span class="tl-clip-dur mono">${fmtSeconds(cur.length, 1)}</span>
+    <span class="tl-clip-dur mono">${sp !== 1 ? `${sp}x · ` : ""}${fmtSeconds(cur.length, 1)}</span>
     <${KeyMarks} item=${item} pps=${pps} drag=${drag} base=${base} length=${cur.length} />
     <${Handles} onDown=${begin} />
   </div>

@@ -33,6 +33,10 @@ WAVE_RATE = 4000  # samples per second of the mono 16-bit audio the waveform env
 QUALITY = {
     "high": {"crf": 18, "x264": "slow", "cq": 19, "nv": "p6", "abr": "192k"},
     "standard": {"crf": 21, "x264": "medium", "cq": 23, "nv": "p5", "abr": "160k"},
+    # Small files for upload and hand-off, the common web-delivery x264 setting (HandBrake's Fast 1080p30:
+    # RF 22, fast, Main, AAC 160k) made straight from the render instead of re-encoding a finished export.
+    # Its sizes hold for x264 only, so export_options always encodes it on the CPU.
+    "compact": {"crf": 22, "x264": "fast", "cq": 23, "nv": "p5", "abr": "160k", "profile": "main"},
     "draft": {"crf": 26, "x264": "veryfast", "cq": 28, "nv": "p2", "abr": "128k"},
 }
 
@@ -66,6 +70,88 @@ KENBURNS_LABELS = {
     "zoom_in_right": "推近並偏右",
     "static": "靜止",
 }
+
+
+# Stabilize (libvidstab) settings a stabilized copy is rendered with; they are stored on the copy as
+# source.settings. Numbers are (default, low, high); a copy made before settings existed used exactly the defaults.
+STAB_NUMBERS: dict[str, tuple[float, float, float]] = {
+    "shakiness": (5, 1, 10),       # detect: how shaky / how fast the camera moves (higher is slower to measure)
+    "accuracy": (15, 1, 15),       # detect: never below shakiness
+    "stepsize": (6, 1, 32),        # detect: search step in pixels
+    "mincontrast": (0.25, 0, 1),   # detect: fields with less contrast are ignored
+    "smoothing": (15, 0, 300),     # transform: frames each side averaged into the camera path (0: a fixed camera)
+    "zoom": (0, -100, 100),        # transform: extra zoom in percent (negative zooms out)
+    "zoomspeed": (0.25, 0, 5),     # transform: optzoom 2 only, the most it zooms per frame in percent
+    "maxshift": (-1, -1, 500),     # transform: the most a frame may move in pixels (-1: no limit)
+    "maxangle": (-1, -1, 3.14),    # transform: the most a frame may turn in radians (-1: no limit)
+    "sharpen": (0.8, 0, 2),        # unsharp luma amount after the transform (0: none); chroma gets half
+    "gyroSmooth": (0.5, 0.05, 1),  # engine "gyro" only: Gyroflow's smoothness (its own default is 0.5)
+}
+STAB_INTS = {"shakiness", "accuracy", "stepsize", "smoothing", "maxshift"}
+STAB_CHOICES: dict[str, tuple] = {
+    "optzoom": (1, (0, 1, 2)),     # 0: zoom only by `zoom`, 1: one zoom that hides every edge, 2: zoom follows the shake
+    "crop": ("keep", ("keep", "black")),  # what fills the edges the shift uncovers: the previous frame, or black
+    "optalgo": ("opt", ("opt", "gauss", "avg")),
+    "interpol": ("bilinear", ("no", "linear", "bilinear", "bicubic")),
+    # vidstab: ffmpeg's libvidstab follows the picture; gyro: Gyroflow follows the camera's own gyro data (gyro.py)
+    "engine": ("vidstab", ("vidstab", "gyro")),
+}
+STAB_FLAGS = {"tripod": False, "relative": True}  # tripod: lock to the first frame, as if on a tripod
+STAB_DEFAULTS: dict = {**{k: v[0] for k, v in STAB_NUMBERS.items()}, **{k: v[0] for k, v in STAB_CHOICES.items()},
+                       **STAB_FLAGS}
+GYRO_KEYS = {"engine", "gyroSmooth"}  # all that a gyro copy is made with; vidstab uses every other key
+
+
+def clean_stab(raw: object) -> dict:
+    """Every stabilize setting, filled from STAB_DEFAULTS and clamped. None means the defaults; an unknown key or
+    a value that is not one of a choice's options is an error, so a typo does not quietly render with defaults."""
+    if raw is None:
+        return dict(STAB_DEFAULTS)
+    if not isinstance(raw, dict):
+        raise AppError("防抖設定 settings 要是物件")
+    unknown = sorted(set(raw) - set(STAB_DEFAULTS))
+    if unknown:
+        raise AppError(f"防抖設定沒有 {', '.join(unknown)}；可用：{', '.join(STAB_DEFAULTS)}")
+    out = dict(STAB_DEFAULTS)
+    for key, value in raw.items():
+        if value is None:
+            continue
+        if key in STAB_NUMBERS:
+            _, low, high = STAB_NUMBERS[key]
+            try:
+                num = min(high, max(low, float(value)))
+            except (TypeError, ValueError):
+                raise AppError(f"防抖設定 {key} 要是數字") from None
+            out[key] = int(round(num)) if key in STAB_INTS else round(num, 4)
+        elif key in STAB_CHOICES:
+            options = STAB_CHOICES[key][1]
+            pick = int(value) if key == "optzoom" and isinstance(value, (int, float)) and not isinstance(value, bool) \
+                else value
+            if pick not in options:
+                raise AppError(f"防抖設定 {key} 只能是 {' / '.join(str(o) for o in options)}")
+            out[key] = pick
+        else:
+            out[key] = bool(value)
+    out["accuracy"] = max(out["accuracy"], out["shakiness"])
+    # The keys the other engine ignores go back to their defaults, so two copies made the same way compare equal.
+    gyro = out["engine"] == "gyro"
+    return {k: v if (k in GYRO_KEYS) == gyro or k == "engine" else STAB_DEFAULTS[k] for k, v in out.items()}
+
+
+def stab_filters(settings: dict) -> tuple[str, str]:
+    """The vidstabdetect and vidstabtransform (+ unsharp) filter strings for cleaned settings; the motion file is
+    stab.trf in the working directory."""
+    s = settings
+    tripod = ":tripod=1" if s["tripod"] else ""
+    detect = (f"vidstabdetect=shakiness={s['shakiness']}:accuracy={s['accuracy']}:stepsize={s['stepsize']}"
+              f":mincontrast={s['mincontrast']:g}{tripod}:result=stab.trf")
+    transform = (f"copy,vidstabtransform=input=stab.trf:smoothing={s['smoothing']}:optalgo={s['optalgo']}"
+                 f":maxshift={s['maxshift']}:maxangle={s['maxangle']:g}:crop={s['crop']}"
+                 f":relative={int(s['relative'])}:zoom={s['zoom']:g}:optzoom={s['optzoom']}"
+                 f":zoomspeed={s['zoomspeed']:g}:interpol={s['interpol']}{tripod}")
+    if s["sharpen"] > 0:
+        transform += f",unsharp=5:5:{s['sharpen']:g}:3:3:{s['sharpen'] / 2:g}"
+    return detect, transform
 
 
 def find_ffmpeg(configured: str = "", tools_dir: Path | None = None) -> str | None:
@@ -160,6 +246,7 @@ def parse_probe(text: str) -> dict:
         "vcodec": None,
         "pixfmt": None,
         "acodec": None,
+        "audioStreams": 0,
         "alpha": False,
     }
     m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", text)
@@ -179,10 +266,12 @@ def parse_probe(text: str) -> dict:
             mf = re.search(r", (\d+(?:\.\d+)?) fps", line) or re.search(r", (\d+(?:\.\d+)?) tbr", line)
             if mf:
                 info["fps"] = float(mf.group(1))
-        elif "Audio:" in line and not info["hasAudio"]:
-            info["hasAudio"] = True
-            ma = re.search(r"Audio: ([^\s,]+)", line)
-            info["acodec"] = ma.group(1) if ma else None
+        elif "Audio:" in line:
+            info["audioStreams"] += 1
+            if not info["hasAudio"]:
+                info["hasAudio"] = True
+                ma = re.search(r"Audio: ([^\s,]+)", line)
+                info["acodec"] = ma.group(1) if ma else None
     rot = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees", text)
     if rot and info["width"] and abs(round(float(rot.group(1)))) % 180 == 90:
         info["width"], info["height"] = info["height"], info["width"]
@@ -443,7 +532,7 @@ class Media:
             rate = ["-b:v", f"{maxrate}k", *cap] if maxrate else ["-global_quality", str(q["cq"])]
             return ["-c:v", "h264_qsv", *rate, "-pix_fmt", "nv12"]
         return ["-c:v", "libx264", "-preset", q["x264"], "-crf", str(q["crf"]), *cap, "-pix_fmt", "yuv420p",
-                "-profile:v", "high"]
+                "-profile:v", q.get("profile", "high")]
 
     # ------------------------------------------------------------ operations
     def thumbnail(self, src: Path, dst: Path, width: int = 384, at: float | None = None) -> None:
@@ -529,6 +618,24 @@ class Media:
         self.run(["-ss", f"{max(0.0, at):.3f}", *(["-c:v", decoder] if decoder else []), "-i", str(src), "-frames:v", "1",
                   "-an", "-vf", AS_709, str(dst)], timeout=120)
 
+    def rgb_frame(self, src: Path, at: float, width: int) -> bytes:
+        """One frame `width` pixels wide as raw 8-bit RGB (rows of width * 3 bytes), for colour analysis."""
+        exe = self.require()
+        try:
+            proc = subprocess.run(
+                [exe, "-hide_banner", "-nostdin", "-loglevel", "error", "-ss", f"{max(0.0, at):.3f}", "-i", str(src),
+                 "-frames:v", "1", "-an", "-sn", "-vf", f"{AS_709},scale={width}:-2:flags=area,format=rgb24",
+                 "-f", "rawvideo", "-"],
+                capture_output=True,
+                timeout=120,
+                creationflags=NO_WINDOW,
+            )
+        except subprocess.TimeoutExpired:
+            raise AppError("讀取畫面逾時", 500) from None
+        if proc.returncode != 0:
+            raise self._error(proc.stderr.decode("utf-8", "replace"))
+        return proc.stdout
+
     def kenburns(
         self,
         src: Path,
@@ -595,9 +702,11 @@ class Media:
         has_audio: bool,
         cancelled: Callable[[], bool] | None = None,
         on_progress: Callable[[float], None] | None = None,
+        settings: dict | None = None,
     ) -> None:
         """Steady [start, start + length) of a shaky video with libvidstab: a first pass measures the camera's
-        shake, a second smooths it away and zooms in just enough to hide the moving edges. The motion file
+        shake, a second smooths it away and (by default) zooms in just enough to hide the moving edges; settings
+        are the STAB_DEFAULTS keys (clean_stab). The motion file
         is named relative to dst's folder (the working directory), as filter options cannot take a Windows path.
         "copy" hands vidstabtransform a fresh frame every time: given a mix of writable and shared decoder frames
         it keeps reading a released buffer, and every second or so a frame from further on shows up."""
@@ -606,29 +715,69 @@ class Media:
         def part(base: float, share: float) -> Callable[[float], None] | None:
             return (lambda f: on_progress(base + f * share)) if on_progress else None
 
+        detect, transform = stab_filters(clean_stab(settings))
         work = dst.parent
         cut = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src)]
-        self.run_progress([*cut, "-vf", "vidstabdetect=shakiness=5:accuracy=15:result=stab.trf", "-an", "-f", "null",
-                           "-"], length, part(0.0, 0.35), cancelled, cwd=work)
-        args = [*cut, "-vf",
-                "copy,vidstabtransform=input=stab.trf:smoothing=15:zoom=0:optzoom=1,unsharp=5:5:0.8:3:3:0.4",
-                *self.encoder_args("libx264", "high")]
+        self.run_progress([*cut, "-vf", detect, "-an", "-f", "null", "-"], length, part(0.0, 0.35), cancelled,
+                          cwd=work)
+        args = [*cut, "-vf", transform, *self.encoder_args("libx264", "high")]
         args += ["-c:a", "aac", "-b:a", "192k"] if has_audio else ["-an"]
         self.run_progress([*args, "-movflags", "+faststart", dst.name], length, part(0.35, 0.65), cancelled, cwd=work)
 
     def to_web_video(self, src: Path, dst: Path, cancelled: Callable[[], bool] | None = None) -> None:
-        """Re-encode a video the browser cannot play (HEVC, ProRes, 10-bit...) into H.264 MP4."""
+        """Turn a video the browser cannot play into an H.264 MP4 it can. When only the container is the problem
+        (a camera's MXF, a MOV or MKV holding 8-bit 4:2:0 H.264) the picture is copied as it is: fast, and the
+        full resolution is kept. Otherwise (HEVC, ProRes, 10-bit, 4:2:2...), or when the copy fails, it is
+        re-encoded. Of several audio tracks the loudest is kept: cameras record up to four mono channels, often
+        with only one live microphone, and ffmpeg on its own would take the first."""
         info = self.probe(src)
-        args = ["-i", str(src), *self.encoder_args("libx264", "standard"), "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]
-        args += ["-c:a", "aac", "-b:a", "160k"] if info["hasAudio"] else ["-an"]
-        args += ["-movflags", "+faststart", str(dst)]
-        self.run_progress(args, info["duration"] or 1.0, None, cancelled, timeout=3 * 3600)
+        total = info["duration"] or 1.0
+        audio = ["-c:a", "aac", "-b:a", "160k"] if info["hasAudio"] else ["-an"]
+        picked = []
+        if info["audioStreams"] > 1:
+            picked = ["-map", "0:V:0", "-map", f"0:a:{self.loudest_audio(src, info['audioStreams'])}"]
+        if self.web_copyable(info):
+            maps = picked or ["-map", "0:V:0", *(["-map", "0:a:0"] if info["hasAudio"] else [])]
+            try:
+                self.run_progress(["-i", str(src), *maps, "-c:v", "copy", *audio, "-movflags", "+faststart",
+                                   str(dst)], total, None, cancelled, timeout=3600)
+                return
+            except AppError as exc:
+                if exc.status == 499:
+                    raise
+                log.warning("Copying the picture of %s into MP4 failed, re-encoding: %s", src.name, exc.message)
+                dst.unlink(missing_ok=True)
+        args = ["-i", str(src), *picked, *self.encoder_args("libx264", "standard"),
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", *audio, "-movflags", "+faststart", str(dst)]
+        self.run_progress(args, total, None, cancelled, timeout=3 * 3600)
+
+    def loudest_audio(self, src: Path, count: int, window: float = 30.0) -> int:
+        """Which audio track (0-based among the audio streams) has the highest mean volume over the first `window`
+        seconds; the first one when they tie or none can be measured."""
+        exe = self.require()
+        levels: list[float] = []
+        for i in range(count):
+            try:
+                proc = subprocess.run(
+                    [exe, "-hide_banner", "-nostdin", "-loglevel", "info", "-t", f"{window:g}", "-i", str(src),
+                     "-map", f"0:a:{i}", "-af", "volumedetect", "-f", "null", "-"],
+                    capture_output=True,
+                    timeout=300,
+                    creationflags=NO_WINDOW,
+                )
+            except subprocess.TimeoutExpired:
+                raise AppError("分析音軌音量逾時", 500) from None
+            m = re.search(r"mean_volume:\s*(-?[\d.]+) dB", proc.stderr.decode("utf-8", "replace"))
+            levels.append(float(m.group(1)) if m else -999.0)
+        best = max(range(count), key=lambda i: levels[i]) if count else 0
+        log.info("Audio tracks of %s, mean dB %s: keeping track %d", src.name, levels, best)
+        return best
+
+    @staticmethod
+    def web_copyable(info: dict) -> bool:
+        """The picture itself is one the browser plays, so only the container needs changing."""
+        return (info.get("vcodec") or "") in WEB_VIDEO_CODECS and (info.get("pixfmt") or "yuv420p") in WEB_PIX_FMTS
 
     @staticmethod
     def web_playable(info: dict, path: Path) -> bool:
-        ext = path.suffix.lower()
-        return (
-            ext in (".mp4", ".m4v", ".webm")
-            and (info.get("vcodec") or "") in WEB_VIDEO_CODECS
-            and (info.get("pixfmt") or "yuv420p") in WEB_PIX_FMTS
-        )
+        return path.suffix.lower() in (".mp4", ".m4v", ".webm") and Media.web_copyable(info)

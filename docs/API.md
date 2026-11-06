@@ -52,20 +52,20 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | 欄位 | 內容 |
 |---|---|
 | `id`、`name`、`rev` | `rev` 每次修改加 1 |
-| `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle` |
+| `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle`（專案預設字幕樣式的 id，指向 `captionStyles` 裡的一個樣式；新專案預設帶一個「常用：白字細黑框」樣式並設為預設，樣式庫開了自動加入且有樣式時改帶樣式庫） |
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
 | `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本。影片版本與素材可能有 `preview2`、`preview4`：1/2、1/4 解析度預覽檔的路徑（`media/thumbs/<id>_p2.mp4`），由 `preview-files` 產生，只供預覽播放，輸出一律用原檔。有聲音的版本與素材另有 `previewAudio`：預覽播放聲音用的 16 位元立體聲 48 kHz WAV（`media/thumbs/<id>_a.wav`），由 `audio-files` 產生。以 1 以外速度播放的聲音另有 `previewAudioSpeeds`：`{速度鍵: 路徑}`，速度鍵是四捨五入到小數 4 位、去掉尾端 0 的速度（`0.5`、`1.3333`），檔案（`media/thumbs/<id>_a_<速度鍵>.wav`）用輸出同一組 atempo 變速、音高不變 |
 | `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title, track, pair, disabled}`，時間是序列上的秒數。`track` 是所在的字幕軌（`captionTracks` 的 id；沒有或指向已不存在的軌道時算在主字幕軌）。`pair` 是這句所翻譯那句字幕的 id（雙語匯入時英文指向中文），語音對齊時兩句一起移動。`disabled: true` 時保留位置，但不顯示、不輸出、不寫進 SRT。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
 | `captionTracks` | 主字幕軌以外的字幕軌 `{id, name, hidden}`。陣列順序是時間軸上由上到下的順序，主字幕軌永遠在最上面。同時出現在畫面下方的字幕，越下面的軌道越靠近畫面底邊（雙語匯入的英文軌在中文軌下面，所以英文在最下一行、中文在上一行）；畫面上方與中間的字幕相反，越上面的軌道越靠近邊緣。`hidden: true` 的軌道預覽與輸出都不顯示；主字幕軌的開關是 `tracks.captionsHidden` |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
 | `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed`。`denoise` 是降噪 `{on, strength, low, mid, high, sample}`：數值 0~1（預設 0.6、1、1、1），`sample` 是原始檔裡只有雜音的一段 `{from, to}`（秒，至少 0.25 秒，超過 10 秒只取前 10 秒），`null` 時還沒取樣、不降噪。`dereverb` 是去回音 `{on, strength, release, dryness, bass, body, tone}`：`body`、`tone` 是 -1~1，其餘 0~1（預設強度 0.6、release 0.3、dryness 0.5，其餘 0）。`channel` 是只播原始檔的哪一個聲道 `{stream, index}`（第幾條音訊串流、其中第幾個聲道，0~63），`null` 時播第一條音訊串流混成的立體聲。`on: false` 保留設定但不處理；有取樣的降噪、去回音或指定聲道時，預覽與輸出播 `media/clean/` 裡處理好的檔（`voice-clean`） |
-| `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背 |
+| `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背。影片的 `speed`（0.25~4，沒有時是 1）是每秒時間軸播幾秒素材：`length` 仍是時間軸秒數，用到素材的 `in` 到 `in + length * speed`，聲音用 atempo 同速播放；改速度要保留同一段畫面時，`length` 同時改成 `length * 舊速度 / 新速度`。圖片的 `speed` 不生效 |
 | `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用）；`musicOrder` 是音樂軌由上到下的代號（片段的 `track`，沒有 `track` 的用片段 id），沒列到的排在後面，只影響顯示 |
 | `markers` | 時間軸標記陣列 `{id, start, color, name}`，`start` 是序列秒數；color 可用 `blue`、`red`、`orange`、`yellow`、`green`、`purple` |
 | `review` | 整體的客戶意見，格式同鏡頭的 `review`；客戶寫的整體意見與已刪除鏡頭的意見放在這裡，用 `project.update` 的 `patch.review` 整組取代 |
 | `folder` | 首頁的專案資料夾代號（設定 `ui.projectFolders` 的 `{id, name}` 之一，最多 40 字），`""` 是不放資料夾；代號不在設定裡（資料夾已刪除）時顯示在最上層。用 `project.update` 的 `patch.folder` 修改 |
-| `media` | 素材庫。`tags` 是標籤陣列（每個最多 30 字、每個素材最多 20 個，重複的只留一個），用 `media.update` 的 `patch.tags` 整組取代 |
+| `media` | 素材庫。`tags` 是標籤陣列（每個最多 30 字、每個素材最多 20 個，重複的只留一個），用 `media.update` 的 `patch.tags` 整組取代。p5 動畫輸出的影片可以有 `p5`：`{"page", "segment", "edits": [{"file", "at", "old", "new"}]}`（4.1 節） |
 
 鏡頭常用欄位：
 
@@ -88,6 +88,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `parked` | 鏡頭移出序列時收起的項目 `{"captions", "audio", "overlays", "adjustments"}`，時間從鏡頭開頭算；放回序列時由連動放回（見 3.2） |
 | `grade` | 只套在這個鏡頭畫面的調色，格式同下方調整圖層的 `grade`，調整圖層再疊在上面；只對影片、圖片鏡頭有效 |
 | `masks` | 模糊或馬賽克框，最多 8 個：`{x, y, w, h, mode, strength}`。`x`、`y`、`w`、`h` 是佔畫面寬、高的比例（`w`、`h` 0.02~1，框被夾在畫面內），`mode` 是 `blur` 或 `mosaic`，`strength` 0.1~1 控制模糊程度或格子大小。框固定在畫面上，不蓋上層畫面與字幕 |
+| `transform` | 鏡頭畫面的不透明度、位置、縮放、旋轉、裁剪與變形（ED-30）：`{opacity, x, y, rotation, scale, scaleX, scaleY, anchorX, anchorY, crop: {l, r, t, b}, distort: {tl, tr, br, bl}}`，缺的欄位用預設值。`opacity` 0~1；`x`、`y`、`anchorX`、`anchorY` 是佔畫面寬、高的比例（-4~4，原點在畫面中央，Y 往上為正）；`rotation` 度（-3600~3600，逆時針為正）；`scale`、`scaleX`、`scaleY` 0.01~10，實際寬、高比例是 `scale × scaleX`、`scale × scaleY`；`crop` 各邊 0~0.98（左加右、上加下合計不超過 0.98），修掉的邊變黑色；`distort` 每個角 `[x, y]`（-4~4，佔畫面比例，Y 往上）。套用順序：遮罩、修剪、變形、繞錨點縮放與旋轉、移動。不改變畫面時存成 `null`。只對影片、圖片鏡頭有效 |
 
 停用片段在各軌用的欄位：鏡頭、字幕、上方畫面是 `disabled`，音訊是 `muted`，調整圖層是 `hidden`。
 
@@ -115,6 +116,27 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `tint` | -100~100 | 0 | 色調，正值偏洋紅、負值偏綠 |
 | `hue` | -180~180 | 0 | 色相旋轉（度） |
 | `mix` | 0~1 | 1 | 混合比例 |
+| `wb` | 物件 | | 白平衡區塊，在色輪之前套用，欄位見下表 |
+
+`grade.wb` 白平衡（做法同 FCPX 的 White Balance 外掛：取樣一塊應該是灰色的地方，算出讓它變灰的三色增益，再加色溫、色調、色調曲線）。每個欄位都是數字，調整圖層的關鍵幀可以漸變：
+
+| 欄位 | 範圍 | 中性值 | 說明 |
+|---|---|---|---|
+| `r`、`g`、`b` | 0.01~1 | 0.5 | 取樣到的顏色（應該是灰色的那塊）；三個相等時不校正 |
+| `x`、`y`、`size` | 0~1、0~1、0.01~1 | 0.5、0.5、0.1 | 取樣位置（畫面比例）與方框邊長（畫面寬的比例），只記錄、不影響畫面 |
+| `amount` | 0~1 | 1 | 校正強度：1 把取樣色完全變灰 |
+| `exposure`、`level` | 0~1、0.05~0.95 | 0、0.5 | 曝光：把取樣處亮度拉到 `level`，`exposure` 是拉多少 |
+| `temp`、`tint` | -100~100 | 0 | 色溫（正值暖）、色調（正值偏洋紅） |
+| `hue` | -180~180 | 0 | 色相旋轉（度） |
+| `sat` | -1~1 | 0 | 飽和度增減 |
+| `blacks` | -1~1 | 0 | 黑位：正值把最暗處壓到黑 |
+| `lift`、`gain`、`gamma` | -1~1 | 0 | 暗部提升、亮部增益、中間調 |
+| `fill` | -1~1 | 0 | 補光：提亮暗部與中間調，亮部幾乎不動 |
+| `bright`、`contrast` | -1~1 | 0 | 亮度、對比 |
+| `shadows`、`midtones`、`highlights` | 0~1 | 1 | 這個區塊對暗部、中間調、亮部的作用比例 |
+| `mix` | 0~1 | 1 | 白平衡區塊整體的混合比例 |
+
+增益限制在 0.25~4 倍。`/analyze` 與 `/auto-color`（3.8 節）會自動算出這個區塊。
 
 關鍵幀 `keyframes`：`[{"t": 0, "opacity": 0}, {"t": 2.5, "opacity": 1}]`，`t` 是片段內的秒數（取到 0.001 秒），最多 200 個，同一個 `t` 以後給的為準。兩個關鍵幀之間平順變化，第一個之前、最後一個之後維持端點的值。某個欄位只要有關鍵幀，就以關鍵幀為準，片段本身的那個欄位不再使用；沒有關鍵幀的欄位照舊。
 
@@ -174,7 +196,7 @@ POST /api/projects/{pid}/ops
 
 ### 3.2 連動（linked）
 
-介面上「連動上下軌」開著時，鏡頭的修剪、移動、刪除都用 `linked` 包起來送出。後端會依鏡頭前後的位置變化，把字幕、配音、音樂、上層畫面、調整圖層一起平移（調整圖層只移開始時間，長度不變）；刪除鏡頭時，整句落在該鏡頭範圍內的字幕（與它的配音）一起刪除。把鏡頭移出序列（`inSequence: false`）時，整個落在它上面的項目收進鏡頭的 `parked`，放回序列時回到鏡頭的新位置。同一批 op 自己改過的項目（開始時間有變或新加入）與 `fixed` 的音訊不移動。
+介面上「連動上下軌」開著時，鏡頭的修剪、移動、刪除都用 `linked` 包起來送出。後端會依鏡頭前後的位置變化，把字幕、配音、音樂、上層畫面、調整圖層一起平移（調整圖層只移開始時間，長度不變）；刪除鏡頭時，整句落在該鏡頭範圍內的字幕（與它的配音）一起刪除；跨過刪除範圍的字幕剪掉那一段後往前補（剩不到 0.5 秒也刪除）。整段落在刪除範圍內的音訊、上層畫面、調整圖層一起刪除，跨過刪除範圍的上層畫面、調整圖層、分離的原聲（帶 `takeId`／`shotId`）與配音軌上的錄音（`track: "voice"`，或帶 `captionId` 但媒體 `source` 沒有 `captionId`）剪掉那一段後往前補；後面剪出的片段不帶 `captionId`，綁定的字幕被刪除時第一段的 `captionId` 改成 `null`。由字幕產生的配音（媒體 `source.captionId`）不剪斷，跟著字幕開頭移動。素材庫的音樂與音效（沒有 `takeId`、`shotId`）跨過刪除範圍時不剪斷：整段保留（開頭落在刪除範圍內時移到刪除點），`in`、`out`、淡入淡出不變，只把 `keyframes` 跟著畫面走：刪除或縮短（含修剪鏡頭開頭）時，落在剪掉範圍內的關鍵幀刪掉、後面的往前補，接點補一個沿用剪掉範圍結尾數值的關鍵幀；加長、在中間插入鏡頭或定格時，後面的關鍵幀往後推，新加的那段頭尾各補一個沿用插入點數值的關鍵幀（整段維持同一音量）。聲音整段在變動點之後時只改 `start`，關鍵幀不動；分割不改關鍵幀。同一批 op 裡留下的鏡頭順序有變（`shot.move`）時，關鍵幀一律不動。把鏡頭移出序列（`inSequence: false`）時，整個落在它上面的項目收進鏡頭的 `parked`，放回序列時回到鏡頭的新位置。同一批 op 自己改過的項目（開始時間有變或新加入）與 `fixed` 的音訊不移動。
 
 介面上連動關閉、但有鏡頭收著項目時，鏡頭編輯會用 `{"op": "linked", "shift": false}` 送出，只負責放回。生成工作（`POST /api/jobs` 的 `payload.link`）與匯入劇本（`link`）預設連動，送 `false` 時不移動其他軌。
 
@@ -253,7 +275,16 @@ POST /api/projects/{pid}/edit
 | `detach` | `id` 或 `t` | 把鏡頭原聲拆成音訊片段，鏡頭改成無聲 | 新的音訊片段 |
 | `restore` | `id`（鏡頭或它的原聲片段） | 刪掉原聲片段，鏡頭恢復有聲 | |
 | `reverse` | `id` 或 `t` | 第一次送出 `reverse` 工作產生倒放影片（不改專案，回傳 `job`）；已有倒放版本時在正放、倒放之間切換，修剪範圍跟著鏡像 | |
-| `stabilizeShots` | `ids`（鏡頭 id 陣列），可選 `on`（預設 `true`） | 多選鏡頭一次防抖：`on` 為 `true` 時處理還沒防抖的影片鏡頭，已有防抖版本的直接換上，沒有的各送一個 `stabilize` 工作（回傳 `jobs` 陣列）；`false` 時把已防抖的換回原始影片。沒有影片的鏡頭略過，換版本的部分是一個復原步驟 | |
+| `stabilize` | `id` 或 `t`，可選 `type`（`shot` 或 `overlay`）、`on`、`settings` | 換成防抖版本或換回原始影片。`on` 不給時切換，`true` 確保已防抖，`false` 換回原始影片。`settings` 是防抖設定（見 3.7.1）：已用同一組設定做過、範圍又蓋得到的版本直接換上，否則送 `stabilize` 工作從原始影片重做（回傳 `job`，期間播原始影片，做完自動換上）；已用別組設定防抖的片段先換回原始影片再重做。不給 `settings` 時沿用任何現成的防抖版本，沒有才用預設值做。已是這組設定時不變（`changed: false`） | |
+| `stabilizeShots` | `ids`（鏡頭 id 陣列），可選 `on`（預設 `true`）、`settings` | 多選鏡頭一次防抖：`on` 為 `true` 時處理還沒防抖的影片鏡頭（給 `settings` 時也處理用別組設定防抖的），已有合適防抖版本的直接換上，沒有的各送一個 `stabilize` 工作（回傳 `jobs` 陣列）；`false` 時把已防抖的換回原始影片。沒有影片的鏡頭略過，換版本的部分是一個復原步驟 | |
+| `declip` | `id`，可選 `type`（`shot` 預設或 `audio`） | 壓低爆音：`audio` 把壓低量乘進音訊片段的音量關鍵幀；`shot` 依鏡頭音量重算影片版本的 `volumeKeys`（原始檔秒數），已無爆音時清掉舊的。回應多一個 `spans`（爆音段數） | |
+| `lift` | `id`，可選 `layer`（畫面軌 id 或 `new`，預設新軌）、`start` | 鏡頭移到上層軌，畫面軌留下空白鏡頭；指定既有軌時放進 `start` 附近夠長的空檔。變速、已分離原聲的鏡頭不行 | 新的上方片段 |
+| `drop` | `id`（上方片段）、`index`（0 到鏡頭數） | 上方片段移回畫面軌成為新鏡頭，保留同一段檔案 | 新鏡頭 |
+| `rippleDelete` | `type`（`caption`、`audio`、`overlay`、`adjust`）、`id` | 刪掉片段，同一軌後面的片段往前補；字幕與它的旁白一起刪 | |
+| `title` | `template`、`values`（`{欄位: 文字}` 或 `{欄位: {text, color, boxColor}}`）、`start`，可選 `len`（1 到 30 秒） | 依標題範本加字卡：每個欄位一條字幕與一個字幕樣式，外觀相同的樣式沿用。範本與欄位見 `GET /api/title-templates` | 第一條字幕 |
+| `glossaryFix` | 可選 `ids`（字幕 id 清單，預設全部） | 依設定的字幕用語詞庫改正字幕錯字，一次一個復原步驟 | |
+| `place` | `media`（素材 id 或清單），可選 `at`、`layer`（畫面軌 id 或 `new`）、`track` | 素材放上時間軸：圖片、影片成為新鏡頭（插在 `at` 所在位置，沒給放最後），給 `layer` 時放上方軌；音訊放在 `at` | 第一個新項目 |
+| `moveShots` | `ids`、`index` | 鏡頭依原順序整組移到其餘鏡頭的第 `index` 個位置 | |
 | `roll` | `id`（剪接點前的鏡頭）、`by` | 把這個鏡頭與下一個鏡頭之間的剪接點移動 `by` 秒（正數往後）：前一個鏡頭的出點、後一個的入點一起改，總長度與其他鏡頭不變；素材或鏡頭長度不夠時移到能移的最遠處，回傳實際的 `by` | 兩個鏡頭有原聲時分離原聲 |
 | `slip` | `id`、`by` | 影片鏡頭的入點、出點一起移動 `by` 秒（正數換成較晚的畫面），位置與長度不變 | 有原聲時分離原聲 |
 | `slide` | `id`、`by` | 鏡頭內容不變，跟前後兩個剪接點一起移動 `by` 秒：前一個鏡頭變長、後一個變短（或反過來） | 三個鏡頭有原聲時分離原聲 |
@@ -271,6 +302,47 @@ POST /api/projects/{pid}/edit
 - `roll`、`slip`、`slide` 只作用在畫面軌，`by` 以時間軸秒數計（變速鏡頭的素材移動量是 `by` 乘速度）。`roll` 不能用在最後一個鏡頭，`slip` 只能用在影片鏡頭，`slide` 要前後都有鏡頭；已經移到底時回 400「已經到底了」。三個指令只動畫面：字幕、音訊、上方畫面都不連動（不看 `link`）；用到的鏡頭有原聲時先分離（同 `detach`，放在一條那段時間空著的原聲列，沒有就開新列），聲音留在原位，分離與修剪算一個復原步驟；已分離的原聲不跟著移動。
 - 切點離片段邊緣太近（0.1 秒內，圖片 0.2 秒內）時不能 `split`、`trim`。
 
+#### 3.7.1 防抖設定
+
+`stabilize`、`stabilizeShots` 的 `settings`（預設用 FFmpeg 的 libvidstab 兩段處理：先分析晃動，再平滑鏡頭路徑；`engine` 為 `gyro` 時改用 Gyroflow，見表格後的說明）。缺的欄位用預設值補上，數字超出範圍會被夾住；欄位名稱打錯或選項不在清單裡回 400。做好的版本把完整設定記在 `source.settings`（版本或素材上），之前沒有設定就做好的版本視同預設值。
+
+| 欄位 | 範圍 | 預設 | 說明 |
+|---|---|---|---|
+| `shakiness` | 1~10 整數 | 5 | 晃動程度：晃得越厲害、鏡頭動得越快就調高（分析較慢） |
+| `accuracy` | 1~15 整數 | 15 | 分析精度，不會低於 `shakiness` |
+| `stepsize` | 1~32 整數 | 6 | 搜尋步距（像素），越小越準越慢 |
+| `mincontrast` | 0~1 | 0.25 | 對比低於這個值的區塊不拿來追蹤 |
+| `tripod` | 布林 | `false` | 腳架模式：鎖定第一格的構圖 |
+| `smoothing` | 0~300 整數 | 15 | 前後各取幾格平均鏡頭路徑，越高越穩；0 等於鎖住不動 |
+| `optalgo` | `opt`、`gauss`、`avg` | `opt` | 鏡頭路徑演算法 |
+| `maxshift` | -1~500 整數 | -1 | 每格最大位移（像素），-1 不限 |
+| `maxangle` | -1~3.14 | -1 | 每格最大旋轉（弧度），-1 不限 |
+| `crop` | `keep`、`black` | `keep` | 移動後露出的邊緣：沿用前一格，或填黑 |
+| `relative` | 布林 | `true` | 相對前一格計算（腳架模式時 libvidstab 自動改成絕對） |
+| `optzoom` | 0、1、2 | 1 | 0 不自動放大，1 固定放大到看不到黑邊，2 跟著晃動動態放大 |
+| `zoom` | -100~100 | 0 | 額外放大百分比，負值縮小 |
+| `zoomspeed` | 0~5 | 0.25 | `optzoom` 為 2 時每格最多放大的百分比 |
+| `interpol` | `no`、`linear`、`bilinear`、`bicubic` | `bilinear` | 內插方式 |
+| `sharpen` | 0~2 | 0.8 | 防抖後的銳利化（unsharp 亮度強度，色度取一半），0 不處理 |
+| `engine` | `vidstab`、`gyro` | `vidstab` | `vidstab` 用上面這組設定分析畫面；`gyro` 用 Gyroflow 讀相機原始檔的陀螺儀資料 |
+| `gyroSmooth` | 0.05~1 | 0.5 | `engine` 為 `gyro` 時的平滑度（Gyroflow 的 smoothness），越高越穩 |
+
+`engine` 為 `gyro` 時只看 `gyroSmooth`，其他欄位一律存成預設值（兩組設定只差在 vidstab 欄位時視為同一組）；`engine` 為 `vidstab` 時 `gyroSmooth` 存成預設值。陀螺儀防抖的做法：
+
+- 要先在「設定 › 依賴元件」安裝 Gyroflow（`/api/system/deps/install` `{"id": "gyroflow"}`，裝在 `data/tools/gyroflow`；裝在 `C:\Program Files\Gyroflow` 的也會用），沒有時回 503。
+- APP 匯入的影片沒有陀螺儀資料，所以依匯入時的檔名（`source.name`，去掉副檔名）到專案的相機原始檔資料夾找同名的 `.MXF`、`.MP4`、`.MOV`（不分大小寫，往下找 3 層）。資料夾存在專案設定 `settings.gyroFolder`（`project.update` `{"patch": {"settings": {"gyroFolder": "F:/拍攝/FX6"}}}`）。找到的檔案要影格率相同、長度差在一格內、讀得到陀螺儀資料；沒填資料夾回 400、資料夾或檔案不存在回 404、檔案不符回 422（訊息列出每個候選檔與原因）。
+- Gyroflow 只做鏡頭用到的範圍（從那一格或前一格開始，起點記在 `source.start`，修剪點跟著移），輸出縮到專案畫面大小以內（不放大），再用 ffmpeg 重新編碼，聲音取自 APP 裡的原始影片同一段，所以和原片同步。做好的版本另記 `source.original`（用到的相機原始檔路徑）。
+
+```python
+# 晃得厲害的手持鏡頭：更穩、多放大一點、不銳利化；做完才回傳
+vc.stabilize(pid, shot_id, settings={"shakiness": 8, "smoothing": 40, "zoom": 5, "sharpen": 0})
+# 原本該是固定機位的鏡頭
+vc.edit(pid, "stabilize", id=shot_id, on=True, settings={"tripod": True})
+# 陀螺儀防抖（相機原始檔資料夾先存在專案設定）
+vc.ops(pid, [{"op": "project.update", "patch": {"settings": {"gyroFolder": "F:/拍攝/FX6"}}}])
+vc.stabilize(pid, shot_id, settings={"engine": "gyro", "gyroSmooth": 0.6})
+```
+
 範例：把第 20 到 25 秒的配樂降 6dB，再讓上方圖片在 29 到 30 秒淡出。`in` 是 Python 保留字，要用 `**{...}` 傳。
 
 ```python
@@ -280,6 +352,80 @@ vc.edit(pid, "volume", type="audio", id=music["id"], db=-6, **{"in": 20, "out": 
 logo = next(i for i in tl["items"] if i["type"] == "overlay")
 vc.edit(pid, "keyframe", type="overlay", id=logo["id"], t=29)
 vc.edit(pid, "keyframe", type="overlay", id=logo["id"], t=30, values={"opacity": 0})
+```
+
+#### 3.7.2 自動防抖
+
+`POST /api/projects/{pid}/auto-stabilize` 量每個影片鏡頭的晃動，達門檻的自動防抖，一個復原步驟：
+
+| 欄位 | 說明 |
+|---|---|
+| `ids` | 鏡頭 id 陣列；不給時是序列上每個影片鏡頭（圖片、生成圖卡不算） |
+| `threshold` | 晃動門檻（畫面寬度的百分比，預設 0.3，範圍 0.05~5） |
+| `settings` | 選填：3.7.1 的防抖設定，蓋在自動算出的 `smoothing` 上 |
+| `engine` | `vidstab`（預設，畫面分析）、`gyro`（Gyroflow，從相機原始檔）或 `auto`（找得到原始檔的鏡頭用 `gyro`，其他用 `vidstab`；沒裝 Gyroflow 時全部用 `vidstab`） |
+| `gyroFolder` | 選填：相機原始檔資料夾，同時存成專案的 `settings.gyroFolder`（同一個復原步驟）；不給時用專案已存的 |
+| `dryRun` | `true` 時只回報告，不改專案、不送工作 |
+| `label` | 復原步驟名稱（預設「自動防抖」） |
+
+晃動的量法：用 libvidstab 的動態分析（640 寬）讀鏡頭用到的那段，每格的局部位移去掉頭尾各四分之一再平均（走過畫面的人影響較小），累加成鏡頭路徑，和前後各約 0.5 秒的平均路徑相比，取差值的均方根。穩定的平移、推軌讀成 0，只算手持的抖動。這組活動 4K 素材量到的參考值：腳架 0.03~0.2%、穩定手持 0.3~0.5%、邊走邊拍 0.6~1.2%。
+
+達門檻的鏡頭用 `smoothing` = 每秒格數（前後各約 1 秒）防抖：試拍時 1.19% 的鏡頭降到 0.16%，預設 15 格只降到 0.57%。已經防抖的鏡頭量原始素材，另回 `residual`（防抖版本自己的晃動）；設定相同時不重做，設定不同時改用新設定重做。
+
+量測解析度：libvidstab 的局部位移是整數像素（640 寬時 1 格 = 畫面寬 0.16%），一半以上的位移欄位是 0 時，該格讀成 0。防抖後每格位移不到 1 像素的鏡頭，`residual` 會是 0.00，代表「低於量測解析度」，不是完全靜止。門檻 0.3% 約等於 2 像素，判斷不受影響。
+
+回 `{"changed", "rev"?, "label"?, "jobs": [...], "shots": [{"id", "name", "decision", "reason", "jitter", "speed", "frames", "fps", "threshold", "stabilized", "residual"?, "settings"?, "original"?, "job"?}]}`。`decision`：`stabilize`（防抖，`job` 為 `true` 時版本還在背景產生，片段先播原始素材）、`steady`（低於門檻）、`done`（已用這組設定防抖）、`short`（少於 8 格，無法判斷）、`nogyro`（`engine` 為 `gyro` 但這個鏡頭找不到可用的相機原始檔，`reason` 是原因，鏡頭不動）。`original` 是陀螺儀防抖用到的原始檔路徑。`engine` 為 `auto` 時找不到原始檔的鏡頭改用畫面分析，`reason` 後面附註原因。`threshold` 不是數字或 `engine` 不在清單時回 400；ffmpeg 沒有 libvidstab 時回 501；`engine` 為 `gyro` 但沒裝 Gyroflow 時回 503。
+
+晃動一律從畫面量（兩種引擎同一個門檻）；已用畫面分析防抖的鏡頭以 `gyro` 執行時改用陀螺儀重做（`reason` 結尾「改用陀螺儀重做」）。陀螺儀版本的 `residual` 也是用畫面量的：鏡頭 17（FX6 4K 邊走邊拍，原始 0.99%）的 Gyroflow 版本剩 0.13%，畫面分析版本剩 0.11%。
+
+```python
+rep = vc.auto_stabilize(pid, dry_run=True)          # 先看每個鏡頭晃多少
+vc.auto_stabilize(pid, wait=True)                   # 整支片，等防抖版本做完
+vc.auto_stabilize(pid, [sid], threshold=0.2, settings={"zoom": 3})
+vc.auto_stabilize(pid, engine="auto", gyro_folder="F:/拍攝/FX6", wait=True)  # 有原始檔的用陀螺儀
+```
+
+### 3.8 畫面分析與自動白平衡、曝光
+
+`POST /api/projects/{pid}/analyze` 量一格畫面，不改專案：
+
+| 欄位 | 說明 |
+|---|---|
+| `shot` + `t` | 鏡頭與片段內的秒數（時間軸上從片段開頭算） |
+| `at` | 或給時間軸秒數，取那裡的鏡頭 |
+| `overlay` + `t`、`media` + `t` | 或上方片段、素材庫項目（`t` 是檔案秒數） |
+| `x`、`y`、`size` | 選填：另外量這塊方框（畫面比例），當成白平衡的取樣點 |
+| `wb`、`exposure` | 建議值要算白平衡、曝光（預設都 `true`，不能都關）；`wb` 給 `"auto"` 時自動判斷要不要校正（見下方） |
+| `target` | 亮度中位數目標 0.2~0.7（預設 0.45，越高越亮），或 `"auto"`：人物鏡頭把臉部拉到 0.47，場景鏡頭保留自己的亮度，但拉進 0.42~0.60；給數字時人物鏡頭也以臉部對準這個數字 |
+| `subject` | 曝光以什麼測光：`"auto"`（預設）中景、近景以人臉為準，遠景與找不到人臉的畫面以整體畫面為準；`"scene"` 一律以整體畫面為準（見下方） |
+| `strength` | 白平衡校正強度 0~1（預設 0.6） |
+| `current` | 建議值以這組 `wb` 為底（預設是鏡頭現在的 `grade.wb`），沒算的欄位照留 |
+| `graded` | `true` 時另回 `graded`：經過鏡頭自己調色後的統計 |
+| `basis` | `"graded"` 時建議值以調色後的畫面計算（給疊在上面的調整圖層用） |
+
+回 `{"shot"|"item", "t"|"fileTime", "width", "height", "stats", "region"?, "graded"?, "suggest"}`。`stats` 是 `{"mean": [r, g, b], "p01", "p50", "p99", "max99", "clipHigh", "clipLow"}`（0~1；`max99` 是每點最亮色版的第 99 百分位，`clipHigh` 是過曝比例）；`suggest` 是可直接寫進 `grade.wb` 的整組區塊，`decision` 是 `{"wb": "balance"|"neutral"|"stage"|"off", "chroma", "target"?, "subject"?, "face"?, "faces"?, "faceSize"?, "detector"?}`：`subject` 是 `"person"`（以人臉測光，`face` 是臉部亮度中位數）或 `"scene"`；`faces` 是一格裡最多幾張人臉，`faceSize` 是各取樣格最大人臉高度占畫面比例的中位數（沒有人臉的格算 0）；`detector: "missing"` 表示沒有 OpenCV，改以整體畫面測光。
+
+`POST /api/projects/{pid}/auto-color` 自動白平衡與曝光，寫進每個鏡頭的 `grade.wb`，一個復原步驟：
+
+| 欄位 | 說明 |
+|---|---|
+| `ids` | 鏡頭 id 陣列；不給時是序列上每個有畫面的鏡頭 |
+| `wb`、`exposure`、`target`、`subject`、`strength` | 同 `/analyze` |
+| `samples` | 每個鏡頭平均取幾格（預設 3，避開頭尾） |
+| `dryRun` | `true` 時只回報告，不改專案 |
+| `label` | 復原步驟名稱（預設「自動調色」） |
+
+回 `{"changed", "rev"?, "shots": [{"id", "name", "before", "after", "wb", "decision"}]}`，`before`、`after` 是調整前後的 `stats`，`decision` 同 `/analyze`。曝光的做法刻意保守：黑位最多下壓 0.03（`blacks` 上限 0.3）、亮部增益最多 1.15 倍（`gain` 上限 0.3，以最亮色版計算，飽和的舞台燈不會被推到過曝）、gamma 最多壓暗到 `-0.3`，最後用 gamma 把測光亮度拉到目標；gamma 到上限還不夠亮時，再用 `fill`（最多 0.6）提亮暗部與中間調。已經過曝的畫面不加增益。先前把每個鏡頭拉滿亮度範圍、再用 gamma 壓回中位數的做法，看起來調太多又偏暗，所以改成這組上限。
+
+人物測光：中景、近景看的是人，背景再亮再暗都不該決定曝光。每個取樣格用 OpenCV 內附的 Haar 人臉偵測（正臉、左右側臉，畫面寬 960）找人臉，各取樣格最大人臉高度占畫面比例的中位數（沒有人臉的格算 0）達 5% 時以人臉測光：每張臉量臉部中央的亮度中位數，依臉的高度加權取中位數，拉到 0.47。加權讓大臉多算一點，但單一個誤判的大框（舞台合照裡 Haar 把頭和上半身框成一張臉，中央量到的是西裝和手）壓不過周圍的多張臉；只在三格中一格出現的框也不會讓遠景變成人物鏡頭。偵測框只在中心像膚色、位在畫面上方 60% 內時才算數（Haar 也會框到螢幕上的照片、藍色背板、白光、灰色物件、畫面下方的手或椅子）。遠景（人臉太小）與找不到人臉的畫面以整體畫面測光。數值是用一場室內活動素材對照剪輯師手動調亮的結果調出來的：臉部 0.44~0.52 看起來對，這些鏡頭的整體中位數在 0.58~0.69。沒有 OpenCV（`opencv-python-headless`）時一律以整體畫面測光，伺服器記錄一行警告。限制：背對鏡頭、低頭、側臉角度大、小於畫面 5% 的人臉找不到，會回到整體畫面測光。舞台燈這類強烈色偏會自動降低校正強度，三色增益最大與最小的比例不超過 1.45 倍。
+
+`wb: "auto"` 的判斷：取中間調裡最不飽和的 12% 當成應該是灰色的顏色，算它的色度（色版差除以亮度）。低於 0.06 是已經接近中性，白平衡回到中性不動（`neutral`）；高於 0.20 是刻意的彩色舞台燈，也回到中性保留原色（`stage`）；介於兩者才校正（`balance`）。門檻是用一場室內活動的素材目測調出來的，其他場景請先 `dryRun` 看報告。
+
+```python
+vc.auto_color(pid)                                  # 整支片（vc_client 預設 wb、target 都是 "auto"）
+vc.auto_color(pid, [sid], target=0.5, wb=False)     # 只把這個鏡頭調亮
+seen = vc.analyze(pid, shot=sid, t=1.0, x=0.2, y=0.6, size=0.08)  # 指定白牆取樣
+vc.ops(pid, [{"op": "shot.update", "id": sid, "patch": {"grade": {"wb": seen["suggest"]}}}], "白平衡")
 ```
 
 ## 4. 匯入檔案
@@ -299,13 +445,25 @@ POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
 | `track`、`start`、`layer` | 放到時間軸的音軌或上層軌，`start` 為序列秒數 |
 | `audioTrack` | 聲音檔放到時間軸時指定音軌：`voice`（配音軌）或某條音軌的代號（該軌片段的 `track`）。那段時間該軌已有聲音就改成自成一條音軌；代號格式不對回 400「音軌代號不正確」 |
 
-支援格式：影片 .mp4 .webm .mov .mkv .m4v .avi；圖片 .png .jpg .jpeg .webp .bmp .gif；聲音 .mp3 .wav .m4a .aac .flac .ogg .opus。聲音不能放進鏡頭。不是 h264／vp8／vp9／av1 的 .mp4、.m4v、.webm，以及其他容器，會自動轉成瀏覽器可播放的格式（4K 或高位元率素材建議先轉成 1080p，速度差很多）。
+支援格式：影片 .mp4 .webm .mov .mkv .m4v .avi .mxf；圖片 .png .jpg .jpeg .webp .bmp .gif；聲音 .mp3 .wav .m4a .aac .flac .ogg .opus。聲音不能放進鏡頭。.mp4、.m4v、.webm 裡是 h264／vp8／vp9／av1 且 yuv420p 時原檔保留；其他情況轉成 MP4：畫面已是這幾種編碼與 yuv420p（例如 Sony FX6 的 .MXF）只換外殼、畫面不重新編碼（`-c:v copy`），否則重新編碼成 H.264（4K 或高位元率素材建議先轉成 1080p，速度差很多）。來源有多條音軌時，取前 30 秒平均音量最大的一條轉成 AAC，其餘捨棄。
 
 透明背景的 .webm（VP8／VP9 帶 alpha，例如 p5.js 逐格輸出後用 `ffmpeg -c:v libvpx-vp9 -pix_fmt yuva420p` 編碼）原檔保留，放在上層軌時輸出會保留透明，下層畫面透出；素材資料多一個 `alphaCodec` 欄位。放在畫面軌（鏡頭）時透明部分不生效。這一版之前匯入的透明 webm 要重新匯入才會被認出。
 
 新專案會有一個空白鏡頭，把第一支影片 `target=shot` 上傳到它即可；多支影片時先 `shot.add` 新鏡頭再上傳。
 
 `GET /api/projects/{pid}/missing` 回 `{"media": [素材 id, ...]}`：檔案已經不在專案資料夾裡的素材，可以用 `target=relink` 換檔。
+
+### 4.1 p5 動畫的文字
+
+p5-comfyui-animation 做的透明 WebM 可以連結它的 p5 頁面，列出片段裡的中文字串、改字後重算換檔。改的字存在素材的 `p5.edits`（字串在原始碼的位置 `at` 與改前改後的寫法，含引號），p5 的檔案只讀不寫。
+
+| 端點 | 說明 |
+|---|---|
+| `GET /api/projects/{pid}/media/{mid}/p5` | 沒連結時回 `{"linked": false, "segment": 依檔名猜的片段代號, "page": 同專案其他素材連結的頁面}`；連結時回 `{"linked": true, "page", "segment", "file", "line", "texts": [{"file", "at", "line", "original", "text", "edited"}], "stale": [原始碼裡找不到的舊字串]}`，頁面讀不到時 `texts` 是空陣列並帶 `error` |
+| `POST /api/projects/{pid}/media/{mid}/p5/link` | `{"page": index.html 完整路徑, "segment": "M04"}` 連結（一個復原步驟，同一頁同一段重新連結時保留改過的字）；找不到頁面或 `SCENES.<segment>` 時 404；`page` 為 `""` 時取消連結 |
+| `POST /api/projects/{pid}/pick-p5-page` | `{"start"}` 開系統選檔視窗，回 `{"page"}`（取消時 `""`）；只有 Windows，其他系統 501 |
+
+重算是 `p5render` 工作：`{"kind": "p5render", "pid", "payload": {"media": 素材 id, "texts": [{"at", "text"}]}}`，`texts` 給全部字串（改回原文的會略過）。用 Edge 或 Chrome 無頭模式依 `?id=<segment>&t=0` 開頁面，等 `window.READY`，逐格呼叫 `window.renderAt(t)`，長度取 `SEG.dur`（沒有時用素材長度），影格率用素材的 `fps`（預設 30），ffmpeg 編成 VP9 帶 alpha 的 WebM 後重新連結素材並更新 `p5.edits`，一個復原步驟（標籤「修改 p5 文字」，文字沒變時是「重算 p5 動畫」）。沒連結時 409，`at` 對不到原始碼的字串時 409，找不到瀏覽器或 ffmpeg 沒有 libvpx-vp9 時 503。頁面從網路載入 p5.js 時要能上網。
 
 ## 5. 背景工作
 
@@ -339,6 +497,7 @@ POST /api/projects/{pid}/upload?name=<檔名>&target=shot&shot=<shot_id>
 | `kenburns` | 圖片推拉 | |
 | `lastframe` | 擷取一格畫面成圖片 | `{"source", "target", "targetShot", "at"}`：`at` 是原始影片秒數（不給時取最後一格）；`target` 是 `next`（下一個鏡頭，預設）、`self`（本鏡頭）或 `shot`（`targetShot` 指定的鏡頭，定格用）。上方影片定格用 `{"overlay", "source", "t", "at"}`：`overlay` 是片段 id，`source` 是素材 id，`at` 是素材秒數，`t` 是時間軸秒數；完成時才套用定格，片段在這期間被刪掉、移走或後面沒有空位時工作失敗，專案不變 |
 | `reverse` | 產生倒放影片，完成後換上並鏡像修剪範圍 | `{"source": 版本 id}`，不給時用鏡頭使用中的影片 |
+| `p5render` | 用改過的文字重算 p5 動畫，完成後換上（4.1 節） | `{"media", "texts": [{"at", "text"}]}`，不需要 `shotId` |
 
 同時執行數量：ComfyUI 與語音轉字幕共用 1 個、雲端服務 2 個、ffmpeg 類 2 個、輸出 1 個。
 
@@ -428,7 +587,7 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 
 | 欄位 | 值 |
 |---|---|
-| `quality` | `high`、`standard`、`draft` |
+| `quality` | `high`、`standard`、`compact`、`draft`。`compact` 是 x264 CRF 22、preset fast、Main profile、AAC 160k，檔案小、適合上傳；這個畫質一律用 `libx264`，`encoder` 會被忽略 |
 | `encoder` | `auto`、`libx264`、`h264_nvenc`、`h264_amf`、`h264_qsv` |
 | `burnCaptions` | 字幕燒進畫面（沒給時用設定，預設開） |
 | `captionSize` | 沒有套用字幕樣式的字幕大小 16~160 px；沒給時用設定的「內建字幕大小」，和預覽畫面相同（預設 52） |
@@ -446,7 +605,7 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 
 首頁的「批次輸出」就是對每個勾選的專案各送一個 `export` 工作（`POST /api/jobs/batch`），輸出通道一次跑一個。
 
-輸出前可先 `GET /api/projects/{pid}/export-check`，回傳 `{"duration", "empty", "missing", "disabled", "missingAudio", "missingOverlays", "audioPastEnd", "captionsPastEnd", "videoHidden"}`：`empty`、`missing`、`disabled` 是鏡頭清單的編號（沒有畫面、檔案不見、停用；隱藏畫面或整段被滿版上層片段蓋住的鏡頭看不到文字卡，不列入 `empty`、`missing`），`missingAudio`、`missingOverlays` 是不見的檔名，`...PastEnd` 是超出影片結尾、會被切掉的數量。只列出問題，不會擋下輸出。
+輸出前可先 `GET /api/projects/{pid}/export-check`，回傳 `{"duration", "empty", "missing", "disabled", "missingAudio", "missingOverlays", "audioPastEnd", "captionsPastEnd", "videoHidden", "glossary"}`：`empty`、`missing`、`disabled` 是鏡頭清單的編號（沒有畫面、檔案不見、停用；隱藏畫面或整段被滿版上層片段蓋住的鏡頭看不到文字卡，不列入 `empty`、`missing`），`missingAudio`、`missingOverlays` 是不見的檔名，`...PastEnd` 是超出影片結尾、會被切掉的數量。`glossary` 是字幕疑似錯字 `[{caption, term, fix}]`（顯示中的字幕，依設定的字幕用語表；沒有詞庫時是空陣列）。只列出問題，不會擋下輸出。
 
 有指定 `loudness` 時，工作的 `notes` 會寫出調整前後的響度（例如「響度從 -20.3 調整到 -14 LUFS」），峰值太高、loudnorm 改用壓縮時另外註明；混音幾乎無聲（低於 -70 LUFS）時不調整。
 
@@ -469,6 +628,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | GET | `/api/events` | SSE 事件串流 |
 | GET | `/api/system` | 系統資訊，含記錄檔總大小 `logBytes` |
 | GET | `/api/system/fonts` | 可用字型 |
+| GET | `/api/title-templates` | 標題範本：`{templates: [{id, name, hint, len, fields: [{key, label, text, color, boxColor}]}]}`，`boxColor` 為 `null` 表示該欄位沒有底色 |
 | POST | `/api/system/ffmpeg` | 重新偵測 ffmpeg |
 | POST | `/api/system/reveal` | 在檔案總管開啟資料夾 `{"what": ...}`：`data`、`logs`、`workflows`、`projects`（所有專案）、`exports`（匯出資料夾）。檔案總管視窗會移到最上層（已開著的資料夾約 1 秒後） |
 | GET | `/api/system/deps` | 相依套件狀態 `{"items": [{id, required, ready, path, version, installedVersion, latest, update, task}]}`：`installedVersion` 只有用的是 `data/tools` 裡 APP 裝的那份才有值（否則 `null`），`latest` 是目前清單上的版本，`update` 為真代表可以更新 |
@@ -483,7 +643,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/system/pick-folder` | 開啟 Windows 選擇資料夾視窗，回 `{"path"}`（按取消時 `null`）；已有一個開著時 409，非 Windows 501 |
 | POST | `/api/shutdown` | 關閉 VC |
 | POST | `/api/tray` | 顯示系統托盤圖示，回傳 `{"tray": bool}`（從桌面啟動時由啟動程式呼叫） |
-| GET／PUT | `/api/settings` | 設定。`notify.ntfy.when`：`all`（全部完成都通知）或 `failed`（只通知失敗）；`history.keep`：每個專案保留幾份版本紀錄（5~500，預設 50）；`glossary`：字幕用語表（最多 20000 字），一行一個正確寫法，可接「=錯字,錯字」，只在瀏覽器檢查，不影響輸出 |
+| GET／PUT | `/api/settings` | 設定。`notify.ntfy.when`：`all`（全部完成都通知）或 `failed`（只通知失敗）；`history.keep`：每個專案保留幾份版本紀錄（5~500，預設 50）；`glossary`：字幕用語表（最多 20000 字），一行一個正確寫法，可接「=錯字,錯字」，用在輸出前檢查（`glossary`）與 `glossaryFix` 指令，不影響輸出 |
 | POST | `/api/settings/default-updates` | 回答「預設值已更新」提示：`{"apply": [項目, ...]}` 列出的換成新預設，其餘保留，回 `{"settings", "providers"}` |
 | GET／PUT | `/api/secrets` | API 金鑰（只回是否已設定與遮罩後的值） |
 | GET／POST | `/api/projects` | 專案列表／新增 `{"name", "settings", "starter"}` |
@@ -494,12 +654,18 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/ops` | 修改（第 3 節） |
 | GET | `/api/projects/{pid}/timeline` | 時間軸位置（3.7 節） |
 | POST | `/api/projects/{pid}/edit` | 剪輯指令（3.7 節） |
+| POST | `/api/projects/{pid}/analyze` | 量一格畫面，回建議的白平衡（3.8 節） |
+| POST | `/api/projects/{pid}/auto-stabilize` | 量晃動，自動防抖（3.7.2 節） |
+| POST | `/api/projects/{pid}/auto-color` | 自動白平衡與曝光（3.8 節） |
 | POST | `/api/projects/{pid}/undo`、`/redo` | 復原、重做 |
 | GET | `/api/projects/{pid}/history` | 版本紀錄 |
 | POST | `/api/projects/{pid}/history/{rev}/restore` | 還原版本 |
 | POST | `/api/projects/{pid}/upload` | 上傳檔案（第 4 節） |
 | POST | `/api/projects/{pid}/preview-files` | 製作低解析度預覽檔 `{"scale": 2}`（2 或 4）：在背景轉檔還沒有預覽檔的影片，回 `{"pending": 還要製作的數量}`；每完成一支就寫進版本或素材的 `preview2`／`preview4`（專案變更事件） |
 | POST | `/api/projects/{pid}/audio-files` | 製作預覽聲音檔：在背景把預覽會播放、還沒有聲音檔的影片與音訊轉成 WAV，回 `{"pending": 還要製作的數量}`；每完成一個就寫進版本或素材的 `previewAudio`（專案變更事件）。變速播放的片段另做該速度的檔，寫進 `previewAudioSpeeds`，同時移除已沒有片段使用的速度 |
+| GET | `/api/projects/{pid}/media/{mid}/p5` | p5 動畫的文字與連結（4.1 節） |
+| POST | `/api/projects/{pid}/media/{mid}/p5/link` | 連結或取消連結 p5 頁面（4.1 節） |
+| POST | `/api/projects/{pid}/pick-p5-page` | 選 p5 頁面的系統選檔視窗（4.1 節，只限 Windows） |
 | GET | `/api/projects/{pid}/file?path=...` | 讀取專案內的檔案；`path` 也可以是這個專案輸出到匯出資料夾的完整路徑 |
 | GET | `/api/projects/{pid}/exports` | 輸出檔列表：匯出資料夾裡這個專案輸出的檔案，加上專案資料夾的舊檔，`path` 可直接給 `file?path=` |
 | DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔（`name` 是檔名，只能刪這個專案輸出的檔） |
@@ -589,10 +755,13 @@ print(out["reply"])
 | `timeline` | 鏡頭與其他軌道的片段、標記（可用 `from`、`to` 限定範圍） |
 | `list_captions` | 字幕（可指定軌道、範圍，一次最多 200 則，用 `offset` 翻頁） |
 | `apply_ops` | 送一批 ops（第 3 節），一個復原步驟，標籤自動加上「AI 助理：」。含 `shot.*` 時整批包成 `linked`，字幕與聲音跟著畫面移動。對影片鏡頭改 `duration` 會回錯誤（影片鏡頭長度由修剪範圍決定，請改用 `edit` 的 `trim`） |
-| `edit` | 一個剪輯指令（3.7 節） |
+| `edit` | 一個剪輯指令（3.7 節），含 `stabilize` 的 `on`、`settings`、`stabilizeShots`，以及 `declip`、`lift`、`drop`、`rippleDelete`、`title`、`glossaryFix`、`place`、`moveShots` |
+| `analyze_picture` | 量一格畫面（3.8 節），回亮度、過曝、平均色的一行說明、測光方式（`metered`：以人物或整體畫面）與建議的白平衡 |
+| `auto_color` | 自動白平衡與曝光（3.8 節），一個復原步驟，標籤「AI 助理：自動調色」。`wb` 是 `auto`（預設，自動判斷）、`on`（一律校正）、`off`；不給 `target` 時用 `"auto"`；`subject` 同 3.8 節；每個鏡頭回 `metered` 一行說明測光方式 |
+| `auto_stabilize` | 量晃動，自動防抖（3.7.2 節），一個復原步驟，標籤「AI 助理：自動防抖」，回每個鏡頭的 `decision`、`jitter`、`reason` 與工作 id |
 | `import_bilingual` | 匯入中英對照（6.1 節） |
 | `align_captions`、`transcribe` | 送出語音對齊、語音轉字幕工作 |
 | `job_status` | 查一個背景工作 |
-| `undo` | 復原最新一步，只限 AI 助理做的步驟（標籤以「AI 助理：」開頭，或這一輪做的剪輯指令、匯入） |
+| `undo` | 復原最新一步，只限 AI 助理做的步驟（標籤以「AI 助理：」開頭，或這一輪做的剪輯指令、匯入、自動調色、自動防抖） |
 
 `POST /api/projects/{pid}/chat/cancel {"id"}` 停止那一輪：在下一次呼叫模型前停下，已經送出的模型呼叫會等它回來。找不到進行中的那一輪時回 `{"stopped": false}`。

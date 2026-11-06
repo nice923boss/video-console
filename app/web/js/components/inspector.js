@@ -314,6 +314,11 @@ function ShotPanel({ project, shot, index, tab }) {
   const takes = useMemo(() => takesOf(project, shot.id), [project.takes, shot.id]);
   const busy = useMemo(() => activeJobsFor(jobs, pid, shot.id), [jobs, pid, shot.id]);
   const cover = shotCover(project, shot);
+  // Length in the sequence (trims and speed applied), the same figure the board card shows.
+  const length = useMemo(() => {
+    const clip = buildSequence(project, true).find((c) => c.shot.id === shot.id);
+    return clip ? clip.length : shot.duration;
+  }, [project, shot.id]);
   const shots = project.shots;
   const go = (d) => {
     const next = shots[index + d];
@@ -329,7 +334,7 @@ function ShotPanel({ project, shot, index, tab }) {
       <div class="insp-title">
         <h2 title=${shotLabel(shot, index)}>${shotLabel(shot, index)}</h2>
         <span class="insp-sub">
-          ${fmtSeconds(shot.duration)}<i></i>路由 ${shot.route}<i></i>${takes.length} 個版本
+          ${fmtSeconds(length)}<i></i>路由 ${shot.route}<i></i>${takes.length} 個版本
           ${shot.inSequence === false && html`<i></i><span class="warn-text">不在序列</span>`}
         </span>
       </div>

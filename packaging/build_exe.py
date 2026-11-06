@@ -1,12 +1,13 @@
 """Build the Windows release: dist/Video Console/Video Console.exe plus a zip of that folder.
 
-    python -m pip install pyinstaller numpy
+    python -m pip install pyinstaller numpy opencv-python-headless
     python packaging/build_exe.py
 
-The app is standard library plus numpy (降噪 / 去回音 in vc/voiceclean.py, which PyInstaller finds by itself), so
-it needs no hidden imports; only the web UI, the built-in
-ComfyUI workflow templates, the model menus (vc/providers/model_lists.json), the tool versions (vc/deps.json) and the client review page
-(vc/review_kit) are added as data. ffmpeg and Video2X are not bundled: the settings page
+The app is standard library plus numpy (降噪 / 去回音 in vc/voiceclean.py) and OpenCV (finding the people auto
+exposure meters on, vc/autocolor.py), which PyInstaller finds by itself, so it needs no hidden imports; OpenCV's
+hook leaves out its face cascades, so the two autocolor reads are added as data, along with the web UI, the
+built-in ComfyUI workflow templates, the model menus (vc/providers/model_lists.json), the tool versions
+(vc/deps.json) and the client review page (vc/review_kit). ffmpeg and Video2X are not bundled: the settings page
 installs them into data/tools on first use.
 """
 from __future__ import annotations
@@ -33,6 +34,12 @@ def build() -> Path:
         import numpy  # noqa: F401 - an exe built without it would refuse 降噪 / 去回音
     except ImportError:
         raise SystemExit("numpy is missing: python -m pip install numpy") from None
+    try:
+        import cv2  # an exe built without it would meter every shot on the whole picture
+    except ImportError:
+        raise SystemExit("OpenCV is missing: python -m pip install opencv-python-headless") from None
+    from vc.autocolor import CASCADES
+    cascades = [a for name in CASCADES for a in ("--add-data", f"{Path(cv2.data.haarcascades) / name};cv2/data")]
     # The packaged vc/BUILD lets the exe report the source build it was made from, and lets vc_client read it.
     stamp = WORK / "stamp" / "BUILD"
     stamp.parent.mkdir(parents=True, exist_ok=True)
@@ -44,7 +51,7 @@ def build() -> Path:
         "--add-data", f"{stamp};vc",
         "--add-data", f"{APP / 'vc' / 'providers' / 'model_lists.json'};vc/providers",
         "--add-data", f"{APP / 'vc' / 'deps.json'};vc",
-        "--add-data", f"{APP / 'vc' / 'review_kit'};vc/review_kit",
+        "--add-data", f"{APP / 'vc' / 'review_kit'};vc/review_kit", *cascades,
         "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
         str(APP / "main.py"),
     ], check=True)

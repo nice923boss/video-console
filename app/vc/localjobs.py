@@ -9,15 +9,16 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from . import gyro
 from .edits import freeze_overlay, track_busy
 from .export import AUDIO_CODECS, export_options, render
 from .exportdir import ensure_root, export_root, record_export, unique_path
 from .jobs import JobControl
-from .media import ALPHA_DECODERS, KENBURNS, KENBURNS_LABELS, Media
+from .media import ALPHA_DECODERS, KENBURNS, KENBURNS_LABELS, Media, clean_stab
 from .opfields import new_overlay, valid_id
 from .package import build_package
 from .review_pack import folder_name, music_clips, write_pack
-from .sequence import VOICE_TRACK, build_sequence
+from .sequence import VOICE_TRACK, build_sequence, overlay_speed
 from .settings import SettingsStore
 from .store import ProjectStore
 from .takes import (IMPORT_DIR, TAKE_DIR, commit_takes, find_item, find_shot, item_path, linked, new_media,
@@ -273,6 +274,13 @@ class LocalJobs:
         if end - start < 0.2:
             raise AppError("防抖的範圍太短")
         span = {"source": item["id"], "from": round(start, 3), "to": round(end, 3)}
+        if payload.get("settings") is not None:
+            span["settings"] = clean_stab(payload["settings"])
+            if span["settings"]["engine"] == "gyro":
+                # Found now, so a missing camera file or Gyroflow shows at once instead of as a failed job.
+                gyro.require()
+                folder = str((project.get("settings") or {}).get("gyroFolder") or "")
+                span["original"] = str(gyro.locate(self._media(), folder, item))
         if over:
             return {"title": f"防抖：{over.get('name') or '上層片段'}", "lane": "local:ffmpeg", "shotId": None,
                     "payload": {"overlay": over["id"], **span}}
@@ -287,20 +295,27 @@ class LocalJobs:
         if not item:
             raise AppError("來源影片已被刪除", 410)
         start, end = float(p["from"]), float(p["to"])
+        settings = clean_stab(p.get("settings"))
         media = self._media()
         media.require()
         out = work / "stabilize.mp4"
-        media.stabilize(item_path(pdir, item), out, start, end - start, bool(item.get("hasAudio")),
-                        cancelled=ctl.cancelled, on_progress=lambda f: ctl.progress(0.02 + f * 0.9, "防抖"))
+        source = {"backend": "local", "tool": "stabilize", "from": item["id"], "start": start, "end": end,
+                  "settings": settings}
+        if settings["engine"] == "gyro":
+            start = self._gyro_stabilize(ctl, work, media, project, item, p, out)
+            source = {**source, "start": start, "original": p["original"]}
+        else:
+            media.stabilize(item_path(pdir, item), out, start, end - start, bool(item.get("hasAudio")),
+                            cancelled=ctl.cancelled, on_progress=lambda f: ctl.progress(0.02 + f * 0.9, "防抖"),
+                            settings=settings)
         ctl.check()
         if p.get("overlay"):
-            return self._stabilized_overlay(ctl, pdir, media, out, item, start, end)
+            return self._stabilized_overlay(ctl, pdir, media, out, item, source)
         tid = new_id("t")
         staged = stage_file(media, pdir, out, TAKE_DIR, tid, cancelled=ctl.cancelled, on_progress=ctl.progress)
         take = new_take(
             ctl.shot_id, staged, take_id=tid, job_id=ctl.id, parent=item["id"], label="防抖",
-            source={"backend": "local", "tool": "stabilize", "from": item["id"], "start": start, "end": end},
-            prompt=item.get("prompt") or "", negative=item.get("negative") or "",
+            source=source, prompt=item.get("prompt") or "", negative=item.get("negative") or "",
         )
         # The copy starts `start` seconds into the footage: shift the trims, unless the clip was moved to
         # another version or re-trimmed past the copy while it rendered (then it is only kept as a version).
@@ -316,19 +331,43 @@ class LocalJobs:
             commit_takes(self._store, ctl.pid, [take], link=linked(ctl))
         return {"takeIds": [tid], "message": "防抖完成"}
 
-    def _stabilized_overlay(self, ctl: JobControl, pdir: Path, media: Media, out: Path, item: dict, start: float,
-                            end: float) -> dict:
+    def _gyro_stabilize(self, ctl: JobControl, work: Path, media: Media, project: dict, item: dict, p: dict,
+                        out: Path) -> float:
+        """Gyroflow steadies the camera original over the payload's range at the project frame size; out gets
+        that picture with the footage's own sound. Returns where the copy starts in the footage (a frame
+        boundary at or just before "from")."""
+        original = Path(p["original"])
+        if not original.is_file():
+            raise AppError(f"找不到相機原始檔：{original}", 410)
+        info = media.probe(original)
+        fps = float(item.get("fps") or info.get("fps") or 30.0)
+        frame = project.get("settings") or {}
+        size = gyro.output_size(int(info.get("width") or 0), int(info.get("height") or 0),
+                                int(frame.get("width") or 1920), int(frame.get("height") or 1080))
+        steady = work / "gyroflow.mp4"
+        settings = clean_stab(p.get("settings"))
+        start = gyro.render(original, steady, float(p["from"]), float(p["to"]), fps, size, settings["gyroSmooth"],
+                            ctl.cancelled, lambda n, m: ctl.progress(0.02 + 0.73 * n / max(1, m), "陀螺儀防抖"))
+        ctl.check()
+        gyro.finish(media, steady, item_path(self._store.project_dir(ctl.pid), item), out, start,
+                    float(p["to"]) - start, bool(item.get("hasAudio")), ctl.cancelled,
+                    lambda f: ctl.progress(0.75 + f * 0.17, "防抖：壓縮影片"))
+        return round(start, 6)
+
+    def _stabilized_overlay(self, ctl: JobControl, pdir: Path, media: Media, out: Path, item: dict,
+                            source: dict) -> dict:
         """The copy joins the library; the clip switches to it with "in" shifted by start, unless it moved to
         other footage or out of the copy's range while it rendered (then the copy just stays in the library)."""
         mid = new_id("m")
         staged = stage_file(media, pdir, out, IMPORT_DIR, mid, cancelled=ctl.cancelled, on_progress=ctl.progress)
-        copy = {**new_media(staged, f"{item.get('name') or '影片'}（防抖）", mid), "parent": item["id"],
-                "source": {"backend": "local", "tool": "stabilize", "from": item["id"], "start": start, "end": end}}
+        copy = {**new_media(staged, f"{item.get('name') or '影片'}（防抖）", mid), "parent": item["id"], "source": source}
+        start, end = source["start"], source["end"]
         ops = [{"op": "media.add", "media": copy}]
         with self._store.locked(ctl.pid):
-            over = next((o for o in self._store.get(ctl.pid)["overlays"] if o["id"] == ctl.payload["overlay"]), None)
+            project = self._store.get(ctl.pid)
+            over = next((o for o in project["overlays"] if o["id"] == ctl.payload["overlay"]), None)
             t_in = float(over.get("in") or 0.0) if over else 0.0
-            last = min(float(item["duration"]), t_in + float(over.get("length") or 0.0)) if over else 0.0
+            last = min(float(item["duration"]), t_in + float(over.get("length") or 0.0) * overlay_speed(project, over)) if over else 0.0
             if over and over.get("mediaId") == item["id"] and t_in >= start - 1e-3 and last <= end + 1e-3:
                 ops.append({"op": "overlay.update", "id": over["id"],
                             "patch": {"mediaId": mid, "in": round(max(0.0, t_in - start), 3)}})

@@ -1,7 +1,7 @@
 // Lift (picture lane to an upper track): the shot's piece of its file becomes a clip on the upper track, and an
 // empty shot of the same length and transition takes its place, so nothing after it moves. Drop is the way back.
 import { clamp, newId, round } from "./format.js";
-import { buildSequence, fitFrame, fillFrame } from "./sequence.js";
+import { buildSequence, clipSpeed, fitFrame, fillFrame } from "./sequence.js";
 
 // Mirror of new_media in app/vc/takes.py: the fields a library item copies from a file.
 const MEDIA_KEYS = ["kind", "file", "thumb", "strip", "width", "height", "duration", "fps", "hasAudio"];
@@ -17,10 +17,10 @@ function dropSound(project, clip) {
 }
 
 // target: "layer:<id>" or "new-layer". Returns { ops, id } or { error } for shots an upper clip can't carry.
+// A sped shot keeps its speed on the upper track.
 export function liftOps(project, clip, target, start) {
   const { shot, take } = clip;
   if (!take) return { error: "這個鏡頭還沒有畫面，沒有東西可以移到上層軌" };
-  if (clip.speed !== 1) return { error: "變速的鏡頭要先改回原速，才能移到上層軌" };
   const sound = shot.audioDetached ? dropSound(project, clip) : null;
   if (shot.audioDetached && !sound) return { error: "已分離原聲的鏡頭要先還原原聲，才能移到上層軌" };
   const list = sound ? [{ op: "audio.delete", id: sound.id }] : [];
@@ -45,7 +45,7 @@ export function liftOps(project, clip, target, start) {
   const item = {
     id, mediaId: media.id, layer, name: shot.name || media.name || "",
     start: round(Math.max(0, start), 3), in: clip.source === "video" ? round(clip.in, 3) : 0, length: round(clip.length, 3),
-    ...place, opacity: 1, volume: 1, ...(shot.pip || {}),
+    ...(clip.speed !== 1 ? { speed: clip.speed } : {}), ...place, opacity: 1, volume: 1, ...(shot.pip || {}),
     ...(sound ? { volume: Number(sound.volume ?? 1) } : shot.volume != null ? { volume: Number(shot.volume) } : {}),
     ...(shot.disabled ? { disabled: true } : {}),
   };
@@ -64,8 +64,9 @@ const PIP_KEYS = ["x", "y", "w", "opacity", "volume", "chroma", "keyframes"];
 export function dropOps(project, item, media, index, take) {
   const video = media.kind === "video";
   const len = Number(item.length || 0.1);
+  const speed = clipSpeed(item, video ? "video" : "image");
   const tIn = round(Number(item.in || 0), 3);
-  const out = round(tIn + len, 3);
+  const out = round(tIn + len * speed, 3);
   const end = Number(media.duration) || 0;
   const pip = Object.fromEntries(PIP_KEYS.filter((k) => item[k] != null).map((k) => [k, item[k]]));
   const shot = {
@@ -73,7 +74,7 @@ export function dropOps(project, item, media, index, take) {
     name: String(item.name || media.name || "").replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 120),
     duration: round(clamp(len, 0.2, 600), video ? 3 : 2),
     ...(video ? { trimIn: tIn, trimOut: end && out >= end - 1e-3 ? null : out } : {}),
-    ...(Object.keys(pip).length ? { pip } : {}),
+    ...(speed !== 1 ? { speed } : {}), ...(Object.keys(pip).length ? { pip } : {}),
   };
   const pick = { [video ? "activeVideo" : "activeImage"]: take.id };
   const list = [{ op: "shot.add", shot, index }, { op: "take.add", take }, { op: "shot.update", id: shot.id, patch: pick }];
@@ -86,7 +87,7 @@ export function dropOps(project, item, media, index, take) {
     if (clip) {
       list.push({ op: "shot.update", id: shot.id, patch: { audioDetached: true } }, { op: "audio.add", item: {
         id: newId("a"), takeId: take.id, shotId: shot.id, start: round(clip.start, 3), in: round(clip.in, 3),
-        out: round(clip.out, 3), name: `${shot.name || "鏡頭"} 原聲`, volume } });
+        out: round(clip.out, 3), name: `${shot.name || "鏡頭"} 原聲`, ...(speed !== 1 ? { speed } : {}), volume } });
     }
   }
   list.push({ op: "overlay.delete", id: item.id });

@@ -7,13 +7,14 @@ import { ops, editCmd, focusShot } from "../lib/actions.js";
 import { getState, setState } from "../lib/store.js";
 import { clock, setTime, setPlaying, onClock } from "../lib/clock.js";
 import { newId, round, clamp, fmtTime } from "../lib/format.js";
-import { clipIndexAt, audioLength, audioMedia, videoTake } from "../lib/sequence.js";
+import { clipIndexAt, clipSpeed, audioLength, audioMedia, videoTake } from "../lib/sequence.js";
 import { slipRange } from "../lib/roll.js";
 import { showQueued, upsertJobs } from "../lib/jobs-actions.js";
 import { keyHint } from "../lib/keymap.js";
 import { readPref } from "../lib/prefs.js";
 import { toast } from "./toast.js";
 import { multiAudio } from "./tl-audio-sel.js";
+import { multiClip, CLIP_SEL_TYPES } from "./tl-clip-sel.js";
 
 const LISTS = { audio: "audio", overlay: "overlays", caption: "captions", adjust: "adjustments" };
 export const OFF_FIELD = { shot: "disabled", overlay: "disabled", caption: "disabled", audio: "muted", adjust: "hidden" };
@@ -46,7 +47,8 @@ export function current(project, clips, sel) {
 // Picture commands (reverse, speed) use the selected shot, else the shot under the playhead.
 const currentShot = (project, clips, sel) => current(project, clips, sel && sel.type === "shot" ? sel : null);
 
-// The items Shift or Ctrl+clicked together with `sel` (shots, or audio clips on one track), else just `item`.
+// The items Shift or Ctrl+clicked together with `sel` (shots, audio clips, upper-track clips or adjustment
+// layers), else just `item`.
 export function together(project, sel, item) {
   const s = getState();
   if (sel && sel.type === "shot" && s.selected.length > 1 && s.selected.includes(sel.id)) {
@@ -54,6 +56,8 @@ export function together(project, sel, item) {
   }
   const audio = sel && sel.type === "audio" && multiAudio(s);
   if (audio && audio.includes(sel.id)) return (project.audio || []).filter((a) => audio.includes(a.id));
+  const many = sel && CLIP_SEL_TYPES.includes(sel.type) && multiClip(s);
+  if (many && many.includes(sel.id)) return (project[LISTS[sel.type]] || []).filter((x) => many.includes(x.id));
   return [item];
 }
 
@@ -209,8 +213,10 @@ export const isStabilized = (take) => !!(take && take.source && take.source.tool
 
 // A stabilized copy of the clip's range is rendered once (a "stabilize" job); after that the box switches between
 // the two, until the clip is trimmed wider than the copy. type "overlay": an upper-track clip (its copy is a library item).
-export function stabilizeClip(id, type = "shot") {
-  editCmd({ cmd: "stabilize", id, type }).then((res) => res && res.job && showQueued(res.job));
+// settings (stab-panel.js STAB_DEFAULTS keys): make sure it is stabilized exactly that way, rendering anew if needed.
+export function stabilizeClip(id, type = "shot", settings = null) {
+  const extra = settings ? { on: true, settings } : {};
+  editCmd({ cmd: "stabilize", id, type, ...extra }).then((res) => res && res.job && showQueued(res.job));
 }
 
 // Several shots in one undo step (the multi-select inspector): on stabilizes the video shots not yet stabilized,
@@ -224,12 +230,23 @@ export function stabilizeShots(ids, on) {
   });
 }
 
-// Opens the shot's speed setting in the inspector (SpeedSection in insp-edit.js).
+// Opens the speed setting in the inspector: a shot's (SpeedSection in insp-edit.js), or a selected upper-track
+// video clip's (OverlayPanel in edit-props.js), or the one speed of a set of them picked together.
 export function focusSpeed(project, clips, sel) {
-  const cur = currentShot(project, clips, sel);
-  if (!cur || cur.type !== "shot" || !videoTake(project, cur.item)) return warn("變速只能用在影片鏡頭");
-  setState({ editSel: { type: "shot", id: cur.item.id } });
-  focusShot(cur.item.id, { tab: "edit" });
+  if (sel && sel.type === "overlay") {
+    const cur = current(project, clips, sel);
+    if (!cur) return;
+    const many = multiClip(getState());
+    const set = many && many.includes(cur.item.id) ? (project.overlays || []).filter((o) => many.includes(o.id)) : [cur.item];
+    if (!set.some((o) => (project.media[o.mediaId] || {}).kind === "video")) return warn("變速只能用在影片片段（圖片沒有速度）");
+    const pick = { type: "overlay", id: cur.item.id };
+    setState(set.length > 1 ? { editSel: pick } : { editSel: pick, clipSel: null });
+  } else {
+    const cur = currentShot(project, clips, sel);
+    if (!cur || cur.type !== "shot" || !videoTake(project, cur.item)) return warn("變速只能用在影片鏡頭");
+    setState({ editSel: { type: "shot", id: cur.item.id } });
+    focusShot(cur.item.id, { tab: "edit" });
+  }
   requestAnimationFrame(() => requestAnimationFrame(() => {
     const el = document.querySelector(".insp-speed select");
     if (el) el.focus();
@@ -258,7 +275,7 @@ export function slipFrame(project, clips, sel, dir) {
     if (media.kind !== "video") return warn("滑動內容只能用在影片片段（圖片沒有其他畫面）");
     const fps = frameRate(project, media.fps);
     const base = slipping && slipping.id === item.id && Date.now() - slipping.at < 1500 ? slipping.in : Number(item.in || 0);
-    const hi = Math.max(0, Number(media.duration || 0) - cur.length);
+    const hi = Math.max(0, Number(media.duration || 0) - cur.length * clipSpeed(item, "video"));
     const target = stepFrame(base, fps, dir);
     const next = dir > 0 ? Math.min(target, hi) : Math.max(target, 0);
     if (dir > 0 ? next <= base + 1e-3 : next >= base - 1e-3) return warn(edge);

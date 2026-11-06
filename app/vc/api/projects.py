@@ -5,7 +5,7 @@ import copy
 import shutil
 from typing import TYPE_CHECKING, Any
 
-from .. import edits, scriptsync
+from .. import edits, scriptsync, shake
 from ..cover import newly_covered
 from ..exportcheck import export_check
 from ..exportdir import remove_shared_exports
@@ -208,10 +208,26 @@ def register(router: Router, app: App) -> None:
             out["job"] = submit(plan["job"])
         if "jobs" in plan:
             out["jobs"] = [submit(job) for job in plan["jobs"]]
-        for key in ("id", "by", "level", "partial"):
+        for key in ("id", "by", "level", "partial", "spans"):
             if key in plan:
                 out[key] = plan[key]
         return out
+
+    @router.route("POST", "/api/projects/{pid}/auto-stabilize")
+    def project_auto_stabilize(req: Request) -> dict:
+        """Measure each video shot's shake (vc/shake.py) and stabilize those at or past body.threshold, switching
+        takes as one undo step and queueing the copies not made yet; dryRun true only reports."""
+        pid = req.params["pid"]
+        data = req.json_object()
+        ops, jobs, report = shake.auto_stabilize(app.media(), store.project_dir(pid), store.get(pid), data)
+        out: dict = {"changed": False, "shots": report, "jobs": []}
+        if data.get("dryRun"):
+            return out
+        label = _short(data.get("label"), 80) or "自動防抖"
+        if ops:
+            out.update(apply_user(pid, [{"op": "linked", "ops": ops}], label=label))
+        out["jobs"] = [app.jobs.submit(job["kind"], pid, job["shotId"], job["payload"]) for job in jobs]
+        return {**out, "label": label}
 
     @router.route("POST", "/api/projects/{pid}/undo")
     def project_undo(req: Request) -> dict:

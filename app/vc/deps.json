@@ -23,6 +23,16 @@
       "size": 196989277,
       "sha256": "0337b6dcae2bad2fd13e43fbdb73ef728d2f6289f37cc3617e87ac3a1a5cf793",
       "member": ""
+    },
+    "gyroflow": {
+      "version": "1.6.3",
+      "name": "Gyroflow 1.6.3 可攜版",
+      "urls": [
+        "https://github.com/gyroflow/gyroflow/releases/download/v1.6.3/Gyroflow-windows64.zip"
+      ],
+      "size": 47470947,
+      "sha256": "37ef4064adb6991ae2251e283e5888a02ea00024d0a6f1353501892bb5367e21",
+      "member": ""
     }
   }
 }

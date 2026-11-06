@@ -155,7 +155,7 @@ function soundless(project) {
   const takes = project.takes || {};
   const media = project.media || {};
   const uses = [...(project.shots || []).filter((s) => !s.disabled).map((s) => [s.activeVideo, s.speed]),
-    ...(project.overlays || []).filter((o) => !o.disabled).map((o) => [o.mediaId, 1]),
+    ...(project.overlays || []).filter((o) => !o.disabled).map((o) => [o.mediaId, o.speed]),
     ...(project.audio || []).map((a) => [a.mediaId in media ? a.mediaId : a.takeId, a.speed])];
   const out = uses.filter(([id, speed]) => {
     const item = id && (takes[id] || media[id]);
@@ -242,6 +242,7 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   const legacy = useStore((s) => legacySize(s.settings));
   const gradeDraft = useStore((s) => s.gradeDraft);
   const maskDraft = useStore((s) => s.maskDraft);
+  const transformDraft = useStore((s) => s.transformDraft);
   const compare = useStore((s) => s.gradeCompare);
   const solo = useStore((s) => (s.solo && s.solo.pid === s.pid ? s.solo.keys : null));
   const voiceStems = useStore((s) => s.voiceStems);
@@ -351,6 +352,10 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
   useEffect(() => {
     engineRef.current.setMaskDraft(maskDraft);
   }, [maskDraft]);
+
+  useEffect(() => {
+    engineRef.current.setTransformDraft(transformDraft);
+  }, [transformDraft]);
 
   useEffect(() => {
     engineRef.current.setCompare(compare);

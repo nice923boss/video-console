@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from . import edits
+from . import autocolor, edits
 from .bilingual import MAX_TEXT
 from .sequence import video_take
 from .server import Request
@@ -62,7 +62,14 @@ Captions and audio follow the picture when shots change length, go or move.
 - Text the client wants shown on screen (a phone number, a slogan, a price) is a caption; position picks bottom, \
 middle or top of the frame. New text: caption.add, never overwrite another caption. New wording or position of a \
 caption: one caption.update of that whole caption, no split or trim.
-- Playback speed: shot.update patch speed, no split. Reorder or swap shots: shot.move (a swap is one shot.move).
+- Brightness, exposure and white balance: auto_color (measures each shot and writes its grade.wb). \
+To look before changing, analyze_picture. Shaky footage: auto_stabilize measures each video shot and stabilizes \
+the shaky ones; one shot by hand: edit stabilize, settings tune it (smoothing higher is steadier, tripod true \
+locks the frame).
+- Playback speed: shot.update patch speed, no split. An upper-track video clip (timeline type overlay): \
+overlay.update {"id", "patch": {"speed", "length"}}, speed 0.25 to 4 (pictures have none); its length is in \
+timeline seconds, so keep the same footage with length = length * old speed / new speed. \
+Reorder or swap shots: shot.move (a swap is one shot.move).
 - Cutting, trimming, freeze frames, detaching audio, volume and keyframes: use the edit tool, not raw ops. \
 Split or trim only when the user asked to cut, shorten or freeze. \
 A shot's freeze still is 5 seconds unless the freeze edit gets length (seconds).
@@ -101,14 +108,55 @@ TOOLS = [
     _tool("edit", "One timeline edit, for cutting and timing only: a caption's new wording or position is one "
           "apply_ops caption.update, never a split. split {t, type?, id?};splitAll {t}; trim {t, side: start|end, type?, id?}; "
           "freeze {t, type?, id?, length?} (shot, or an overlay video: the still goes in when its grab job is done; "
-          "length: seconds of a shot's still, default 5); detach {id|t}; restore {id}; reverse {id|t}; stabilize {type?, id|t} (toggles; shot or overlay); "
+          "length: seconds of a shot's still, default 5); detach {id|t}; restore {id}; reverse {id|t}; stabilize {type?, id|t, on?, settings?} (shot or overlay; on omitted toggles, "
+          "true makes sure it is stabilized, false switches back; settings: shakiness 1-10, smoothing 0-300 frames, "
+          "zoom -100..100 %, sharpen 0-2, tripod, optzoom 0|1|2, crop keep|black, accuracy, stepsize, mincontrast, "
+          "maxshift, maxangle, zoomspeed, optalgo opt|gauss|avg, interpol no|linear|bilinear|bicubic, relative; "
+          "engine gyro uses Gyroflow on the camera original in the project's camera folder instead, and then only "
+          "gyroSmooth 0.05-1 counts; "
+          "a new combination renders a copy in a background job); stabilizeShots {ids, on?, settings?}; "
           "volume {type, id, db, in?, out?}; "
-          "keyframe {type, id, t, values?}; roll/slip/slide {id, by} (picture only: other tracks stay, the shots' own sound is detached in place). type: shot (default), overlay, audio, "
+          "keyframe {type, id, t, values?}; roll/slip/slide {id, by} (picture only: other tracks stay, the shots' own sound is detached in place); "
+          "declip {id, type?: shot|audio} (lower clipped peaks); lift {id, layer?, start?} (shot to an upper layer); "
+          "drop {id, index} (upper clip back into the shots); rippleDelete {type, id} (close the gap on that track); "
+          "title {template: opening|chapter|lower-box|lower-plain|corner, values {field: text}, start, len?}; "
+          "glossaryFix {ids?}; place {media, at?, layer?, track?}; moveShots {ids, index}. type: shot (default), overlay, audio, "
           "caption, adjust. Without id the clip under t is used.",
           {"cmd": {"type": "string", "enum": ["split", "splitAll", "trim", "freeze", "detach", "restore", "reverse",
-                                              "stabilize", "volume", "keyframe", "roll", "slip", "slide"]},
+                                              "stabilize", "stabilizeShots", "volume", "keyframe", "roll",
+                                              "slip", "slide", "declip", "lift", "drop", "rippleDelete", "title",
+                                              "glossaryFix", "place", "moveShots"]},
            "t": NUM, "type": STR, "id": STR, "side": STR, "by": NUM, "db": NUM, "in": NUM, "out": NUM,
-           "length": NUM, "values": {"type": "object"}}, ("cmd",)),
+           "length": NUM, "values": {"type": "object"}, "ids": {"type": "array", "items": STR},
+           "on": {"type": "boolean"}, "settings": {"type": "object"}, "layer": STR, "start": NUM,
+           "index": {"type": "integer"}, "template": STR, "len": NUM, "media": STR, "at": NUM, "track": STR},
+          ("cmd",)),
+    _tool("analyze_picture", "Measure one picture without changing anything: brightness percentiles, clipped "
+          "highlights, average colour, and the white balance / exposure auto_color would set. shot + t (clip "
+          "seconds), or at (timeline seconds). x/y/size (0..1 of the picture) also measure a spot that should be "
+          "white or grey.",
+          {"shot": STR, "t": NUM, "at": NUM, "x": NUM, "y": NUM, "size": NUM}),
+    _tool("auto_color", "Automatic white balance and exposure for shots, as one undo step: each shot is measured "
+          "on a few frames and its grade.wb is set. ids: shot ids (omit for every shot). wb: auto (default) "
+          "balances a mild colour cast and leaves near-grey pictures and coloured stage light as they are; on "
+          "always balances (the user says the colour is off); off keeps the colour. exposure false skips "
+          "brightness. Medium shots and close-ups are metered on the people's faces (brought to about 0.47), wide "
+          "shots on the whole picture (each shot's own median kept inside 0.42-0.60); subject scene meters every "
+          "shot on the whole picture. target 0.2-0.7 overrides the brightness aimed at (higher is brighter). "
+          "strength 0-1 of the colour correction (default 0.6).",
+          {"ids": {"type": "array", "items": STR}, "wb": {"type": "string", "enum": ["auto", "on", "off"]},
+           "exposure": {"type": "boolean"}, "target": NUM, "strength": NUM,
+           "subject": {"type": "string", "enum": ["auto", "scene"]}}),
+    _tool("auto_stabilize", "Measure how much each video shot shakes (jitter, % of the picture width; a steady "
+          "pan reads 0) and stabilize those at or past threshold (default 0.3), as one undo step; the copies render "
+          "as background jobs. ids: shot ids (omit for every video shot in the sequence). dryRun true only "
+          "reports. settings: stabilize settings on top of the automatic smoothing. engine: vidstab (from the "
+          "picture, default), gyro (Gyroflow from the camera originals' gyro data, found by file name in the "
+          "project's camera folder) or auto (gyro where the original is found, else vidstab); gyroFolder sets "
+          "that folder.",
+          {"ids": {"type": "array", "items": STR}, "threshold": NUM, "dryRun": {"type": "boolean"},
+           "settings": {"type": "object"}, "engine": {"type": "string", "enum": ["vidstab", "gyro", "auto"]},
+           "gyroFolder": STR}),
     _tool("import_bilingual", "Import a Chinese/English parallel text as captions on two rows (中文 above, English "
           "below), one after another from start. text: omit to use the user's attachment. replace: clear those "
           "two rows first. align: then queue speech alignment.",
@@ -374,6 +422,33 @@ class Agent:
         if out.get("changed"):
             turn.made.append(out["label"])
         return out
+
+    def _t_analyze_picture(self, turn: _Turn, args: dict) -> dict:
+        out = self._route("POST", f"/api/projects/{turn.pid}/analyze", args)
+        reading = {"picture": autocolor.brief(out["stats"]), "metered": autocolor.metered(out["decision"]),
+                   "suggest": out["suggest"]}
+        if out.get("region"):
+            reading["spot"] = autocolor.brief(out["region"])
+        return {**{k: out[k] for k in ("shot", "t", "item") if k in out}, **reading}
+
+    def _t_auto_color(self, turn: _Turn, args: dict) -> dict:
+        wb = args.get("wb", "auto")
+        body = {**args, "wb": {"on": True, "off": False}.get(wb, wb), "target": args.get("target") or "auto",
+                "label": LABEL + "自動調色"}
+        out = self._route("POST", f"/api/projects/{turn.pid}/auto-color", body)
+        if out.get("changed"):
+            turn.made.append(LABEL + "自動調色")
+        shots = [{"id": r["id"], "wb": r["decision"]["wb"], "metered": autocolor.metered(r["decision"]),
+                  "before": autocolor.brief(r["before"]), "after": autocolor.brief(r["after"])}
+                 for r in out["shots"][:MAX_ROWS]]
+        return {"changed": out.get("changed"), "shots": shots}
+
+    def _t_auto_stabilize(self, turn: _Turn, args: dict) -> dict:
+        out = self._route("POST", f"/api/projects/{turn.pid}/auto-stabilize", {**args, "label": LABEL + "自動防抖"})
+        if out.get("changed"):
+            turn.made.append(LABEL + "自動防抖")
+        shots = [{k: r[k] for k in ("id", "decision", "jitter", "reason") if k in r} for r in out["shots"][:MAX_ROWS]]
+        return {"changed": out.get("changed"), "shots": shots, "jobs": [j["id"] for j in out.get("jobs") or []]}
 
     def _t_import_bilingual(self, turn: _Turn, args: dict) -> dict:
         body = {**args, "text": args.get("text") or turn.attachment}

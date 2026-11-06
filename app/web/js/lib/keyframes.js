@@ -8,8 +8,12 @@ export const points = (item, field) => (item.keyframes || []).filter((k) => fiel
 
 export const hasKeys = (item, field) => (item.keyframes || []).some((k) => field in k);
 
+// A key only one side has (a grade saved before its white balance block existed) holds that side's value.
 export function lerp(a, b, f) {
-  if (a && typeof a === "object") return Object.fromEntries(Object.keys(a).map((k) => [k, lerp(a[k], b[k], f)]));
+  if (a && typeof a === "object") {
+    const keys = [...new Set([...Object.keys(a), ...Object.keys(b || {})])];
+    return Object.fromEntries(keys.map((k) => [k, !(k in a) ? b[k] : !(b && k in b) ? a[k] : lerp(a[k], b[k], f)]));
+  }
   return a + (b - a) * f;
 }
 

@@ -1,4 +1,4 @@
-// Settings page, dependencies: the outside programs the app runs (ffmpeg, Video2X) and the ComfyUI engine,
+// Settings page, dependencies: the outside programs the app runs (ffmpeg, Video2X, Gyroflow) and the ComfyUI engine,
 // with one-click installs into the data folder. The server downloads, checks and unpacks; progress
 // arrives as "deps" events.
 import { html, useEffect, useState } from "../lib/h.js";
@@ -12,6 +12,7 @@ import { toast, toastError } from "../components/toast.js";
 const INFO = {
   ffmpeg: { name: "ffmpeg", icon: "film", text: "輸出影片、產生縮圖與燒錄字幕都靠它，沒有就無法輸出。" },
   video2x: { name: "Video2X", icon: "cpu", text: "選配。把 480P 影片放大到 1080P，需要支援 Vulkan 的顯示卡。" },
+  gyroflow: { name: "Gyroflow", icon: "move", text: "選配。陀螺儀防抖：讀相機原始檔記下的晃動來修正（Sony FX6 等），比畫面分析準。" },
   comfyui: { name: "ComfyUI", icon: "server", text: "選配。本機生圖、生影片的引擎，需另外安裝，裝好後到「引擎」頁確認連線。" },
 };
 const COMFY_DOWNLOAD = "https://www.comfy.org/download";

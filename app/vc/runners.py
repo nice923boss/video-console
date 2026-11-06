@@ -19,6 +19,7 @@ from .llm import LLMClient
 from .localjobs import LOCAL_KINDS, LocalJobs, number
 from .media import Media
 from .opfields import MAX_REFS, MAX_SEED, snap16
+from .p5render import P5Jobs
 from .providers import catalog
 from .providers.base import duration_seconds, pick_duration
 from .providers.catalog import ModelCatalog
@@ -114,6 +115,7 @@ class Runners:
         self._voice = VoiceJobs(store, Audio8Voice(settings), media, VoAI(secrets))
         self._stt = SttJobs(store, SttClient(settings), media)
         self._align = AlignJobs(store, SttClient(settings), media)
+        self._p5 = P5Jobs(store, media)
         self._llm = LLMClient(settings, secrets)
 
     # ---------------------------------------------------------------- executor protocol
@@ -127,6 +129,8 @@ class Runners:
             return self._stt.prepare(project, shot_id)
         if kind == "align":
             return self._align.prepare(project, payload)
+        if kind == "p5render":
+            return self._p5.prepare(project, payload)
         if kind == "upscale":
             return self._prepare_upscale(project, shot_id, payload)
         if kind == "upscalevideo":
@@ -149,7 +153,9 @@ class Runners:
             return self._stt.execute(ctl)
         if ctl.kind == "align":
             return self._align.execute(ctl)
-        work = self._store.project_dir(ctl.pid) / "media" / "cache" / f"job-{ctl.id}"
+        if ctl.kind == "p5render":
+            return self._p5.execute(ctl)
+        work =self._store.project_dir(ctl.pid) / "media" / "cache" / f"job-{ctl.id}"
         work.mkdir(parents=True, exist_ok=True)
         try:
             if ctl.kind == "upscalevideo":
@@ -161,7 +167,7 @@ class Runners:
             shutil.rmtree(work, ignore_errors=True)
 
     def after_restart(self, job: dict) -> str:
-        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe", "align"):
+        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe", "align", "p5render"):
             return "restart"
         remote = job.get("remote") or {}
         if remote.get("type") == "comfy":

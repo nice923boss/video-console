@@ -1,7 +1,7 @@
 // Project, shot and settings actions shared by the views. Every edit goes through `ops`: the server
 // applies it, records it for undo and broadcasts the new document back as a "project" event.
 import { api, upload } from "./api.js";
-import { getState, setState } from "./store.js";
+import { getState, setState, subscribe } from "./store.js";
 import { applyTheme } from "./theme.js";
 import { newId, shotLabel, fmtBytes } from "./format.js";
 import { toast, updateToast, dismissToast, toastError } from "../components/toast.js";
@@ -220,6 +220,22 @@ function ensureRev(pid, rev) {
   }, 1500);
 }
 
+// Resolves once the store holds the document an ops() reply saved: the reply can come back before its SSE
+// event, so a panel keeping a slider's draft on the preview until then does not blink back to the old value.
+export function whenSaved(res) {
+  const { pid } = getState();
+  const landed = (s) => !res || !res.changed || s.pid !== pid || !s.project || s.project.rev >= res.rev;
+  if (landed(getState())) return Promise.resolve();
+  return new Promise((resolve) => {
+    const off = subscribe((s) => {
+      if (landed(s)) {
+        off();
+        resolve();
+      }
+    });
+  });
+}
+
 // link: true sends the shot edits linked whatever the timeline toggle says (ripple delete); false never shifts
 // or holds other items (a lift leaves an empty shot of the same length); null follows the toggle.
 export async function ops(list, { label = "", coalesce = null, undoable = true, batch = null, link = null } = {}) {
@@ -330,7 +346,7 @@ export async function deleteShots(ids, { ripple = false } = {}) {
     const held = shots.some((x) => ids.includes(x.id) && x.parked);
     const ok = await confirmDialog({
       title: ids.length > 1 ? `刪除 ${ids.length} 個鏡頭？` : `刪除「${shotLabel(shots[i], i)}」？`,
-      message: `${ripple || linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕，以及鏡頭上方的音訊與上層畫面會一起刪除，" : ""}${held ? "移出序列時收起的字幕與音訊也會一起刪除，" : ""}已生成的版本會留在專案裡，${undoKeyText()}可以復原。`,
+      message: `${ripple || linking([{ op: "shot.delete" }]) ? "整句落在鏡頭上的字幕，以及鏡頭上方的音訊與上層畫面會一起刪除；跨過鏡頭的字幕與配音軌錄音剪掉鏡頭那段後往前補，配樂與音效保持完整，" : ""}${held ? "移出序列時收起的字幕與音訊也會一起刪除，" : ""}已生成的版本會留在專案裡，${undoKeyText()}可以復原。`,
       confirmLabel: "刪除",
       danger: true,
     });

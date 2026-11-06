@@ -7,6 +7,7 @@ import re
 from typing import Any, Callable
 
 from .grade import clean_grade
+from .transform import clean_transform
 from .util import AppError
 from .voiceclean import clean_channel, clean_denoise, clean_dereverb
 
@@ -325,6 +326,7 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "volume": _float(0, 4),  # gain of the shot's own sound while not detached; 1 = as recorded
     "grade": clean_grade,  # colour grade of this shot's picture alone, under any adjustment layer (GR-01)
     "masks": _masks,  # blur or mosaic boxes over the shot's picture, to hide a face or a logo (GR-12)
+    "transform": clean_transform,  # opacity, move, scale, rotate, trim and distort of its picture (ED-30)
     "notes": _str(4000),
     "review": _review,  # comments a client wrote on the review page (review.py)
     "color": _opt_str(20),
@@ -416,6 +418,10 @@ DEFAULT_CAPTION_STYLE = {
     "marginV": 65.0, "marginH": 80.0, "x": None, "y": None, "highlight": False, "highlightColor": "#ffd400",
 }
 MAX_CAPTION_STYLES = 50
+# The style a new project starts with as its default; mirrors the first PRESET_STYLES entry in
+# web/js/lib/caption-presets.js (tests/test_captions.py checks they match).
+STARTER_CAPTION_STYLE = {**DEFAULT_CAPTION_STYLE, "name": "常用：白字細黑框", "size": 84, "outlineWidth": 2.5,
+                         "shadow": False, "marginV": 42.0}
 CAST_FIELDS = {"name": _str(40), "voice": _str(200), "voiceName": _str(80), "speed": _float(0.5, 2.0),
                "volume": _float(0, 4), "engine": _str(20), "style": _str(40), "model": _str(20),
                "look": _str(1000), "lookRef": _opt_id}  # look: appearance text for picture prompts (SB-11)
@@ -430,6 +436,7 @@ SETTINGS_FIELDS = {
     "fit": _choice("contain", "cover"),  # framing of clips whose aspect differs; preview and export share it
     "gradeCaptions": _bool,  # captions are burnt in before the adjustment layers, so they get graded too
     "duckDb": _opt_float(0, 24),  # how far the 背景音樂 rows dip under voice; None: duck.DEFAULT_DB
+    "gyroFolder": _str(500),  # where the camera originals are, for gyro stabilization (gyro.locate)
 }
 STYLE_FIELDS = {"prompt": _str(4000), "negative": _str(4000), "preset": _str(40)}
 # Switches on the fixed timeline rows; picture-in-picture tracks carry their own in project["layers"].
@@ -445,7 +452,8 @@ OVERLAY_FIELDS = {
     "layer": _opt_id,
     "start": _float(0, 36000),
     "in": _float(0, 36000),  # seconds into a video file; pictures ignore it
-    "length": _float(0.1, 36000),
+    "length": _float(0.1, 36000),  # timeline seconds; a video uses in .. in + length * speed of its file
+    "speed": _float(0.25, 4),  # video playback speed; pictures ignore it
     "x": _float(-4, 4),  # left edge as a fraction of the frame width
     "y": _float(-4, 4),  # top edge as a fraction of the frame height
     "w": _float(0.05, 4),  # width as a fraction of the frame width; height follows the file's aspect; past the frame is cropped

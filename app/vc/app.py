@@ -9,7 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import BUILD, DEFAULT_PORT, VERSION, api, video2x
+from . import BUILD, DEFAULT_PORT, VERSION, api, gyro, video2x
 from .api.deps import deps_status
 from .api.system import system_info
 from .audioproxy import AudioProxy
@@ -57,6 +57,7 @@ class App:
         self._media: tuple[str, Media] | None = None
         self._media_lock = threading.Lock()
         video2x.PORTABLE_EXE = self.paths.tools / "video2x" / "video2x.exe"
+        gyro.PORTABLE_EXE = self.paths.tools / "gyroflow" / "Gyroflow.exe"
         self.deps = DepInstaller(self.paths.tools, self._deps_changed)
         self.model_catalog = ModelCatalog(self.paths.model_catalog_file)
         self.costs = CostLedger(self.paths.costs_file, self.bus)

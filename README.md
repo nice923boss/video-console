@@ -95,8 +95,9 @@
 | ffmpeg（必要） | 輸出影片、擷取畫面、產生縮圖。在 APP 內一鍵安裝（約 31 MB），或沿用電腦上已有的 ffmpeg |
 | ComfyUI（選用） | 本機或其他電腦上的 ComfyUI，預設連 `http://127.0.0.1:8000` |
 | Video2X（選用） | 把 ComfyUI 生的 480P 影片放大到 1080P。在 APP 內安裝 6.4 版可攜版（約 197 MB），或沿用裝在 `C:\Program Files\Video2X Qt6` 的版本 |
+| Gyroflow（選用） | 用相機原始檔的陀螺儀資料防抖（Sony FX6 MXF 實測過）。在 APP 內安裝 1.6.3 版可攜版（約 47 MB），或沿用裝在 `C:\Program Files\Gyroflow` 的版本；GPL-3.0，APP 只呼叫它的命令列 |
 | Speech-to-subtitle（選用） | 影片原聲轉字幕，需要 NVIDIA 顯示卡。另一個開源專案，安裝方式見上方「搭配工具」 |
-| Python（只有從原始碼執行才需要） | 3.10 以上（安裝時勾選 Add python.exe to PATH）；降噪、去回音另需 numpy，`安裝相依套件.bat` 會裝 |
+| Python（只有從原始碼執行才需要） | 3.10 以上（安裝時勾選 Add python.exe to PATH）；降噪、去回音另需 numpy，自動曝光偵測人物另需 opencv-python-headless，`安裝相依套件.bat` 會裝 |
 
 ## 安裝與啟動
 
@@ -110,7 +111,7 @@
 ### 從原始碼執行
 
 1. 安裝 Python 3.10 以上。
-2. 執行 `啟動 Video Console.bat`。ffmpeg 一樣可以在「依賴元件」一鍵安裝；也可以執行 `安裝相依套件.bat`，改用 pip 安裝 imageio-ffmpeg；降噪、去回音要用的 numpy 也由它安裝（已經裝過的套件會略過，不會強制升級）。
+2. 執行 `啟動 Video Console.bat`。ffmpeg 一樣可以在「依賴元件」一鍵安裝；也可以執行 `安裝相依套件.bat`，改用 pip 安裝 imageio-ffmpeg；降噪、去回音要用的 numpy 與自動曝光偵測人物要用的 opencv-python-headless 也由它安裝（已經裝過的套件會略過，不會強制升級）。
 3. 要立刻停止，執行 `停止 Video Console.bat`。
 
 ### 執行中的行為
@@ -276,11 +277,11 @@ Video Console/
 ## 自己打包執行檔
 
 ```bash
-python -m pip install pyinstaller numpy
+python -m pip install pyinstaller numpy opencv-python-headless
 python packaging/build_exe.py
 ```
 
-產出 `dist/Video Console/`（執行檔與 `_internal`）和 `dist/VideoConsole-<版本>-win64.zip`。後端用 Python 標準函式庫加 numpy（降噪、去回音用，沒裝時打包腳本會停下來），ffmpeg 與 Video2X 不打包進去，由使用者在「依賴元件」安裝。
+產出 `dist/Video Console/`（執行檔與 `_internal`）和 `dist/VideoConsole-<版本>-win64.zip`。後端用 Python 標準函式庫加 numpy（降噪、去回音用）與 OpenCV（自動曝光偵測人物用，連同人臉偵測檔一起打包），沒裝時打包腳本會停下來；ffmpeg 與 Video2X 不打包進去，由使用者在「依賴元件」安裝。
 
 ## 授權
 

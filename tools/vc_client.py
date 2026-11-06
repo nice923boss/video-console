@@ -205,9 +205,55 @@ class VC:
     def edit(self, pid: str, cmd: str, **params) -> dict:
         """One named timeline edit as one undo step, e.g. edit(pid, "split", t=12.5) or
         edit(pid, "volume", type="audio", id=aid, db=-3). Commands: split, splitAll, trim, freeze, detach,
-        restore, reverse, volume, keyframe, roll, slip, slide (docs/API.md 3.7). Returns
-        {rev, changed, label, id?, job?, by?}."""
+        restore, reverse, stabilize, stabilizeShots, volume, keyframe, roll, slip, slide (docs/API.md 3.7).
+        Returns {rev, changed, label, id?, job?, jobs?, by?}."""
         return self.post(f"/api/projects/{pid}/edit", {"cmd": cmd, **params})
+
+    def stabilize(self, pid: str, clip_id: str, *, type: str = "shot", on: bool | None = True,
+                  settings: dict | None = None, wait: bool = True) -> dict:
+        """Stabilize one shot or overlay clip (on False switches back, None toggles). settings: the
+        STAB_DEFAULTS keys of vc/media.py (docs/API.md 3.7.1), e.g. {"smoothing": 30, "tripod": True}.
+        With wait the render job (when one was needed) runs to its end before this returns."""
+        body = {"id": clip_id, "type": type, **({"on": on} if on is not None else {}),
+                **({"settings": settings} if settings else {})}
+        out = self.edit(pid, "stabilize", **body)
+        if wait and out.get("job"):
+            self.wait(out["job"]["id"], quiet=True)
+        return out
+
+    def analyze(self, pid: str, **where) -> dict:
+        """Measure one picture without changing it (docs/API.md 3.8): shot=, t= (clip seconds) or at= (timeline
+        seconds); x/y/size measure a patch. Returns {stats, region?, suggest}."""
+        return self.post(f"/api/projects/{pid}/analyze", where)
+
+    def auto_stabilize(self, pid: str, ids: list[str] | None = None, *, threshold: float = 0.3,
+                       settings: dict | None = None, engine: str | None = None, gyro_folder: str | None = None,
+                       dry_run: bool = False, wait: bool = False) -> dict:
+        """Measure each video shot's shake and stabilize those at or past threshold (jitter, % of the picture
+        width), one undo step (docs/API.md 3.7.2). settings: STAB_DEFAULTS keys on top of the automatic smoothing.
+        engine: "vidstab" (picture analysis, default), "gyro" (Gyroflow from the camera originals in gyro_folder,
+        else the project's settings.gyroFolder) or "auto" (gyro where an original is found, else vidstab).
+        Returns {changed, shots (decision/reason/jitter per shot), jobs}; with wait the render jobs run to their end."""
+        body = {"threshold": threshold, "dryRun": dry_run, **({"ids": ids} if ids else {}),
+                **({"settings": settings} if settings else {}), **({"engine": engine} if engine else {}),
+                **({"gyroFolder": gyro_folder} if gyro_folder is not None else {})}
+        out = self.post(f"/api/projects/{pid}/auto-stabilize", body, timeout=3600)
+        if wait:
+            for job in out.get("jobs") or []:
+                self.wait(job["id"], quiet=True)
+        return out
+
+    def auto_color(self, pid: str, ids: list[str] | None = None, *, target: float | str = "auto",
+                   strength: float = 0.6, wb: bool | str = "auto", exposure: bool = True, samples: int = 3,
+                   subject: str = "auto", dry_run: bool = False) -> dict:
+        """Automatic white balance and exposure into each shot's grade.wb, one undo step (docs/API.md 3.8).
+        target: brightness median 0.2-0.7, or "auto" (medium shots and close-ups bring the faces to 0.47, wide
+        shots keep their own median inside 0.42-0.60); subject: "scene" meters every shot on the whole picture;
+        wb: True balances, "auto" leaves near-grey and coloured stage light alone; strength: share of the colour
+        correction. Returns {changed, shots (with decision per shot)}."""
+        body = {"target": target, "strength": strength, "wb": wb, "exposure": exposure, "samples": samples,
+                "subject": subject, "dryRun": dry_run, **({"ids": ids} if ids else {})}
+        return self.post(f"/api/projects/{pid}/auto-color", body, timeout=1800)
 
     # ------------------------------------------------------------ files and jobs
     def upload(self, pid: str, path: str | Path, *, shot: str | None = None, target: str | None = None) -> dict:

@@ -13,12 +13,15 @@ import {
   focusSpeed, addKeyframe,
 } from "./tl-commands.js";
 import { openMenu } from "./overlay.js";
+import { multiAudio } from "./tl-audio-sel.js";
+import { multiClip } from "./tl-clip-sel.js";
 import { labelColors } from "./insp-content.js";
 
 const LISTS = { caption: "captions", audio: "audio", overlay: "overlays", adjust: "adjustments" };
 const NAMES = { shot: "鏡頭", audio: "音訊片段", overlay: "上方畫面", caption: "字幕", adjust: "調整圖層" };
 const OFF_LABELS = { disabled: ["停用片段", "啟用片段"], muted: ["靜音", "取消靜音"], hidden: ["隱藏", "顯示"] };
 const PLAYHEAD_OFF = "先把播放頭移到這個片段上";
+const MANY = { audio: "段音訊", overlay: "個片段", adjust: "個調整圖層" };
 const EPS = 1e-3;
 
 // Delete and Shift+Delete take every clip Shift or Ctrl+clicked together with `sel` (tl-commands together).
@@ -31,9 +34,11 @@ export function deleteSelection(project, sel) {
   else if (sel.type === "audio") {
     const list = ids(project, sel);
     ops(list.map((id) => ({ op: "audio.delete", id })), { label: list.length > 1 ? `移除 ${list.length} 段音訊` : "移除音軌" });
-  } else if (sel.type === "overlay") ops([{ op: "overlay.delete", id: sel.id }], { label: "移除片段" });
-  else if (sel.type === "adjust") ops([{ op: "adjust.delete", id: sel.id }], { label: "刪除調整圖層" });
-  else return false;
+  } else if (sel.type === "overlay" || sel.type === "adjust") {
+    const list = ids(project, sel);
+    const [verb, one] = sel.type === "overlay" ? ["移除", "移除片段"] : ["刪除", "刪除調整圖層"];
+    ops(list.map((id) => ({ op: `${sel.type}.delete`, id })), { label: list.length > 1 ? `${verb} ${list.length} ${MANY[sel.type]}` : one });
+  } else return false;
   return true;
 }
 
@@ -49,13 +54,14 @@ function applied(project, list) {
   return next;
 }
 
-// Shift+Delete: what comes after the clip on its track moves back to close the gap. Several audio clips go
-// last first, each closing its own gap, as one undo step.
+// Shift+Delete: what comes after the clip on its track moves back to close the gap. Several audio clips,
+// upper-track clips or adjustment layers go last first, each closing its own gap, as one undo step.
 export function rippleDelete(project, sel) {
   if (!sel) return false;
   if (sel.type === "shot") return deleteShots(ids(project, sel), { ripple: true }), true;
-  const many = sel.type === "audio"
-    ? (project.audio || []).filter((a) => ids(project, sel).includes(a.id)).sort((a, b) => Number(b.start || 0) - Number(a.start || 0))
+  const picked = MANY[sel.type] ? ids(project, sel) : [];
+  const many = picked.length > 1
+    ? (project[LISTS[sel.type]] || []).filter((x) => picked.includes(x.id)).sort((a, b) => Number(b.start || 0) - Number(a.start || 0))
     : [sel];
   let now = project;
   const list = [];
@@ -66,7 +72,7 @@ export function rippleDelete(project, sel) {
     now = applied(now, step);
   }
   if (!list.length) return false;
-  ops(list, { label: many.length > 1 ? `漣漪刪除 ${many.length} 段音訊` : "漣漪刪除" });
+  ops(list, { label: many.length > 1 ? `漣漪刪除 ${many.length} ${MANY[sel.type]}` : "漣漪刪除" });
   return true;
 }
 
@@ -95,6 +101,8 @@ function overlayItems(project, cur, run, at) {
     { divider: true },
     { label: "添加靜幀（5 秒）", icon: "image", hint: keyLabel("edit.freeze"), onClick: run(freezeFrame), disabled: !video || !at,
       title: !video ? "只有影片片段可以用（圖片本來就是靜止畫面）" : at ? "在播放頭插入 5 秒靜止畫面，同一軌片段後面要有 5 秒空位" : PLAYHEAD_OFF },
+    { label: "變速…", icon: "gauge", hint: keyLabel("edit.speed"), onClick: run(focusSpeed), disabled: !video,
+      title: video ? undefined : "只有影片片段可以變速（圖片沒有速度）" },
   ];
 }
 
@@ -165,7 +173,11 @@ export function timelineMenu(e, data) {
   const cur = NAMES[type] && current(project, clips, sel);
   if (!cur) return;
   const now = getState().editSel;
-  if (!now || now.type !== type || now.id !== id) setState({ editSel: sel });
+  if (!now || now.type !== type || now.id !== id) {
+    // a set picked before something else was selected stays gone: right-clicking one of its clips takes that one
+    const live = [...(multiAudio(getState()) || []), ...(multiClip(getState()) || [])];
+    setState(live.includes(id) ? { editSel: sel } : { editSel: sel, audioSel: null, clipSel: null });
+  }
   // A right-click inside a Shift or Ctrl selection keeps it, so the menu acts on all of it.
   if (type === "shot" && getState().selected.length > 1 && getState().selected.includes(id)) setState({ focus: id, inspectorTab: "edit" });
   else if (type === "shot") focusShot(id, { tab: "edit" });

@@ -11,6 +11,7 @@ import re
 from typing import Any, Callable
 
 from .linked import follow_ops
+from .p5src import clean_link as _p5_link
 from .opfields import (
     ADJUST_FIELDS, AUDIO_FIELDS, CAPTION_FIELDS, CAPTION_STYLE_FIELDS, CAPTION_TRACK_FIELDS, CAST_FIELDS, LAYER_FIELDS, MARKER_FIELDS,
     MAX_CAPTION_STYLES, MAX_OPS, OVERLAY_FIELDS, SETTINGS_FIELDS, SHOT_FIELDS, STYLE_FIELDS, TAKE_FIELDS,
@@ -431,7 +432,8 @@ def _media_update(p: dict, op: dict) -> dict | None:
     if media is None:
         return None
     fields = {"name": _str(200), "note": _str(1000), "favorite": _bool, "tags": _tags,
-              "trashed": _bool}  # AU-14: a replaced voice-over in the project trash
+              "trashed": _bool,  # AU-14: a replaced voice-over in the project trash
+              "p5": _p5_link}  # the p5 page and segment it was rendered from, with the text edits (p5render.py)
     patch = _clean_patch(op.get("patch"), fields)
     undo = _update_item(media, op, patch, fields)
     return {"op": "media.update", "id": media["id"], **undo}

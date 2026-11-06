@@ -31,7 +31,8 @@ from .keyframes import expr as kf_expr
 from .keyframes import source_keys, take_keys
 from .keyframes import steps as kf_steps
 from .media import ALPHA_DECODERS, AS_709, TAGS_709, TO_709, Media
-from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, total_duration
+from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, overlay_speed, total_duration
+from .transform import transform_filter
 from .util import AppError, safe_filename
 from .voiceclean import ensure_stems, mix_lines, stems_for
 
@@ -73,8 +74,10 @@ def export_options(project: dict, settings_export: dict, overrides: dict | None)
     for key, value in (overrides or {}).items():
         if key in opts and value is not None:
             opts[key] = value
-    if opts["quality"] not in ("high", "standard", "draft"):
+    if opts["quality"] not in ("high", "standard", "compact", "draft"):
         opts["quality"] = "high"
+    if opts["quality"] == "compact":
+        opts["encoder"] = "libx264"  # its file sizes hold for x264 only (media.QUALITY)
     if opts["fit"] not in ("contain", "cover"):
         opts["fit"] = "contain"
     if opts["format"] not in ("mp4", *AUDIO_CODECS):
@@ -256,14 +259,14 @@ def prepare_clips(project: dict, project_dir: Path) -> list[dict]:
 
 def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, opts: dict,
                    inputs: list[list[str]], graph: list[str],
-                   picture: bool = True) -> tuple[str, list[tuple[int, float, float, str]]]:
+                   picture: bool = True) -> tuple[str, list[tuple[int, float, float, str, float]]]:
     """Lay the picture-in-picture clips over the picture, bottom track first (a higher track covers a lower
-    one). Returns the new picture label and (input, start, length, volume expression) for each clip whose
-    sound plays. Keyframed position, size and opacity follow the timeline time t (T in geq).
+    one). Returns the new picture label and (input, start, length, volume expression, speed) for each clip whose
+    sound plays. A video at speed s reads length * s seconds of its file from "in". Keyframed position, size and opacity follow the timeline time t (T in geq).
     With picture False only the clips whose sound plays are opened and nothing is laid over."""
     w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), float(project["settings"]["fps"])
     all_media = project.get("media") or {}
-    sounds: list[tuple[int, float, float, str]] = []
+    sounds: list[tuple[int, float, float, str, float]] = []
     for layer in project.get("layers") or []:
         for item in project.get("overlays") or []:
             media = all_media.get(item.get("mediaId") or "")
@@ -274,6 +277,7 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             length = min(float(item.get("length") or 0.0), total - start)
             keyed = {k for kf in item.get("keyframes") or [] for k in kf if k != "t"}
             volume = float(item.get("volume", 1.0))
+            speed = overlay_speed(project, item)
             # Hiding a track only hides its picture and muting only silences it, as in the preview.
             loud = (opts["clipAudio"] and media["kind"] == "video" and bool(media.get("hasAudio"))
                     and not layer.get("muted") and (volume > 0 or "volume" in keyed))
@@ -283,20 +287,21 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
                 continue
             if media["kind"] == "video":
                 decoder = ALPHA_DECODERS.get(media.get("alphaCodec") or "")
-                inputs.append(["-ss", f"{float(item.get('in') or 0.0):.3f}", "-t", f"{length:.3f}",
+                inputs.append(["-ss", f"{float(item.get('in') or 0.0):.3f}", "-t", f"{length * speed:.3f}",
                                *(["-c:v", decoder] if decoder else []), "-i", media["file"]])
             else:
                 inputs.append(["-loop", "1", "-framerate", frame_rate(fps), "-t", f"{length:.3f}", "-i", media["file"]])
             idx = len(inputs) - 1
             if loud:
-                sounds.append((idx, start, length, kf_expr(item, "volume", "t", 0.0, 1.0)))
+                sounds.append((idx, start, length, kf_expr(item, "volume", "t", 0.0, 1.0), speed))
             if layer.get("hidden") or not picture:
                 continue
             # The clip covers the frames from frame_at(start) to frame_at(end), the same frames the cuts below land
             # on; before and after them the overlay passes the picture through unchanged. Its first frame sits half
             # a frame before the first frame it covers: laid even a hair late, that frame would show the shot below.
             on, off = frame_bounds(start, start + length, fps)
-            chain = [f"setpts=PTS-STARTPTS+{on:.3f}/TB"] + ([AS_709] if media["kind"] == "video" else [])
+            pts = "PTS-STARTPTS" if speed == 1 else f"(PTS-STARTPTS)/{speed:.4f}"
+            chain = [f"setpts={pts}+{on:.3f}/TB"] + ([AS_709] if media["kind"] == "video" else [])
             chroma = item.get("chroma") or {}
             if chroma.get("on"):
                 # Keyed on the clip's own pixels, before scaling blurs the edge of the colour.
@@ -411,11 +416,18 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         # Masks sit on the fitted frame, so a box drawn over the preview lands on the same pixels.
         masks = (clip["shot"].get("masks") or []) if clip["source"] in ("video", "image") and not (disabled or hidden) else []
         black = "drawbox=c=black:t=fill," if hidden and clip["source"] == "video" else ""
+        # Opacity, move, scale, rotate, trim and distort (ED-30) work on the fitted, masked frame, so the boxes move
+        # with the picture, as the preview's matrix3d carries them.
+        tf = transform_filter(clip["shot"].get("transform"), w, h) if clip["source"] in ("video", "image") and not (disabled or hidden) else ""
+        main = f"v{i}t" if tf and masks else f"v{i}"
         graph.append(
             f"[{idx}:v]setpts={pts},{lut}{_fit_filter(opts['fit'], w, h)},{black}setsar=1,fps={frame_rate(fps)},{TO_709},"
-            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end_frame={frames[i][1] - frames[i][0]}[v{i}{'m' if masks else ''}]"
+            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end_frame={frames[i][1] - frames[i][0]}"
+            f"{f',{tf}' if tf and not masks else ''}[{main}{'m' if masks else ''}]"
         )
-        graph.extend(_mask_chains(f"v{i}", masks, w, h))
+        graph.extend(_mask_chains(main, masks, w, h))
+        if tf and masks:
+            graph.append(f"[{main}]{tf}[v{i}]")
 
     # Runs of clips joined by transitions become xfade chains; runs are then concatenated.
     runs: list[list[int]] = [[0]]
@@ -492,7 +504,7 @@ def _clip_sounds(clip: dict) -> bool:
 
 def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict, total: float,
                 inputs: list[list[str]], graph: list[str], video_index: dict[int, int],
-                pip_sounds: list[tuple[int, float, float, str]]) -> None:
+                pip_sounds: list[tuple[int, float, float, str, float]]) -> None:
     """Mix every sound of the sequence into [aout]; video_index maps a clip to its input."""
     tracks = project.get("tracks") or {}
     # Audio: clip sound from video takes plus the music/voice tracks, mixed without normalisation.
@@ -521,9 +533,9 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
                 f"adelay=delays={ms}:all=1,{fix_pts}[ca{i}]"
             )
             a_labels.append(f"ca{i}")
-    for idx, start, length, volume in pip_sounds:
+    for idx, start, length, volume, speed in pip_sounds:
         graph.append(
-            f"[{idx}:a]{aformat},atrim=duration={length:.3f},asetpts=PTS-STARTPTS,volume='{volume}':eval=frame,"
+            f"[{idx}:a]{aformat},{_atempo(speed)}atrim=duration={length:.3f},asetpts=PTS-STARTPTS,volume='{volume}':eval=frame,"
             f"adelay=delays={int(round(start * 1000))}:all=1,{fix_pts}[pa{idx}]"
         )
         a_labels.append(f"pa{idx}")
@@ -713,7 +725,8 @@ def render(
                            str(work_path)]
         args += ["-map", "[vout]", "-map", a_out, "-t", f"{plan['total']:.3f}"]
         args += [*media.encoder_args(encoder, opts["quality"], opts.get("maxrate") or 0), *TAGS_709]
-        args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", str(work_path)]
+        abr = "160k" if opts["quality"] == "compact" else "192k"
+        args += ["-c:a", "aac", "-b:a", abr, "-ar", "48000", "-movflags", "+faststart", str(work_path)]
         return args
 
     encoder = AUDIO_CODECS[fmt][1] if sound_only else media.pick_encoder(encoder_pref)

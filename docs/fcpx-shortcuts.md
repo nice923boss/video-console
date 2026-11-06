@@ -72,7 +72,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | Final Cut Pro 指令 | Mac 鍵 | Video Console 指令 | 「Video Console」組 | 「Final Cut Pro」組 | 說明 |
 |---|---|---|---|---|---|
 | Show/Hide Retime Editor | Command-R | 變速 | Ctrl+R | Ctrl+R | 開右側「速度與方向」，0.25x 到 4x |
-| Reverse Clip | 無 | 倒放選取的鏡頭 | Ctrl+Shift+R | 無 | Final Cut Pro 沒有預設鍵；第一次會在背景產生倒放影片 |
+| Reverse Clip | 無 | 倒放選取的鏡頭 | Alt+R | 無 | Final Cut Pro 沒有預設鍵；第一次會在背景產生倒放影片 |
 | Insert/Connect Freeze Frame | Option-F | 定格 | Alt+F | Alt+F | 插入 5 秒靜止畫面 |
 | 無 | 無 | 曲線變速 | Shift+B | 無 | [Shell] 按下只提示還沒有支援 |
 | Add Keyframe | Option-K | 在播放頭添加關鍵幀 | K | Alt+K | 上方影片記位置、大小、不透明度、音量；音訊記音量；調整圖層記調色 |
@@ -114,7 +114,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 - 同一頁的兩個指令用到同一組鍵時，兩邊都會顯示警告，實際只有其中一個會作用。
 - 設定存在 settings.json 的 ui.keymap，全 App 共用，重新整理或重開都會保留。
 - 由瀏覽器保留、網頁攔不到的鍵，錄製時會擋下並提示換一組：Ctrl+T、Ctrl+W、Ctrl+N、Ctrl+Shift+T、Ctrl+Shift+N、Ctrl+Shift+W、Ctrl+Tab、Ctrl+Shift+Tab、Alt+F4。
-- F1、F3、F5、F6、F7、Ctrl+R、Ctrl+Shift+R 在一般瀏覽器分頁可能先被瀏覽器接走（說明、尋找下一個、重新整理、網址列、鍵盤瀏覽模式），請在 Video Console 的 APP 視窗使用。
+- F1、F3、F5、F6、F7、Ctrl+R 在一般瀏覽器分頁可能先被瀏覽器接走（說明、尋找下一個、重新整理、網址列、鍵盤瀏覽模式），請在 Video Console 的 APP 視窗使用。
 - 錄製時 Esc 用來取消，所以不能把 Esc 錄成新鍵；內建的 Esc 鍵位不受影響。
 - 每個剪輯功能的用法，在 APP 內的「剪輯功能說明」（快捷鍵一覽下方按鈕，或指令面板搜尋）。
 - 落差與未驗證項目見專案根目錄 GAPS.md 的「快捷鍵」與「剪映 FCPX 快捷鍵」兩節。

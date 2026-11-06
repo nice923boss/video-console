@@ -24,6 +24,7 @@ const ENCODERS = [
 const QUALITY = [
   { value: "high", label: "高畫質", title: "檔案較大，編碼較慢，適合正式交件" },
   { value: "standard", label: "標準", title: "畫質與檔案大小的折衷" },
+  { value: "compact", label: "精簡", title: "檔案小，適合上傳網路或傳給客戶，不用再另外壓縮；固定用 CPU 編碼" },
   { value: "draft", label: "草稿", title: "編碼最快，適合先看節奏" },
 ];
 const FOLDERS = [

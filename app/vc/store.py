@@ -284,9 +284,9 @@ class ProjectStore:
             "captionTracks": [],
         }
         library = self.settings.section("captionStyles") if self.settings.section("captionStylesAuto") else []
-        if library:  # as if each library style were added by hand: the first becomes the default
-            project["captionStyles"] = [{**s, "id": new_id("cs")} for s in library]
-            settings["captionStyle"] = project["captionStyles"][0]["id"]
+        # as if each style were added by hand: the first becomes the default
+        project["captionStyles"] = [{**s, "id": new_id("cs")} for s in library or [opfields.STARTER_CAPTION_STYLE]]
+        settings["captionStyle"] = project["captionStyles"][0]["id"]
         write_json_atomic(d / "project.json", project)
         with self._lock:
             self._entries[pid] = _Entry(project)

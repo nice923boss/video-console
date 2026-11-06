@@ -3,7 +3,7 @@
 // preview follows, and letting go saves it as one undo step (as GradeEditor does for grades).
 import { html, useEffect } from "../lib/h.js";
 import { getState, setState, useStore } from "../lib/store.js";
-import { updateShot } from "../lib/actions.js";
+import { updateShot, whenSaved } from "../lib/actions.js";
 import { DEFAULT_MASK, MAX_MASKS } from "../lib/masks.js";
 import { Button, Field, IconButton, Segmented, Slider } from "./ui.js";
 
@@ -32,7 +32,7 @@ export function MaskEditor({ shot }) {
   }, [shot.id]);
 
   const preview = (next) => setState({ maskDraft: { id: shot.id, masks: next } });
-  // The draft stays on until the save comes back, so the preview does not blink back to the old boxes.
+  // The draft stays on until the saved project lands, so the preview does not blink back to the old boxes.
   const commit = (next, label = "調整遮罩") => {
     if (JSON.stringify(next) === JSON.stringify(saved)) {
       setState({ maskDraft: null });
@@ -40,7 +40,7 @@ export function MaskEditor({ shot }) {
     }
     const mine = { id: shot.id, masks: next };
     setState({ maskDraft: mine });
-    updateShot(shot.id, { masks: next }, { label }).then(() => {
+    updateShot(shot.id, { masks: next }, { label }).then(whenSaved).then(() => {
       if (getState().maskDraft === mine) setState({ maskDraft: null });
     });
   };

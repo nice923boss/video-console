@@ -30,7 +30,7 @@ python "<VC 資料夾>/tools/vc_client.py" status
 這個指令會在 VC 沒開時用 `--no-window` 背景啟動它，然後列出：
 
 - VC 版本與連接埠
-- `ffmpeg`（必要）、`video2x`（選用，放大影片）、`comfyui`（選用，AI 生成）的狀態
+- `ffmpeg`（必要）、`video2x`（選用，放大影片）、`gyroflow`（選用，陀螺儀防抖）、`comfyui`（選用，AI 生成）的狀態
 - 語音轉字幕引擎的檢查結果（最多約 3 分鐘）
 - 專案數
 

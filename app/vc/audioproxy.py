@@ -37,7 +37,7 @@ def _uses(project: dict) -> list[tuple[str, str]]:
     """(item id, speed key) of each sound the preview plays: active shot videos, picture-in-picture clips, audio
     clips and detached shot sounds."""
     uses = [(s.get("activeVideo"), float(s.get("speed") or 1.0)) for s in project.get("shots", []) if not s.get("disabled")]
-    uses += [(o.get("mediaId"), 1.0) for o in project.get("overlays", []) if not o.get("disabled")]
+    uses += [(o.get("mediaId"), float(o.get("speed") or 1.0)) for o in project.get("overlays", []) if not o.get("disabled")]
     for a in project.get("audio", []):
         uses.append((a.get("mediaId") if a.get("mediaId") in project["media"] else a.get("takeId"),
                      float(a.get("speed") or 1.0)))

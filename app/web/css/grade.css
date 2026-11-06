@@ -133,6 +133,9 @@
 .grade-sec[open] > summary { border-bottom: 1px solid var(--border); }
 .grade-sec-body { display: flex; flex-direction: column; gap: 8px; padding: 10px; }
 .grade-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-line); }
+.wb-sample { display: flex; align-items: flex-end; gap: 8px; }
+.wb-sample > .row-3 { flex: 1; }
+.wb-swatch { flex: none; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: var(--r-input); }
 
 /* Shot masks (mask-panel.js, GR-12) */
 .mask-list { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
@@ -152,3 +155,13 @@
 .scope-vector { aspect-ratio: 1; }
 .scope-note { margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .scope-note.is-error { color: var(--danger); }
+
+/* Shot compositing, transform, crop and distort (ED-30): label, slider, exact field. */
+.tf-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 92px; gap: 8px; align-items: center; }
+.tf-pair { display: grid; grid-template-columns: 70px 10px minmax(0, 1fr) 10px minmax(0, 1fr); gap: 6px; align-items: center; }
+.tf-label { font-size: calc(12px * var(--text-scale)); color: var(--muted); white-space: nowrap; }
+.tf-axis { font-size: 11px; color: var(--muted); text-align: center; }
+.tf-num .num-input { padding-left: 6px; }
+.tf-num:has(.num-suffix) .num-input { padding-right: 26px; }
+.tf-num .num-suffix { right: 6px; }
+.tf-note { margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }

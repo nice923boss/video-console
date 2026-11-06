@@ -39,6 +39,7 @@ import {
   AUDIO_H, PIP_H, ADD_H,
 } from "./tl-tracks.js";
 import { multiAudio } from "./tl-audio-sel.js";
+import { multiClip } from "./tl-clip-sel.js";
 import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
 import { Minimap } from "./tl-minimap.js";
 import { useViewWindow, inView } from "./tl-view.js";
@@ -290,11 +291,13 @@ function contentSpan(project, clips) {
 }
 
 export function Timeline({ project, clips, hotkeys = true }) {
-  const { editSel, focus, picked, editRange, editTool, watch, audioSel, solo } = useStore((s) => ({
+  const { editSel, focus, picked, editRange, editTool, watch, audioSel, clipSel, solo } = useStore((s) => ({
     editSel: s.editSel, focus: s.focus, picked: s.selected, editRange: s.editRange, editTool: s.editTool, watch: s.watch, audioSel: multiAudio(s),
+    clipSel: multiClip(s),
     solo: s.solo && s.solo.pid === s.pid ? s.solo.keys : null,
   }));
   const audioOn = (id) => (audioSel ? audioSel.includes(id) : !!editSel && editSel.type === "audio" && editSel.id === id);
+  const overlayOn = (id) => !!editSel && editSel.type === "overlay" && (clipSel ? clipSel.includes(id) : editSel.id === id);
   const [pps, setPps] = usePref("vc.timeline.pps", PPS_DEFAULT, validPps);
   const [scale, setScale] = usePref("vc.timeline.scale", 1, validScale);
   const [snapOn, setSnapOn] = usePref("vc.timeline.snap", true, isBool);
@@ -498,7 +501,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
     const sc = scrollRef.current;
     const t = Math.max(0, (e.clientX - sc.getBoundingClientRect().left - LABEL_W + sc.scrollLeft) / pps);
     const sel = { type, id };
-    setState({ editSel: sel });
+    setState({ editSel: sel, audioSel: null, clipSel: null });
     setTime(t);
     splitAtPlayhead(project, clips, sel);
   };
@@ -730,7 +733,7 @@ export function Timeline({ project, clips, hotkeys = true }) {
               <${TrackMeter} track=${layer.id} />`)}
             ${lane("tl-lane-pip", items.filter((o) => (editSel && editSel.id === o.id)
               || inView(win, Number(o.start || 0), Number(o.length || 1))).map((item) => html`<${OverlayClip} key=${item.id} project=${project} item=${item} ctx=${ctx}
-              selected=${!!editSel && editSel.type === "overlay" && editSel.id === item.id} />`))}`,
+              selected=${overlayOn(item.id)} />`))}`,
             { drop: `layer:${layer.id}`, hidden: !!layer.hidden, muted: !!layer.muted });
         })}
         ${row("video", VIDEO_H, html`

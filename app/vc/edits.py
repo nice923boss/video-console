@@ -11,7 +11,8 @@ from typing import Any
 
 from .grade import clean_grade
 from .keyframes import source_keys, take_keys, value_at
-from .sequence import VOICE_TRACK, audio_media, audio_track, build_sequence, total_duration, video_take
+from .media import clean_stab
+from .sequence import VOICE_TRACK, audio_media, audio_track, build_sequence, overlay_speed, total_duration, video_take
 from .util import AppError, new_id
 
 LISTS = {"overlay": "overlays", "audio": "audio", "caption": "captions", "adjust": "adjustments"}
@@ -208,7 +209,7 @@ def split_ops(g: dict, t: float, local: float, project: dict) -> list[dict]:
     head_keys, tail_keys = split_keys(item, local)
     t = r3(t)
     if kind == "overlay":
-        moved = {} if g["still"] else {"in": r3(float(item.get("in") or 0) + local)}
+        moved = {} if g["still"] else {"in": r3(float(item.get("in") or 0) + local * overlay_speed(project, item))}
         rest = {**item, "id": new_id("o"), "start": t, **moved, "length": r3(g["length"] - local),
                 **key_patch(item, tail_keys)}
         return [{"op": "overlay.update", "id": item["id"], "patch": {"length": r3(local), **key_patch(item, head_keys)}},
@@ -268,7 +269,7 @@ def trim(project: dict, t: float, side: str, kind: str = "shot", item_id: str | 
         else:
             patch = {"duration": round(clip["length"] - local if left else local, 2)}
     elif kind == "overlay":
-        t_in = item.get("in") if g["still"] else r3(float(item.get("in") or 0) + local)
+        t_in = item.get("in") if g["still"] else r3(float(item.get("in") or 0) + local * overlay_speed(project, item))
         patch = ({"start": t, "in": t_in, "length": r3(g["length"] - local), **key_patch(item, shift_keys(item, local))}
                  if left else {"length": r3(local)})
     elif kind == "audio":
@@ -320,7 +321,8 @@ def freeze_overlay(project: dict, t: float, item_id: str | None = None, still_id
     if any(s < end + FREEZE_LEN - 1e-3 and s + n > end + 1e-3 for s, n in (_span(project, "overlay", o) for o in track)):
         raise AppError(f"同一軌在這個片段後面 {FREEZE_LEN:g} 秒內還有片段，沒有空位放定格，請先移開")
     if not still_id:
-        at = r3(max(0.0, min(min(float(media.get("duration") or 1e9), t_in + length) - 0.04, t_in + local)))
+        speed = overlay_speed(project, item)
+        at = r3(max(0.0, min(min(float(media.get("duration") or 1e9), t_in + length * speed) - 0.04, t_in + local * speed)))
         return {"ops": [], "label": "定格", "job": {"kind": "lastframe", "shotId": None, "payload": {
             "overlay": item["id"], "t": r3(t), "source": media["id"], "at": at}}}
     if local < EDGE:
@@ -332,7 +334,7 @@ def freeze_overlay(project: dict, t: float, item_id: str | None = None, still_id
         ops, place = [head, {**tail, "item": {**tail["item"], "start": r3(t + FREEZE_LEN)}}], t
     # The still holds the clip's place and look at that moment; keyframes don't move a frozen frame.
     keyed = {f: r3(value_at(item, f, local)) for f in ("x", "y", "w", "opacity") if any(f in k for k in item.get("keyframes") or [])}
-    frozen = {**{k: v for k, v in item.items() if k != "keyframes"}, **keyed, "id": new_id("o"), "mediaId": still_id,
+    frozen = {**{k: v for k, v in item.items() if k not in ("keyframes", "speed")}, **keyed, "id": new_id("o"), "mediaId": still_id,
               "name": f"{item.get('name') or '影片'}（定格）"[:120], "start": r3(place), "in": 0.0, "length": FREEZE_LEN}
     return {"ops": [*ops, {"op": "overlay.add", "item": frozen}], "label": "定格", "id": frozen["id"]}
 
@@ -441,17 +443,37 @@ def _is_stab(take: dict | None) -> bool:
     return bool(take and (take.get("source") or {}).get("tool") == "stabilize")
 
 
-def stabilize(project: dict, shot_id: str | None = None, t: float | None = None) -> dict:
-    """Switch to a stabilized copy of the part the clip uses (or back). The copy starts at source["start"] of the
-    footage it was made from, so trims shift by that much; the first time, a "stabilize" job renders the clip's
-    range plus STAB_HANDLE seconds each side, and a copy too short for the clip's trims is rendered anew."""
+def _stab_copy(pool: dict, parent_id: str, t_in: float, end: float, want: dict | None) -> dict | None:
+    """The newest stabilized copy of parent_id covering [t_in, end] (want: rendered with exactly those settings;
+    None: any)."""
+    fits = [x for x in pool.values() if x.get("parent") == parent_id and _is_stab(x) and x.get("kind") == "video"
+            and x.get("duration") and float(x["source"].get("start") or 0.0) <= t_in + 1e-3
+            and float(x["source"].get("end") or 0.0) >= end - 1e-3
+            and (want is None or clean_stab(x["source"].get("settings")) == want)]
+    return fits[-1] if fits else None
+
+
+def _stab_payload(source: str, t_in: float, end: float, dur: float, want: dict | None) -> dict:
+    payload = {"source": source, "from": r3(max(0.0, t_in - STAB_HANDLE)), "to": r3(min(dur, end + STAB_HANDLE))}
+    return {**payload, "settings": want} if want is not None else payload
+
+
+def stabilize(project: dict, shot_id: str | None = None, t: float | None = None, on: bool | None = None,
+              settings: dict | None = None) -> dict:
+    """Switch to a stabilized copy of the part the clip uses (or back). on None toggles, True makes sure it is
+    stabilized, False that it is not. settings (media.STAB_DEFAULTS keys) picks how: a clip already stabilized
+    another way goes back to its footage and on to a copy made with these settings. The copy starts at
+    source["start"] of the footage it was made from, so trims shift by that much; when no copy fits, a "stabilize"
+    job renders the clip's range plus STAB_HANDLE seconds each side (the clip plays the footage meanwhile)."""
     shot = (next((s for s in project["shots"] if s["id"] == shot_id), None) if shot_id
             else (_clip_at(_clips(project), t) or {}).get("shot") if t is not None else None)
     take = shot and video_take(project, shot)
     if not take:
         raise AppError("防抖只能用在影片鏡頭")
+    want = None if settings is None else clean_stab(settings)
     takes = project.get("takes") or {}
     t_in, t_out = float(shot.get("trimIn") or 0.0), shot.get("trimOut")
+    lead: list[dict] = []
     if _is_stab(take):
         parent = takes.get(take.get("parent"))
         if not parent:
@@ -459,69 +481,86 @@ def stabilize(project: dict, shot_id: str | None = None, t: float | None = None)
         start = float(take["source"].get("start") or 0.0)
         out = start + float(t_out if t_out is not None else take["duration"])
         reaches_end = t_out is None and out >= float(parent.get("duration") or 0.0) - 1e-3
-        return {"ops": [{"op": "shot.update", "id": shot["id"],
-                         "patch": {"activeVideo": parent["id"], "trimIn": r3(start + t_in),
-                                   "trimOut": None if reaches_end else r3(out)}}], "label": "取消防抖"}
+        back = {"op": "shot.update", "id": shot["id"],
+                "patch": {"activeVideo": parent["id"], "trimIn": r3(start + t_in),
+                          "trimOut": None if reaches_end else r3(out)}}
+        if on is False or (on is None and want is None):
+            return {"ops": [back], "label": "取消防抖"}
+        if want is None or clean_stab(take["source"].get("settings")) == want:
+            return {"ops": [], "label": "防抖"}
+        take, t_in, t_out, lead = parent, start + t_in, back["patch"]["trimOut"], [back]
+    elif on is False:
+        raise AppError("這個鏡頭沒有防抖")
     dur = float(take["duration"])
     end = float(t_out) if t_out is not None else dur
-    have = next((x for x in takes.values() if x.get("parent") == take["id"] and _is_stab(x)
-                 and x.get("kind") == "video" and x.get("duration")
-                 and float(x["source"].get("start") or 0.0) <= t_in + 1e-3
-                 and float(x["source"].get("end") or 0.0) >= end - 1e-3), None)
+    have = _stab_copy(takes, take["id"], t_in, end, want)
     if have:
         start = float(have["source"].get("start") or 0.0)
         trims = {"trimIn": r3(max(0.0, t_in - start)),
                  "trimOut": r3(min(end - start, float(have["duration"]))) if t_out is not None else None}
         return {"ops": [{"op": "shot.update", "id": shot["id"], "patch": {"activeVideo": have["id"], **trims}}],
                 "label": "防抖"}
-    return {"ops": [], "label": "防抖",
-            "job": {"kind": "stabilize", "shotId": shot["id"],
-                    "payload": {"source": take["id"], "from": r3(max(0.0, t_in - STAB_HANDLE)),
-                                "to": r3(min(dur, end + STAB_HANDLE))}}}
+    return {"ops": lead, "label": "防抖",
+            "job": {"kind": "stabilize", "shotId": shot["id"], "payload": _stab_payload(take["id"], t_in, end, dur, want)}}
 
 
-def stabilize_shots(project: dict, ids: list[str], on: bool) -> dict:
-    """stabilize for several shots in one undo step: on stabilizes the video shots not yet stabilized, off switches
-    the stabilized ones back; the rest are left alone. Copies not rendered yet come back as "jobs"."""
+def stabilize_shots(project: dict, ids: list[str], on: bool, settings: dict | None = None) -> dict:
+    """stabilize for several shots in one undo step: on stabilizes the video shots not yet stabilized (with
+    settings: also those stabilized another way), off switches the stabilized ones back; the rest are left alone.
+    Copies not rendered yet come back as "jobs"."""
     videos = [s for s in project["shots"] if s["id"] in ids and video_take(project, s)]
     if not videos:
         raise AppError("防抖只能用在影片鏡頭")
-    picked = [s for s in videos if _is_stab(video_take(project, s)) != on]
+    want = None if settings is None or not on else clean_stab(settings)
+
+    def needs(shot: dict) -> bool:
+        take = video_take(project, shot)
+        if not on:
+            return _is_stab(take)
+        return not _is_stab(take) or (want is not None and clean_stab(take["source"].get("settings")) != want)
+
+    picked = [s for s in videos if needs(s)]
     if not picked:
-        raise AppError("選取的影片鏡頭都已經防抖" if on else "選取的鏡頭都沒有防抖")
-    plans = [stabilize(project, s["id"]) for s in picked]
+        raise AppError(("選取的影片鏡頭都已經用這組設定防抖" if want else "選取的影片鏡頭都已經防抖") if on
+                       else "選取的鏡頭都沒有防抖")
+    plans = [stabilize(project, s["id"], on=on, settings=want) for s in picked]
     return {"ops": [o for p in plans for o in p["ops"]], "label": f"{len(picked)} 個鏡頭{'防抖' if on else '取消防抖'}",
             "jobs": [p["job"] for p in plans if p.get("job")]}
 
 
-def stabilize_overlay(project: dict, item_id: str | None = None, t: float | None = None) -> dict:
+def stabilize_overlay(project: dict, item_id: str | None = None, t: float | None = None, on: bool | None = None,
+                      settings: dict | None = None) -> dict:
     """stabilize for an upper-track clip: the copy is a media item (parent, source like a shot's copy) and "in"
     shifts by its start. The length stays, so a clip that ran past the footage's end runs past the copy's."""
     item = _target(project, [], "overlay", item_id, 0.0 if t is None else t)["item"]
     media = project["media"].get(item.get("mediaId")) or {}
     if media.get("kind") != "video" or not media.get("duration"):
         raise AppError("防抖只能用在影片片段")
+    want = None if settings is None else clean_stab(settings)
     t_in = float(item.get("in") or 0.0)
+    lead: list[dict] = []
     if _is_stab(media):
         if media.get("parent") not in project["media"]:
             raise AppError("找不到防抖前的原始影片")
-        return {"ops": [{"op": "overlay.update", "id": item["id"], "patch": {
-            "mediaId": media["parent"], "in": r3(float(media["source"].get("start") or 0.0) + t_in)}}],
-            "label": "取消防抖"}
+        back = {"op": "overlay.update", "id": item["id"], "patch": {
+            "mediaId": media["parent"], "in": r3(float(media["source"].get("start") or 0.0) + t_in)}}
+        if on is False or (on is None and want is None):
+            return {"ops": [back], "label": "取消防抖"}
+        if want is None or clean_stab(media["source"].get("settings")) == want:
+            return {"ops": [], "label": "防抖"}
+        media, t_in, lead = project["media"][media["parent"]], back["patch"]["in"], [back]
+    elif on is False:
+        raise AppError("這個片段沒有防抖")
     dur = float(media["duration"])
-    end = min(dur, t_in + float(item.get("length") or 0.0))
-    have = next((x for x in project["media"].values() if x.get("parent") == media["id"] and _is_stab(x)
-                 and x.get("kind") == "video" and x.get("duration")
-                 and float(x["source"].get("start") or 0.0) <= t_in + 1e-3
-                 and float(x["source"].get("end") or 0.0) >= end - 1e-3), None)
+    end = min(dur, t_in + float(item.get("length") or 0.0) * overlay_speed(project, item))
+    have = _stab_copy(project["media"], media["id"], t_in, end, want)
     if have:
         start = float(have["source"].get("start") or 0.0)
         return {"ops": [{"op": "overlay.update", "id": item["id"],
                          "patch": {"mediaId": have["id"], "in": r3(max(0.0, t_in - start))}}], "label": "防抖"}
-    return {"ops": [], "label": "防抖",
+    return {"ops": lead, "label": "防抖",
             "job": {"kind": "stabilize", "shotId": None,
-                    "payload": {"overlay": item["id"], "source": media["id"],
-                                "from": r3(max(0.0, t_in - STAB_HANDLE)), "to": r3(min(dur, end + STAB_HANDLE))}}}
+                    "payload": {"overlay": item["id"], **_stab_payload(media["id"], t_in, end, dur, want)}}}
 
 
 def _shot_volume(project: dict, shot_id: str, db: float, t_in: float | None, t_out: float | None) -> dict:
@@ -684,14 +723,18 @@ def plan(project: dict, data: dict) -> dict:
     if cmd == "reverse":
         return reverse(project, _id(data), _num(data, "t", False))
     if cmd == "stabilize":
+        on = data.get("on")
+        if on is not None and not isinstance(on, bool):
+            raise AppError("stabilize 的 on 要是 true、false 或不給（切換）")
         if kind == "overlay":
-            return stabilize_overlay(project, _id(data), _num(data, "t", False))
-        return stabilize(project, _id(data), _num(data, "t", False))
+            return stabilize_overlay(project, _id(data), _num(data, "t", False), on, data.get("settings"))
+        return stabilize(project, _id(data), _num(data, "t", False), on, data.get("settings"))
     if cmd == "stabilizeShots":
         ids = data.get("ids")
         if not isinstance(ids, list) or not ids:
             raise AppError("stabilizeShots 要給 ids（鏡頭 id 陣列）")
-        return stabilize_shots(project, [str(x) for x in ids], data.get("on", True) is not False)
+        return stabilize_shots(project, [str(x) for x in ids], data.get("on", True) is not False,
+                               data.get("settings"))
     if cmd == "volume":
         if not _id(data):
             raise AppError("volume 要給片段 id")
@@ -709,5 +752,8 @@ def plan(project: dict, data: dict) -> dict:
             raise AppError(f"{cmd} 要給鏡頭 id")
         from . import trimtool  # it builds on this module
         return getattr(trimtool, cmd)(project, _id(data), _num(data, "by"))
+    from . import twins  # server versions of browser-only actions; they build on this module
+    if cmd in twins.CMDS:
+        return twins.CMDS[cmd](project, data)
     raise AppError("不支援的剪輯指令，可用：split、splitAll、trim、freeze、detach、restore、reverse、stabilize、"
-                   "stabilizeShots、volume、keyframe、roll、slip、slide")
+                   "stabilizeShots、volume、keyframe、roll、slip、slide" + "".join(f"、{c}" for c in twins.CMDS))

@@ -17,8 +17,10 @@ def points(item: dict, field: str) -> list[tuple[float, Any]]:
 
 
 def lerp(a: Any, b: Any, f: float) -> Any:
+    """Blend two values (dicts key by key). A key only one side has (a grade saved before its white balance
+    block existed) holds that side's value."""
     if isinstance(a, dict):
-        return {k: lerp(a[k], b[k], f) for k in a}
+        return {k: lerp(a[k], b[k], f) if k in a and k in b else a.get(k, b.get(k)) for k in {**a, **b}}
     return a + (b - a) * f
 
 

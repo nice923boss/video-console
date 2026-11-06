@@ -3,13 +3,17 @@
 // saturation / brightness bars), temperature, tint, hue and mix sliders, and the same values as numbers.
 // While a control is dragged the grade lives in the store's gradeDraft, so the preview follows the pointer;
 // letting go saves it as one undo step. GradeEditor, the colour controls alone, also grades a single shot
-// from its inspector (GR-01).
-import { html, useEffect } from "../lib/h.js";
+// from its inspector (GR-01). Its 白平衡 section is the white balance block (grade.wb) that runs before the
+// wheels: a sampled grey, exposure, colour and tone sliders, and automatic balance / exposure read from the
+// frame at the playhead (POST /api/projects/{pid}/analyze).
+import { html, useEffect, useState } from "../lib/h.js";
 import { getState, setState, useStore } from "../lib/store.js";
-import { ops } from "../lib/actions.js";
+import { ops, whenSaved } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round } from "../lib/format.js";
-import { WHEELS, defaultGrade, fullGrade, isWheelNeutral, neutralWheel, puckOf, withPuck } from "../lib/grade.js";
+import { NEUTRAL_WB, WHEELS, defaultGrade, fullGrade, isWheelNeutral, neutralWheel, puckOf, withPuck, wbNeutral } from "../lib/grade.js";
+import { api } from "../lib/api.js";
+import { toast, toastError } from "./toast.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
 import { adjustName } from "./tl-adjust.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
@@ -36,6 +40,117 @@ const REST = [
   { k: "mix", label: "混合", min: 0, max: 1, step: 0.001, digits: 3, format: (v) => `${(v * 100).toFixed(1)}%`,
     hint: "100% 完整套用，降低時與原始畫面混合" },
 ];
+
+const pct = (v) => `${(v * 100).toFixed(0)}%`;
+const WB_GROUPS = [
+  { title: "平衡", fields: [
+    { k: "amount", label: "平衡強度", min: 0, max: 1, step: 0.01, format: pct,
+      hint: "100% 讓取樣色變成中性灰，0 不校正" },
+    { k: "exposure", label: "取樣曝光", min: 0, max: 1, step: 0.01, format: pct,
+      hint: "把取樣點的亮度拉向目標亮度，0 不改亮度" },
+    { k: "level", label: "目標亮度", min: 0.05, max: 0.95, step: 0.01, format: (v) => v.toFixed(2),
+      hint: "取樣曝光要拉到的亮度，0.5 為中灰" },
+  ] },
+  { title: "色彩", fields: [
+    { k: "temp", label: "色溫", min: -100, max: 100, step: 1, format: (v) => signed(v, 0), hint: "正值偏暖，負值偏冷" },
+    { k: "tint", label: "色調", min: -100, max: 100, step: 1, format: (v) => signed(v, 0), hint: "正值偏洋紅，負值偏綠" },
+    { k: "hue", label: "色相", min: -180, max: 180, step: 1, format: (v) => `${v.toFixed(0)}°`, hint: "所有顏色沿色環旋轉" },
+    { k: "sat", label: "飽和度", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "-1 為黑白" },
+  ] },
+  { title: "亮度與對比", fields: [
+    { k: "blacks", label: "黑位", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "正值把最暗處壓到全黑" },
+    { k: "lift", label: "暗部提升", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "提亮或壓暗暗部，亮部幾乎不動" },
+    { k: "gain", label: "亮部增益", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "整體乘上增益，亮部變化最大" },
+    { k: "gamma", label: "中間調", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "正值提亮中間調，黑白兩端不動" },
+    { k: "fill", label: "補光", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "只提亮陰影，像補一盞燈" },
+    { k: "bright", label: "亮度", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "整體加減亮度" },
+    { k: "contrast", label: "對比", min: -1, max: 1, step: 0.01, format: (v) => signed(v), hint: "以中灰為軸拉開或收攏" },
+  ] },
+  { title: "套用範圍", fields: [
+    { k: "shadows", label: "陰影", min: 0, max: 1, step: 0.01, format: pct, hint: "白平衡套用在暗部的比例" },
+    { k: "midtones", label: "中間調", min: 0, max: 1, step: 0.01, format: pct, hint: "白平衡套用在中間調的比例" },
+    { k: "highlights", label: "高光", min: 0, max: 1, step: 0.01, format: pct, hint: "白平衡套用在亮部的比例" },
+    { k: "mix", label: "混合", min: 0, max: 1, step: 0.01, format: pct, hint: "與原始畫面混合" },
+  ] },
+];
+const WB_AUTO = {
+  both: { wb: true, exposure: true, label: "自動白平衡與曝光" },
+  wb: { wb: true, exposure: false, label: "自動白平衡" },
+  exposure: { wb: false, exposure: true, label: "自動曝光" },
+  sample: { wb: true, exposure: false, label: "依取樣點平衡", strength: 1 },
+};
+const rgbCss = (wb) => `rgb(${[wb.r, wb.g, wb.b].map((v) => Math.round(v * 255)).join(",")})`;
+
+// The white balance block: sliders for grade.wb, and automatic balance / exposure from the frame `probe()`
+// names (an analyze body without the options, or null when there is no picture to read).
+function WhiteBalance({ wb, probe, onPreview, onCommit }) {
+  const [busy, setBusy] = useState("");
+  const set = (k, v) => ({ ...wb, [k]: v });
+  const auto = async (mode) => {
+    const at = probe && probe();
+    const pid = getState().project?.id;
+    if (!at || !pid) {
+      toast("播放頭這裡沒有畫面可以分析", { level: "warn" });
+      return;
+    }
+    const opt = WB_AUTO[mode];
+    const body = { ...at, wb: opt.wb, exposure: opt.exposure, current: wb };
+    if (opt.strength != null) body.strength = opt.strength;
+    if (mode === "sample") Object.assign(body, { x: wb.x, y: wb.y, size: wb.size });
+    setBusy(mode);
+    try {
+      const res = await api.post(`/api/projects/${pid}/analyze`, body);
+      onCommit({ ...res.suggest }, opt.label);
+      const st = res.stats;
+      const d = res.decision || {};
+      const read = d.subject === "person"
+        ? `以人物測光，臉部亮度 ${d.face.toFixed(2)}`
+        : `畫面亮度中位 ${st.p50.toFixed(2)}，過曝 ${(st.clipHigh * 100).toFixed(1)}%`;
+      toast(`${opt.label}：${read}`, { duration: 4000 });
+    } catch (err) {
+      toastError(err, opt.label);
+    } finally {
+      setBusy("");
+    }
+  };
+  const num = (k, label, min, max) => html`<${Field} label=${label}>
+    <${NumberInput} value=${wb[k]} min=${min} max=${max} step=${0.01} digits=${3} onCommit=${(v) => onCommit(set(k, v))} />
+  <//>`;
+  const slider = (f) => html`<${Field} key=${f.k} label=${f.label} hint=${f.hint}
+      after=${wb[f.k] !== NEUTRAL_WB[f.k] && html`<${IconButton} icon="undo" size=${13} title=${`重設${f.label}`}
+        onClick=${() => onCommit(set(f.k, NEUTRAL_WB[f.k]), `重設白平衡${f.label}`)} />`}>
+    <${Slider} value=${wb[f.k]} min=${f.min} max=${f.max} step=${f.step} format=${f.format}
+      onChange=${(v) => onPreview(set(f.k, round(v, 3)))} onCommit=${(v) => onCommit(set(f.k, round(v, 3)))} />
+  <//>`;
+  const changed = (g) => g.fields.some((f) => wb[f.k] !== NEUTRAL_WB[f.k]);
+  const sampled = ["r", "g", "b"].some((k) => wb[k] !== NEUTRAL_WB[k]);
+  return html`<${Field} label="白平衡" hint="先於色輪套用。取樣點填畫面上應該是灰或白的位置；自動功能讀播放頭這一格"
+      after=${html`<${Button} size="sm" kind="ghost" icon="undo" disabled=${wbNeutral(wb)}
+        onClick=${() => onCommit({ ...NEUTRAL_WB }, "重設白平衡")}>重設<//>`}>
+    <div class="row">
+      ${["both", "wb", "exposure"].map((m) => html`<${Button} key=${m} size="sm" disabled=${!!busy || !probe}
+        onClick=${() => auto(m)}>${busy === m ? "分析中…" : WB_AUTO[m].label}<//>`)}
+    </div>
+    <div class="grade-secs">
+      <details class="grade-sec">
+        <summary>取樣點${sampled && html`<span class="grade-dot" title="已取樣"></span>`}</summary>
+        <div class="grade-sec-body">
+          <div class="row-3">${num("x", "X", 0, 1)}${num("y", "Y", 0, 1)}${num("size", "大小", 0.01, 1)}</div>
+          <div class="wb-sample">
+            <span class="wb-swatch" style=${`background:${rgbCss(wb)}`} title="取樣色"></span>
+            <div class="row-3">${num("r", "R", 0.01, 1)}${num("g", "G", 0.01, 1)}${num("b", "B", 0.01, 1)}</div>
+          </div>
+          <${Button} size="sm" disabled=${!!busy || !probe} onClick=${() => auto("sample")}
+            title="讀播放頭這一格在 X、Y 位置、邊長為畫面寬度乘大小的方塊，把它的平均色當成灰色">${busy === "sample" ? "分析中…" : "依取樣點平衡"}<//>
+        </div>
+      </details>
+      ${WB_GROUPS.map((g) => html`<details key=${g.title} class="grade-sec">
+        <summary>${g.title}${changed(g) && html`<span class="grade-dot" title="已調整"></span>`}</summary>
+        <div class="grade-sec-body">${g.fields.map(slider)}</div>
+      </details>`)}
+    </div>
+  <//>`;
+}
 
 function Seconds({ value, onCommit, min = 0 }) {
   return html`<${NumberInput} value=${value} onCommit=${onCommit} min=${min} max=${MAX_TIME} step=${0.1} digits=${3} suffix="秒" />`;
@@ -164,7 +279,8 @@ function RangeNumbers({ name, wheel, onCommit }) {
 
 // Wheels, sliders and numbers for the grade saved on `id` (an adjustment layer or a shot). Dragging puts the
 // grade in the store's gradeDraft under that id; onSave(next, label) stores it and returns a promise.
-export function GradeEditor({ id, saved, onSave }) {
+// probe() gives the analyze body for the frame the automatic white balance reads (null: none).
+export function GradeEditor({ id, saved, onSave, probe = null }) {
   const draft = useStore((s) => s.gradeDraft);
   const compare = useStore((s) => s.gradeCompare);
   const grade = draft && draft.id === id ? draft.grade : saved;
@@ -178,7 +294,7 @@ export function GradeEditor({ id, saved, onSave }) {
 
   const preview = (next) => setState({ gradeDraft: { id, grade: next } });
   const cancel = () => setState({ gradeDraft: null });
-  // The draft stays on until the save comes back, so the preview does not blink back to the old grade.
+  // The draft stays on until the saved project lands, so the preview does not blink back to the old grade.
   const commit = (next, label = "調色") => {
     if (JSON.stringify(next) === JSON.stringify(saved)) {
       cancel();
@@ -186,7 +302,7 @@ export function GradeEditor({ id, saved, onSave }) {
     }
     const mine = { id, grade: next };
     setState({ gradeDraft: mine });
-    onSave(next, label).then(() => {
+    onSave(next, label).then(whenSaved).then(() => {
       if (getState().gradeDraft === mine) setState({ gradeDraft: null });
     });
   };
@@ -196,7 +312,9 @@ export function GradeEditor({ id, saved, onSave }) {
     onCancel: cancel,
   });
 
-  return html`<${Field} label="色輪" hint="拖曳圓盤上的圓點調整顏色，左側直條是飽和度，右側直條是亮度；雙擊歸零"
+  return html`<${WhiteBalance} wb=${grade.wb} probe=${probe}
+      onPreview=${(wb) => preview({ ...grade, wb })} onCommit=${(wb, label = "白平衡") => commit({ ...grade, wb }, label)} />
+    <${Field} label="色輪" hint="拖曳圓盤上的圓點調整顏色，左側直條是飽和度，右側直條是亮度；雙擊歸零"
       after=${html`<${IconButton} icon="palette" size=${14} active=${compare}
           title=${compare ? "關閉調色前後對照" : "調色前後對照：預覽左半顯示調色前、右半調色後"}
           onClick=${() => setState({ gradeCompare: !compare })} />
@@ -271,7 +389,8 @@ export function GradePanel({ project, item }) {
       </div>
       ${keyed && html`<div class="note note-info"><${Icon} name="diamond" size=${15} />
         <span class="note-text">調色有關鍵幀：這裡顯示並改寫播放頭位置的調色。預覽與輸出在關鍵幀之間分段漸變。</span></div>`}
-      <${GradeEditor} id=${item.id} saved=${saved} onSave=${save} />
+      <${GradeEditor} id=${item.id} saved=${saved} onSave=${save}
+        probe=${() => ({ at: clamp(clock.time, start, start + len - 0.01), basis: "graded" })} />
       <${Toggle} checked=${!!item.hidden} label="停用調整圖層" hint="保留在時間軸上，但預覽與匯出都不套用調色"
         onChange=${(hidden) => update({ hidden }, hidden ? "停用調整圖層" : "啟用調整圖層")} />
       <${KeyList} item=${item} start=${start} length=${len} local=${local} update=${update}

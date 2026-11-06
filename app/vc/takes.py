@@ -38,7 +38,7 @@ def stage_file(
 ) -> dict:
     """Move src to project_dir/folder/<item_id><ext> and describe it.
 
-    Videos the browser cannot play are re-encoded to H.264 MP4 (the original is removed). Returns the
+    Videos the browser cannot play become MP4 (Media.to_web_video; the original is removed). Returns the
     file part of a take / media item: kind, file, thumb, strip, wave, width, height, duration, fps, hasAudio.
     """
     kind = kind_of(src.name)

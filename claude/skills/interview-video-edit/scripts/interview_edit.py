@@ -397,8 +397,9 @@ def apply(args) -> None:
     if mode == "mark":
         for s in segs:
             color = COLORS[s.get("color") or KIND_COLOR.get(s.get("kind"), "orange")]
+            patch = {"color": color, "notes": s.get("note", ""), **({"name": s["name"]} if s.get("name") else {})}
             for sid in shots_in(work, s["start"], s["end"]):
-                ops.append({"op": "shot.update", "id": sid, "patch": {"color": color, "notes": s.get("note", "")}})
+                ops.append({"op": "shot.update", "id": sid, "patch": patch})
         vc.ops(pid, ops, label="標記待評估片段")
     else:
         order = [s["id"] for s in work["shots"]]

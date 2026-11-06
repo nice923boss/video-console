@@ -34,10 +34,12 @@ const INITIAL = {
   gradeDraft: null,         // {id, grade}: an adjustment layer's or a shot's grade while its panel control is dragged
   gradeCompare: false,      // the preview shows the picture before grading on its left half (GR-06)
   maskDraft: null,          // {id, masks}: a shot's blur and mosaic boxes while a panel slider is dragged (GR-12)
+  transformDraft: null,     // {id, transform}: a shot's opacity, move, scale, trim and distort while a control is dragged (ED-30)
   editRange: null,          // {in, out}: the timeline range marked with I and O (seconds)
   clipMarks: null,          // {pid, times}: where the preview mix went over 0 dB while playing (audio-meter.js)
   solo: null,               // {pid, keys}: timeline rows heard alone in the preview; never saved or exported (MX-03)
   audioSel: null,           // audio clip ids Ctrl+clicked together; counts only while it holds editSel (tl-tracks.js)
+  clipSel: null,            // upper-track clip or adjustment layer ids selected together, the same way (tl-clip-sel.js)
   editTool: "select",       // timeline click tool: "select" | "trim" | "blade"
   keyPanel: false,          // the keyframe list in the edit properties panel is open
   voiceStems: {},           // audio clip id -> its 降噪 / 去回音 stems (lib/voice-stems.js)

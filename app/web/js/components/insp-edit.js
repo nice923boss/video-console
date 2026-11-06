@@ -8,6 +8,7 @@ import { submitJob } from "../lib/jobs-actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { fmtTime, fmtDuration, round } from "../lib/format.js";
 import { buildSequence, clipBounds, videoTake, imageTake } from "../lib/sequence.js";
+import { speedOptions } from "../lib/overlay-speed.js";
 import { Icon } from "./icons.js";
 import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText, Slider } from "./ui.js";
 import { ColorSwatches } from "./insp-content.js";
@@ -18,6 +19,8 @@ import { KeyList, useClipTime } from "./key-panel.js";
 import { valueAt, withKey } from "../lib/keyframes.js";
 import { GradeEditor } from "./grade-panel.js";
 import { MaskEditor } from "./mask-panel.js";
+import { TransformSections } from "./transform-panel.js";
+import { StabilizeSettings } from "./stab-panel.js";
 import { ReviewSection } from "./review-list.js";
 import { fullGrade, isNeutral } from "../lib/grade.js";
 import { findLoud } from "./tl-wave.js";
@@ -25,7 +28,6 @@ import { findLoud } from "./tl-wave.js";
 const NONE = [];
 const MIN_LEN = 0.1;
 const DEFAULT_TRANSITION = { type: "cut", duration: 0.5 };
-const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4];
 
 function Hint({ icon = "info", tone = "", children }) {
   return html`<p class=${`insp-hint ${tone}`}><${Icon} name=${icon} size=${14} /><span>${children}</span></p>`;
@@ -36,7 +38,7 @@ function playheadSource(clip) {
   if (!clip) return null;
   const t = clock.time;
   if (t < clip.start - 1e-3 || t > clip.start + clip.length + 1e-3) return null;
-  return clip.in + Math.min(clip.length, Math.max(0, t - clip.start));
+  return clip.in + Math.min(clip.length, Math.max(0, t - clip.start)) * (clip.speed || 1);
 }
 
 function SequenceSection({ shot, clip, position, total }) {
@@ -134,8 +136,7 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
   const rendering = busy.some((j) => j.kind === "reverse");
   const sel = { type: "shot", id: shot.id };
   const clip = clips.find((c) => c.shot.id === shot.id);
-  const options = (SPEEDS.includes(speed) ? SPEEDS : [...SPEEDS, speed].sort((a, b) => a - b))
-    .map((v) => ({ value: v, label: `${v}x` }));
+  const options = speedOptions(speed);
   let note = null;
   if (detached) note = `原聲已分離到音訊軌，要先還原原聲${keyHint("edit.detachAudio")}才能變速；倒放只換畫面，原聲照常順向播放。`;
 
@@ -208,6 +209,8 @@ function StabilizeSection({ shot, vid, busy }) {
     <${Toggle} checked=${isStabilized(vid) || rendering} disabled=${rendering} onChange=${() => stabilizeClip(shot.id)}
       label=${rendering ? "防抖處理中" : "防抖"}
       hint="只處理目前的剪輯範圍，前後各多留 1 秒；畫面會稍微放大來裁掉晃動的黑邊。之後剪輯範圍拉長超過多留的部分，要取消再重新勾選" />
+    <${StabilizeSettings} current=${isStabilized(vid) ? vid.source.settings || {} : null} disabled=${rendering}
+      onApply=${(settings) => stabilizeClip(shot.id, "shot", settings)} />
   <//>`;
 }
 
@@ -285,10 +288,15 @@ function MarkSection({ shot }) {
 }
 
 // The shot's own colour grade (GR-01): only its picture, under any adjustment layer above it.
-function GradeSection({ shot }) {
+function GradeSection({ shot, clip }) {
+  // The automatic white balance reads the frame at the playhead while it is on this clip, else the clip's middle.
+  const probe = clip ? () => {
+    const t = clock.time - clip.start;
+    return { shot: shot.id, t: t >= 0 && t < clip.length ? t : clip.length / 2 };
+  } : null;
   return html`<${Section} title="鏡頭調色" icon="palette" collapsible defaultOpen=${false} id="shot-grade"
       actions=${!isNeutral(shot.grade) && html`<${Badge} tone="blue">已調色<//>`}>
-    <${GradeEditor} id=${shot.id} saved=${fullGrade(shot.grade)}
+    <${GradeEditor} id=${shot.id} saved=${fullGrade(shot.grade)} probe=${probe}
       onSave=${(grade, label) => updateShot(shot.id, { grade }, { label: `鏡頭${label}` })} />
     <${Hint}>只改這個鏡頭的畫面；時間軸上的調整圖層會再疊在它上面。<//>
   <//>`;
@@ -331,7 +339,8 @@ export function EditTab({ project, shot, busy = NONE }) {
 
   return html`
     <${SourceInfo} vid=${vid} img=${img} />
-    ${(vid || img) && html`<${GradeSection} shot=${shot} />`}
+    ${(vid || img) && html`<${TransformSections} shot=${shot} project=${project} />`}
+    ${(vid || img) && html`<${GradeSection} shot=${shot} clip=${clip} />`}
     ${vid
       ? html`<${StabilizeSection} shot=${shot} vid=${vid} busy=${busy} />
         <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`

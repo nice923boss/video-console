@@ -19,6 +19,7 @@ import { toast } from "../components/toast.js";
 export const QUALITY = [
   { value: "high", label: "高畫質", title: "檔案較大，編碼較慢，適合正式交件" },
   { value: "standard", label: "標準", title: "畫質與檔案大小的折衷" },
+  { value: "compact", label: "精簡", title: "檔案小，適合上傳網路或傳給客戶，不用再另外壓縮；固定用 CPU 編碼" },
   { value: "draft", label: "草稿", title: "編碼最快，適合先看節奏" },
 ];
 const ENCODERS = [
@@ -113,7 +114,9 @@ function useVideoForm(project, clips, close) {
   const blocked = !clips.length ? noClips : !ffmpegOk ? "找不到 ffmpeg" : "";
   const out = preset ? presetOutput(preset, project.settings) : { size: resolutionSize(resolution, project.settings), maxrate: 0 };
   const [outW, outH] = out.size || [project.settings.width, project.settings.height];
-  const estimate = clips.length ? estimateExport(jobs, sequenceDuration(clips), outW * outH, encoder, quality) : null;
+  const compact = quality === "compact";  // always encoded on the CPU (export_options)
+  const shownEncoder = compact ? "libx264" : encoder;
+  const estimate = clips.length ? estimateExport(jobs, sequenceDuration(clips), outW * outH, shownEncoder, quality) : null;
 
   const submit = async () => {
     setBusy(true);
@@ -181,8 +184,10 @@ function useVideoForm(project, clips, close) {
         <${Segmented} value=${fit} onChange=${setFit} options=${FIT} />
       <//>
     </div>
-    <${Field} label="編碼器" hint="選擇的硬體編碼器無法使用時，會自動改用 CPU 重新輸出">
-      <${Select} value=${encoder} onChange=${setEncoder} options=${ENCODERS} />
+    <${Field} label="編碼器" hint=${compact
+      ? "精簡畫質固定用 CPU（libx264）編碼，檔案才會小，速度比顯示卡慢"
+      : "選擇的硬體編碼器無法使用時，會自動改用 CPU 重新輸出"}>
+      <${Select} value=${shownEncoder} onChange=${setEncoder} options=${ENCODERS} disabled=${compact} />
     <//>
     <div class="row-2">
       <${Field} label="開頭淡入">

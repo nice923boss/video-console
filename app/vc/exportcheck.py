@@ -9,12 +9,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from . import twins
 from .cover import covered_shots
 from .export import prepare_clips
+from .glossary import caption_hits
 from .sequence import VOICE_TRACK, audio_media, audio_track, total_duration
 
 
-def export_check(project: dict, project_dir: Path) -> dict:
+def export_check(project: dict, project_dir: Path, glossary: str | None = None) -> dict:
+    """The warnings of the export dialog. glossary: the settings 字幕用語詞庫 (default: the one twins is bound to)."""
     clips = prepare_clips(project, project_dir)
     total = total_duration(clips)
     # No slate shows where the picture is hidden or a full-frame upper-track clip covers the whole shot.
@@ -55,6 +58,9 @@ def export_check(project: dict, project_dir: Path) -> dict:
         "audioPastEnd": audio_past,
         "captionsPastEnd": captions_past,
         "videoHidden": bool(tracks.get("videoHidden")),
+        # Suspect words in shown captions (CP-12): [{caption, term, fix}].
+        "glossary": caption_hits(project.get("captions") or [],
+                                 twins.glossary_text() if glossary is None else glossary),
     }
 
 
