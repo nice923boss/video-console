@@ -5,8 +5,8 @@
 
 The app is standard library plus numpy (降噪 / 去回音 in vc/voiceclean.py), OpenCV (finding the people auto
 exposure meters on, vc/autocolor.py) and PyMuPDF (the PDFs the AI assistant reads, vc/projdocs.py), which
-PyInstaller finds by itself, so it needs no hidden imports; OpenCV's
-hook leaves out its face cascades, so the two autocolor reads are added as data, along with the web UI, the
+PyInstaller finds by itself, so it needs no hidden imports. PyMuPDF's optional pandas, PIL and fontTools
+helpers are excluded, since only page text is read; OpenCV's hook leaves out its face cascades, so the two autocolor reads are added as data, along with the web UI, the
 built-in ComfyUI workflow templates, the model menus (vc/providers/model_lists.json), the tool versions
 (vc/deps.json) and the client review page (vc/review_kit). ffmpeg and Video2X are not bundled: the settings page
 installs them into data/tools on first use.
@@ -57,6 +57,10 @@ def build() -> Path:
         "--add-data", f"{APP / 'vc' / 'providers' / 'model_lists.json'};vc/providers",
         "--add-data", f"{APP / 'vc' / 'deps.json'};vc",
         "--add-data", f"{APP / 'vc' / 'review_kit'};vc/review_kit", *cascades,
+        # PyMuPDF imports pandas (Table.to_pandas), PIL (Pixmap.pil_save) and fontTools (Document.subset_fonts)
+        # inside functions the app never calls; followed, pandas drags scipy, torch, transformers and gradio in
+        # (a 3.5 GB zip) and fontTools lxml, Cython and uharfbuzz (15 MB).
+        "--exclude-module", "pandas", "--exclude-module", "PIL", "--exclude-module", "fontTools",
         "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
         str(APP / "main.py"),
     ], check=True)

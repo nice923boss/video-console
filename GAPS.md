@@ -1568,16 +1568,21 @@ EditP 移植 `app/vc/explorer.py` 後發現：開新的檔案總管視窗約 25 
 | 593 | `view_frame` 看不到字幕、上層軌、遮罩與轉場 | 只抽畫面軌原始檔加調色，沒有跑完整匯出合成 | 字幕位置、疊字、轉場好不好看助理無法判斷 | 使用者需要時 | Claude |
 | 594 | 相機附加的預覽畫面不含字幕、淡入淡出與遮罩 | 從預覽 video 元素截圖，字幕與遮罩是另外疊的 HTML | 使用者看到的和助理看到的不完全一樣 | 使用者需要時 | Claude |
 | 595 | 掃描版 PDF 讀不到文字 | 沒有 OCR | 助理只拿到「沒有文字層」提示，看不到內容；可把頁面存成圖片上傳 | 使用者需要時 | Claude |
-| 596 | 打包版 exe 沒驗證 PyMuPDF 有被包進去 | 這次沒有重新打包 | 打包版讀 PDF 可能回 501 | 下次打包時 | Claude |
+| 596 | ~~打包版 exe 沒驗證 PyMuPDF 有被包進去~~（已解決） | 2026-11-07 打包 1.9.1：`_internal/pymupdf` 在；執行檔（暫存資料夾、假模型）上傳兩頁 PDF，＠ 附帶與 `read_document` 都拿到中英文兩頁文字，log 沒有錯誤 | 壓縮檔從 66 MB 變 84.6 MB（PyMuPDF） | 已完成 | Claude |
 | 597 | 圖片不保留到下一輪 | 對話歷史只存文字 | 下一則訊息要再附一次或請助理重看 | 使用者需要時 | Claude |
 | 598 | 「看不到圖」標記可能被一次性的 502 誤設 | 只依 502 判斷；標記存在記憶體、各 Agent 各自一份（對話與修改意見分開） | 誤設後要重新啟動 APP 才會再送圖 | 使用者回報時 | Claude |
 | 599 | 修改意見看不到客戶附的圖片或影片 | 修改意見的附件沒有送進模型 | 這類意見要人工看附件 | 使用者需要時 | Claude |
 | 600 | `test_comfy` 的 `test_missing_model_stops_the_job_before_anything_is_queued` 偶發失敗 | 只在 `-x` 整批執行時出現一次（預期 409 拿到 200），單獨與全套重跑都過，和執行順序有關；這次沒動 ComfyUI 程式 | 全套測試偶爾多一個失敗 | 再出現時 | Claude |
 | 601 | 正在執行的 APP（8790）沒有載入新程式 | 沒有重新啟動 | 重新啟動前沒有文件區、＠ 選單、相機按鈕與新工具 | 使用者重新啟動 APP 時 | 使用者 |
+| 602 | 打包沒有大小或套件清單檢查 | `build_exe.py` 只靠 `--exclude-module` 擋已知的 pandas、PIL、fontTools；本機裝了 torch、gradio 等大型套件 | 之後新增或升級的套件若在函式內 import 大型套件，壓縮檔會再暴增，要看打包結果才會發現 | 下次打包時 | Claude |
 
 2026-11-07 驗證（開發機，暫存伺服器 8812 與暫存資料夾，沒有讀寫使用者專案，沒有重新啟動 8790）：
 - 新增 `tests/test_projdocs.py` 8 項、`tests/test_chat_look.py` 14 項：各格式讀取與編碼、上傳改名與大小限制、刪除與路徑檢查、＠ 解析、附圖與 502 改不帶圖、`view_frame` 抽格、`read_document` 分頁、`call_api` 允許與拒絕。
-- 全套 1081 過、1 略過、1 失敗：`test_vc_client` 因測試途中改了 `revisions.py`（BUILD 由原始碼算出）而失敗，單獨重跑 5 過；相關測試（chat、chat_look、projdocs、revisions、vc_client）重跑 71 過，`test_help_page` 3 過。
+- 全套 1081 過、1 略過、1 失敗：`test_vc_client` 因測試途中改了 `revisions.py`（BUILD 由原始碼算出）而失敗，單獨重跑 5 過；相關測試（chat、chat_look、projdocs、revisions、vc_client）重跑 71 過，`test_help_page` 3 過。提交前再跑全套：1082 過、1 略過（`test_comfy`、`test_vc_client` 都過）。
 - 瀏覽器實際操作：拖曳上傳與拖曳遮罩、文件抽屜列表與大小、＠ 選單篩選與方向鍵加 Enter 插入、相機附加 768×432 JPEG 與 × 移除；沒有送出訊息（LLM 沒啟用）。
 - `安裝相依套件.bat` 實機執行一次：沒有 cmd 錯誤，pip 回報都已安裝，停在 pause。
-- 尚未提交。
+- 已提交（962b1ed）。
+
+2026-11-07 打包 1.9.1：
+- 第一次打包壓縮檔 3.5 GB、8366 檔：PyMuPDF 在函式內 import pandas（`Table.to_pandas`）與 PIL（`Pixmap.pil_save`），PyInstaller 照樣跟進，pandas 再拉進 scipy、torch、transformers、gradio、onnxruntime、jax 等本機裝的大型套件；fontTools（`Document.subset_fonts`）拉進 lxml、Cython、uharfbuzz。APP 只用 `page.get_text()`，`build_exe.py` 加 `--exclude-module pandas PIL fontTools` 後為 84.6 MB、373 檔，`_internal` 裡沒有這些套件。
+- 打包版實測見 #596；沒有接真實模型，沒有開視窗檢查 GUI。
