@@ -6,7 +6,7 @@ import { getState } from "../lib/store.js";
 import { saveSettings, updateProject, navigate } from "../lib/actions.js";
 import { submitJob } from "../lib/jobs-actions.js";
 import { buildSequence, sequenceDuration } from "../lib/sequence.js";
-import { fmtDuration } from "../lib/format.js";
+import { fmtDuration, round } from "../lib/format.js";
 import { PRESETS, RESOLUTIONS, presetOutput, resolutionSize, aspectDiffers, estimateExport } from "../lib/export-presets.js";
 import { copyChapters } from "../lib/chapters.js";
 import { ExportCheck } from "./export-check.js";
@@ -101,8 +101,8 @@ function useVideoForm(project, clips, close) {
   const [encoder, setEncoder] = useState("auto");
   const [burn, setBurn] = useState(!!defaults.burnCaptions);
   const [srt, setSrt] = useState(false);
-  const [fadeIn, setFadeIn] = useState(project.settings.fadeIn || 0);
-  const [fadeOut, setFadeOut] = useState(project.settings.fadeOut || 0);
+  const [fadeIn, setFadeIn] = useState(null);
+  const [fadeOut, setFadeOut] = useState(null);
   const [clipAudio, setClipAudio] = useState(true);
   const [loudness, setLoudness] = useState("");
   const [fit, setFit] = useState(project.settings.fit || "contain");
@@ -121,9 +121,7 @@ function useVideoForm(project, clips, close) {
   const submit = async () => {
     setBusy(true);
     const s = project.settings;
-    if ((s.fadeIn || 0) !== fadeIn || (s.fadeOut || 0) !== fadeOut || (s.fit || "contain") !== fit) {
-      await updateProject({ settings: { fadeIn, fadeOut, fit } }, { label: "修改輸出設定" });
-    }
+    if ((s.fit || "contain") !== fit) await updateProject({ settings: { fit } }, { label: "修改輸出設定" });
     if (keep) await saveSettings({ export: { quality, burnCaptions: burn, preset, resolution } });
     const job = await submitJob("export", null, {
       options: { quality, encoder, burnCaptions: burn, fadeIn, fadeOut, clipAudio, fit,
@@ -189,14 +187,7 @@ function useVideoForm(project, clips, close) {
       : "選擇的硬體編碼器無法使用時，會自動改用 CPU 重新輸出"}>
       <${Select} value=${shownEncoder} onChange=${setEncoder} options=${ENCODERS} disabled=${compact} />
     <//>
-    <div class="row-2">
-      <${Field} label="開頭淡入">
-        <${NumberInput} value=${fadeIn} onCommit=${setFadeIn} min=${0} max=${10} step=${0.1} digits=${1} suffix="秒" />
-      <//>
-      <${Field} label="結尾淡出">
-        <${NumberInput} value=${fadeOut} onCommit=${setFadeOut} min=${0} max=${10} step=${0.1} digits=${1} suffix="秒" />
-      <//>
-    </div>
+    <${FadeFields} settings=${project.settings} fadeIn=${fadeIn} fadeOut=${fadeOut} setFadeIn=${setFadeIn} setFadeOut=${setFadeOut} />
     <${Toggle} checked=${burn} onChange=${setBurn} label="把字幕燒進畫面"
       hint=${hasCaptions ? "字型、大小與位置照預覽畫面；關掉時影片不含字幕，可以另外下載 SRT 字幕檔" : "這個專案還沒有字幕，打開也不會有作用"} />
     ${!burn && hasCaptions && html`<${Toggle} checked=${srt} onChange=${setSrt} label="同時下載 SRT 字幕檔"
@@ -208,13 +199,30 @@ function useVideoForm(project, clips, close) {
   return { body, footer };
 }
 
+// The whole film's fade in / out for this export only. Empty (the default) keeps what the edit preview shows:
+// the project's own fades (專案設定 › 畫面), sent as null so export_options uses them; a number replaces them
+// for this file without touching the project.
+function FadeFields({ settings, fadeIn, fadeOut, setFadeIn, setFadeOut }) {
+  const own = [["片頭淡入", settings.fadeIn], ["片尾淡出", settings.fadeOut]].filter(([, v]) => Number(v) > 0);
+  const hint = own.length
+    ? `留空照剪輯預覽（${own.map(([k, v]) => `${k} ${round(Number(v), 2)} 秒`).join("、")}，在右側「專案設定 › 畫面」修改）；填秒數只套用這次輸出`
+    : "留空不加淡入淡出，和剪輯預覽一樣；填秒數只套用這次輸出，不改時間軸";
+  const input = (value, onCommit) => html`<${NumberInput} value=${value} onCommit=${onCommit} nullable
+    min=${0} max=${10} step=${0.1} digits=${1} suffix="秒" placeholder="照預覽" />`;
+  return html`<div class="row-2">
+      <${Field} label="開頭淡入">${input(fadeIn, setFadeIn)}<//>
+      <${Field} label="結尾淡出">${input(fadeOut, setFadeOut)}<//>
+    </div>
+    <p class="field-hint">${hint}</p>`;
+}
+
 // The sequence's mix alone: the same fades and clip-sound choice as the video, without the picture.
 function useAudioForm(project, clips, close) {
   const { system } = getState();
   const ffmpegOk = !!(system && system.ffmpeg && system.ffmpeg.available);
   const [format, setFormat] = useState("wav");
-  const [fadeIn, setFadeIn] = useState(project.settings.fadeIn || 0);
-  const [fadeOut, setFadeOut] = useState(project.settings.fadeOut || 0);
+  const [fadeIn, setFadeIn] = useState(null);
+  const [fadeOut, setFadeOut] = useState(null);
   const [clipAudio, setClipAudio] = useState(true);
   const [loudness, setLoudness] = useState("");
   const [busy, setBusy] = useState(false);
@@ -240,14 +248,7 @@ function useAudioForm(project, clips, close) {
     <${Field} label="格式">
       <${Segmented} value=${format} onChange=${setFormat} options=${AUDIO_FORMATS} />
     <//>
-    <div class="row-2">
-      <${Field} label="開頭淡入">
-        <${NumberInput} value=${fadeIn} onCommit=${setFadeIn} min=${0} max=${10} step=${0.1} digits=${1} suffix="秒" />
-      <//>
-      <${Field} label="結尾淡出">
-        <${NumberInput} value=${fadeOut} onCommit=${setFadeOut} min=${0} max=${10} step=${0.1} digits=${1} suffix="秒" />
-      <//>
-    </div>
+    <${FadeFields} settings=${project.settings} fadeIn=${fadeIn} fadeOut=${fadeOut} setFadeIn=${setFadeIn} setFadeOut=${setFadeOut} />
     <${Toggle} checked=${clipAudio} onChange=${setClipAudio} label="保留影片片段本身的聲音"
       hint="關掉時只會有音軌上的音樂與旁白" />
     <${LoudnessField} value=${loudness} onChange=${setLoudness} />`;

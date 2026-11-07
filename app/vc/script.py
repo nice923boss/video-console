@@ -556,17 +556,64 @@ def _docx_paragraph(p: ET.Element) -> str:
     return "".join(out)
 
 
+def _docx_part(z: zipfile.ZipFile, name: str) -> ET.Element:
+    with z.open(name) as f:
+        xml = f.read(MAX_DOCX_XML + 1)
+    if len(xml) > MAX_DOCX_XML:
+        raise AppError("這個 Word 檔的內容太大，請分成幾個檔案匯入")
+    return ET.fromstring(xml)
+
+
+def _docx_open(data: bytes) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise AppError("無法讀取這個 Word 檔，請確認是 .docx（舊版 .doc 請先另存為 .docx）") from None
+
+
+def _docx_body(z: zipfile.ZipFile) -> ET.Element | None:
+    try:
+        return _docx_part(z, "word/document.xml").find(_W + "body")
+    except (zipfile.BadZipFile, KeyError, ET.ParseError):
+        raise AppError("無法讀取這個 Word 檔，請確認是 .docx（舊版 .doc 請先另存為 .docx）") from None
+
+
+def docx_document_text(data: bytes) -> str:
+    """All of a .docx's text in reading order (paragraphs as lines, each table row as cells joined by " | "),
+    then its review comments with their authors: what a client's notes on a script look like."""
+    with _docx_open(data) as z:
+        body = _docx_body(z)
+        lines: list[str] = []
+        for child in body if body is not None else []:
+            if child.tag == _W + "p":
+                lines.append(_docx_paragraph(child).rstrip())
+            elif child.tag == _W + "tbl":
+                for tr in child.iter(_W + "tr"):
+                    cells = [" / ".join(t for t in (_docx_paragraph(p).strip() for p in tc.findall(_W + "p")) if t)
+                             for tc in tr.findall(_W + "tc")]
+                    if any(cells):
+                        lines.append(" | ".join(cells))
+        comments: list[str] = []
+        if "word/comments.xml" in z.namelist():
+            try:
+                root = _docx_part(z, "word/comments.xml")
+            except ET.ParseError:
+                root = None
+            for c in root.iter(_W + "comment") if root is not None else []:
+                said = " ".join(t for t in (_docx_paragraph(p).strip() for p in c.iter(_W + "p")) if t)
+                if said:
+                    comments.append(f"- {c.get(_W + 'author') or '註解'}：{said}")
+    text = "\n".join(lines).strip()
+    if comments:
+        text += "\n\n[Word 註解]\n" + "\n".join(comments)
+    return text
+
+
 def docx_to_text(data: bytes) -> dict[str, Any]:
     """{"text", "notes"} from a .docx: its shot tables (those sharing the first one's header row) as one
     tab-separated table, or its paragraphs when it has no shot table."""
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as z, z.open("word/document.xml") as f:
-            xml = f.read(MAX_DOCX_XML + 1)
-        if len(xml) > MAX_DOCX_XML:
-            raise AppError("這個 Word 檔的內容太大，請分成幾個檔案匯入")
-        body = ET.fromstring(xml).find(_W + "body")
-    except (zipfile.BadZipFile, KeyError, ET.ParseError):
-        raise AppError("無法讀取這個 Word 檔，請確認是 .docx（舊版 .doc 請先另存為 .docx）") from None
+    with _docx_open(data) as z:
+        body = _docx_body(z)
     paragraphs: list[str] = []
     header: list[str] | None = None
     rows: list[list[str]] = []

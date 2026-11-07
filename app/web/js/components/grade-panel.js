@@ -8,16 +8,17 @@
 // frame at the playhead (POST /api/projects/{pid}/analyze).
 import { html, useEffect, useState } from "../lib/h.js";
 import { getState, setState, useStore } from "../lib/store.js";
-import { ops, whenSaved } from "../lib/actions.js";
+import { ops, updateShot, whenSaved } from "../lib/actions.js";
 import { clock, setTime } from "../lib/clock.js";
 import { clamp, fmtSeconds, round } from "../lib/format.js";
 import { NEUTRAL_WB, WHEELS, defaultGrade, fullGrade, isWheelNeutral, neutralWheel, puckOf, withPuck, wbNeutral } from "../lib/grade.js";
 import { api } from "../lib/api.js";
 import { toast, toastError } from "./toast.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
+import { watchRefuses } from "../lib/watch.js";
 import { adjustName } from "./tl-adjust.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
-import { addKeyframe } from "./tl-commands.js";
+import { addKeyframe, current } from "./tl-commands.js";
 import { clipKeysHint, keyHint } from "../lib/keymap.js";
 import { Button, IconButton, Field, DraftText, NumberInput, Slider, Toggle } from "./ui.js";
 import { Icon } from "./icons.js";
@@ -81,34 +82,61 @@ const WB_AUTO = {
 };
 const rgbCss = (wb) => `rgb(${[wb.r, wb.g, wb.b].map((v) => Math.round(v * 255)).join(",")})`;
 
+// Automatic balance / exposure (WB_AUTO mode) for the frame `at` names (an analyze body without the options, or
+// null when there is no picture to read), from the white balance `wb` now: the suggested wb, or null once the
+// failure is shown. A toast says what the frame read.
+async function autoWb(at, wb, mode) {
+  const pid = getState().project?.id;
+  if (!at || !pid) {
+    toast("播放頭這裡沒有畫面可以分析", { level: "warn" });
+    return null;
+  }
+  const opt = WB_AUTO[mode];
+  const body = { ...at, wb: opt.wb, exposure: opt.exposure, current: wb };
+  if (opt.strength != null) body.strength = opt.strength;
+  if (mode === "sample") Object.assign(body, { x: wb.x, y: wb.y, size: wb.size });
+  try {
+    const res = await api.post(`/api/projects/${pid}/analyze`, body);
+    const st = res.stats;
+    const d = res.decision || {};
+    const read = d.subject === "person"
+      ? `以人物測光，臉部亮度 ${d.face.toFixed(2)}`
+      : `畫面亮度中位 ${st.p50.toFixed(2)}，過曝 ${(st.clipHigh * 100).toFixed(1)}%`;
+    toast(`${opt.label}：${read}`, { duration: 4000 });
+    return { ...res.suggest };
+  } catch (err) {
+    toastError(err, opt.label);
+    return null;
+  }
+}
+
+// The automatic white balance keys (edit.autoBalance, edit.autoWb, edit.autoExposure; mode "both", "wb" or
+// "exposure"): the selected shot, else the shot under the playhead, reading the frame at the playhead while it
+// is on the clip, else the clip's middle (like the shot inspector's buttons).
+export async function autoGradeShot(project, clips, sel, mode) {
+  if (watchRefuses()) return;
+  const cur = current(project, clips, sel && sel.type === "shot" ? sel : null);
+  const clip = cur && cur.type === "shot" ? cur.clip : null;
+  if (!clip) {
+    toast("先選取序列裡的鏡頭，或把播放頭移到鏡頭上", { level: "warn" });
+    return;
+  }
+  const t = clock.time - clip.start;
+  const grade = fullGrade(clip.shot.grade);
+  const wb = await autoWb({ shot: clip.shot.id, t: t >= 0 && t < clip.length ? t : clip.length / 2 }, grade.wb, mode);
+  if (wb) updateShot(clip.shot.id, { grade: { ...grade, wb } }, { label: `鏡頭${WB_AUTO[mode].label}` });
+}
+
 // The white balance block: sliders for grade.wb, and automatic balance / exposure from the frame `probe()`
 // names (an analyze body without the options, or null when there is no picture to read).
 function WhiteBalance({ wb, probe, onPreview, onCommit }) {
   const [busy, setBusy] = useState("");
   const set = (k, v) => ({ ...wb, [k]: v });
   const auto = async (mode) => {
-    const at = probe && probe();
-    const pid = getState().project?.id;
-    if (!at || !pid) {
-      toast("播放頭這裡沒有畫面可以分析", { level: "warn" });
-      return;
-    }
-    const opt = WB_AUTO[mode];
-    const body = { ...at, wb: opt.wb, exposure: opt.exposure, current: wb };
-    if (opt.strength != null) body.strength = opt.strength;
-    if (mode === "sample") Object.assign(body, { x: wb.x, y: wb.y, size: wb.size });
     setBusy(mode);
     try {
-      const res = await api.post(`/api/projects/${pid}/analyze`, body);
-      onCommit({ ...res.suggest }, opt.label);
-      const st = res.stats;
-      const d = res.decision || {};
-      const read = d.subject === "person"
-        ? `以人物測光，臉部亮度 ${d.face.toFixed(2)}`
-        : `畫面亮度中位 ${st.p50.toFixed(2)}，過曝 ${(st.clipHigh * 100).toFixed(1)}%`;
-      toast(`${opt.label}：${read}`, { duration: 4000 });
-    } catch (err) {
-      toastError(err, opt.label);
+      const next = await autoWb(probe && probe(), wb, mode);
+      if (next) onCommit(next, WB_AUTO[mode].label);
     } finally {
       setBusy("");
     }

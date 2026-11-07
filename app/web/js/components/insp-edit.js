@@ -13,7 +13,7 @@ import { Icon } from "./icons.js";
 import { Field, NumberInput, Select, Toggle, Section, Button, Badge, DraftText, Slider } from "./ui.js";
 import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
-import { keyHint } from "../lib/keymap.js";
+import { keyHint, keyLabel } from "../lib/keymap.js";
 import { reverseClip, detachAudio, isReverse, stabilizeClip, isStabilized, addKeyframe } from "./tl-commands.js";
 import { KeyList, useClipTime } from "./key-panel.js";
 import { valueAt, withKey } from "../lib/keyframes.js";
@@ -208,7 +208,8 @@ function StabilizeSection({ shot, vid, busy }) {
   return html`<${Section} title="防抖" icon="camera">
     <${Toggle} checked=${isStabilized(vid) || rendering} disabled=${rendering} onChange=${() => stabilizeClip(shot.id)}
       label=${rendering ? "防抖處理中" : "防抖"}
-      hint="只處理目前的剪輯範圍，前後各多留 1 秒；畫面會稍微放大來裁掉晃動的黑邊。之後剪輯範圍拉長超過多留的部分，要取消再重新勾選" />
+      hint=${`只處理目前的剪輯範圍，前後各多留 1 秒；畫面會稍微放大來裁掉晃動的黑邊。之後剪輯範圍拉長超過多留的部分，要取消再重新勾選${
+        keyLabel("edit.stabilize") ? `。按 ${keyLabel("edit.stabilize")} 只開不關，已防抖的鏡頭按了不變` : ""}`} />
     <${StabilizeSettings} current=${isStabilized(vid) ? vid.source.settings || {} : null} disabled=${rendering}
       onApply=${(settings) => stabilizeClip(shot.id, "shot", settings)} />
   <//>`;

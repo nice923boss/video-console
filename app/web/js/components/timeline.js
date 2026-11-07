@@ -28,7 +28,9 @@ import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.j
 import {
   MARKER_COLORS, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
   markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet, slipFrame,
+  stabilizeSet, togglePictureHidden, transcribeShot,
 } from "./tl-commands.js";
+import { autoGradeShot } from "./grade-panel.js";
 import { liftSelected, dropSelected } from "./tl-lift.js";
 import { openMenu, openModal, Modal, promptDialog } from "./overlay.js";
 import { Button, IconButton, Field, Select, Segmented, Toggle } from "./ui.js";
@@ -40,7 +42,7 @@ import {
 } from "./tl-tracks.js";
 import { multiAudio } from "./tl-audio-sel.js";
 import { multiClip } from "./tl-clip-sel.js";
-import { AdjustTrack, AdjustAddButton, ADJUST_H } from "./tl-adjust.js";
+import { AdjustTrack, AdjustAddButton, ADJUST_H, addAdjustmentAt } from "./tl-adjust.js";
 import { Minimap } from "./tl-minimap.js";
 import { useViewWindow, inView } from "./tl-view.js";
 import { ToolButtons } from "./tl-roll.js";
@@ -111,7 +113,8 @@ async function addLayersWith(files, start) {
 
 // Timeline keys that only move the playhead, the I/O range, the zoom or the track height (or copy a clip).
 const WATCH_KEYS = new Set(["edit.deselect", "edit.copy", "edit.markerNext", "edit.markerPrev", "edit.markIn", "edit.markOut",
-  "edit.playRange", "edit.clearRange", "edit.zoomIn", "edit.zoomOut", "edit.zoomFit", "edit.trackTaller", "edit.trackShorter"]);
+  "edit.playRange", "edit.clearRange", "edit.zoomIn", "edit.zoomOut", "edit.zoomFit", "edit.trackTaller", "edit.trackShorter",
+  "edit.chapters", "edit.watch"]);
 
 const markerHex = (color) => (MARKER_COLORS.find((c) => c.value === color) || MARKER_COLORS[0]).hex;
 
@@ -485,6 +488,24 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.trackShorter": () => stepScale(-1),
     "edit.snap": () => setSnapOn(!dataRef.current.snapOn),
     "edit.link": () => setLinkOn(!dataRef.current.linkOn),
+    "edit.stabilize": on((p, c, sel) => stabilizeSet(p, c, sel, true)),
+    "edit.unstabilize": on((p, c, sel) => stabilizeSet(p, c, sel, false)),
+    "edit.autoBalance": on((p, c, sel) => autoGradeShot(p, c, sel, "both")),
+    "edit.autoWb": on((p, c, sel) => autoGradeShot(p, c, sel, "wb")),
+    "edit.autoExposure": on((p, c, sel) => autoGradeShot(p, c, sel, "exposure")),
+    "edit.pictureHidden": on(togglePictureHidden),
+    "edit.transcribe": on(transcribeShot),
+    "edit.addAdjust": () => addAdjustmentAt(dataRef.current.clips, clock.time),
+    "edit.importSrt": () => srtRef.current && srtRef.current.click(),
+    "edit.importBilingual": () => openBilingualImport(dataRef.current.project),
+    "edit.addAudio": () => importFiles(fileRef, { track: true, start: round(clock.time, 2) }, true),
+    "edit.mergeAudio": () => {
+      const p = dataRef.current.project;
+      if (musicTracks(p.audio || [], (p.tracks || {}).musicOrder).length < 2) return toast("音軌不到兩條，沒有可以合併的", { level: "warn" });
+      mergeAudioTracks(p);
+    },
+    "edit.chapters": () => copyChapters(dataRef.current.project),
+    "edit.watch": () => setWatch(!watch),
   };
   // Watch mode keeps only the keys that look around; the rest say why nothing happens.
   useKeymap(watch ? Object.fromEntries(Object.entries(keys).map(([id, fn]) => [id, WATCH_KEYS.has(id) ? fn : () => { watchRefuses(); }]))

@@ -318,7 +318,8 @@ function StabilizeField({ item, media }) {
   const { pid, jobs } = useStore((s) => ({ pid: s.pid, jobs: s.jobs }));
   const rendering = jobs.some((j) => j.pid === pid && j.kind === "stabilize" && j.payload && j.payload.overlay === item.id
     && (j.status === "queued" || j.status === "running"));
-  return html`<${Field} label="防抖" hint="只處理片段用到的範圍，前後各多留 1 秒，處理好的影片會放進素材庫；畫面會稍微放大來裁掉晃動的黑邊。之後片段拉長超過多留的部分，要取消再重新勾選">
+  return html`<${Field} label="防抖" hint=${`只處理片段用到的範圍，前後各多留 1 秒，處理好的影片會放進素材庫；畫面會稍微放大來裁掉晃動的黑邊。之後片段拉長超過多留的部分，要取消再重新勾選${
+    keyLabel("edit.stabilize") ? `。按 ${keyLabel("edit.stabilize")} 只開不關，已防抖的片段按了不變` : ""}`}>
     <${Toggle} checked=${isStabilized(media) || rendering} disabled=${rendering}
       label=${rendering ? "防抖處理中" : "防抖"} onChange=${() => stabilizeClip(item.id, "overlay")} />
     <${StabilizeSettings} current=${isStabilized(media) ? media.source.settings || {} : null} disabled=${rendering}

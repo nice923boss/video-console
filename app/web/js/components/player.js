@@ -19,7 +19,7 @@ import { MiniMeter } from "./audio-meter.js";
 import { Icon } from "./icons.js";
 import { IconButton, Slider } from "./ui.js";
 import { openMenu } from "./overlay.js";
-import { toastError } from "./toast.js";
+import { toast, toastError } from "./toast.js";
 
 const WAIT_LIMIT_MS = 4000;
 const SEEK_JUMP = 0.05;
@@ -421,6 +421,12 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else if (rootRef.current) rootRef.current.requestFullscreen().catch(() => {});
   };
+  // Preview switches pressed from the keyboard say what they are now, since their buttons may be out of sight.
+  const say = (text) => toast(text, { id: "pl-switch", duration: 1500 });
+  const flipView = (key, name) => {
+    setView({ ...view, [key]: !view[key] });
+    say(`${name}：${view[key] ? "關" : "開"}`);
+  };
   useKeymap({
     "edit.play": () => togglePlay(),
     "edit.reverse": () => shuttle(-1),
@@ -436,6 +442,29 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
     "edit.nextEdit": () => jumpClip(clipsRef.current, 1),
     "edit.start": () => setTime(0),
     "edit.end": () => setTime(clock.duration),
+    "edit.loop": () => {
+      setLoop(!loop);
+      say(loop ? "循環播放：關" : "循環播放：開");
+    },
+    "edit.mute": () => {
+      const off = volume.muted || volume.level === 0;
+      setVolume({ level: volume.level || 1, muted: !off });
+      say(off ? "取消靜音" : "預覽靜音（不影響輸出）");
+    },
+    "edit.showCaptions": () => flipView("captions", "預覽字幕"),
+    "edit.safe": () => flipView("safe", "安全框"),
+    "edit.thirds": () => flipView("thirds", "三分構圖線"),
+    "edit.compare": () => {
+      setState({ gradeCompare: !compare });
+      say(compare ? "調色前後對照：關" : "調色前後對照：開（左半調色前、右半調色後）");
+    },
+    "edit.fit": () => {
+      const cover = project.settings.fit === "cover";
+      updateProject({ settings: { fit: cover ? "contain" : "cover" } }, { label: "切換畫面填滿" })
+        .then((res) => res && say(cover ? "完整顯示（加黑邊）" : "填滿畫面（比例不同時裁切）"));
+    },
+    "edit.program": openProgram,
+    "edit.fullscreen": toggleFull,
   }, { active: hotkeys });
 
   const { width, height } = project.settings;

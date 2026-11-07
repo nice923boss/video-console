@@ -678,6 +678,11 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/voice-channels` | 音訊片段原始檔每條音訊串流、每個聲道在片段範圍內的音量 `{"id"}`，回 `{"streams": [{"stream", "channels": [{"peaks", "peakDb", "rmsDb"}]}]}`：`peaks` 是 200 格 0~100（對應 -60~0 dBFS），整段無聲的聲道 dB 為 `null`；同專案有新的請求時舊的回 499 |
 | POST | `/api/projects/{pid}/chat` | AI 助理對話一輪（第 11 節），等模型做完才回應 |
 | POST | `/api/projects/{pid}/chat/cancel` | 停止進行中的一輪 `{"id"}`，回 `{"stopped": bool}` |
+| GET | `/api/projects/{pid}/docs` | 專案文件（第 11 節）`{"docs": [{name, kind, size, modified}], "folder"}`，`kind` 是 `text` 或 `image`，`modified` 是 epoch 秒，依檔名排序，最多 300 個 |
+| POST | `/api/projects/{pid}/docs` | 上傳一份專案文件：body 是檔案原始內容，`?name=` 檔名（只取最後一段，`\/:*?"<>|` 換成 `_`），回 `{"doc"}`。同名時加上「 (2)」；單檔最多 100 MB（超過 413，不留檔）；不支援的類型 415 |
+| POST | `/api/projects/{pid}/docs/delete` | 刪除一份 `{"name"}`，不在時 404，無法復原 |
+| GET | `/api/projects/{pid}/docs/file` | 檔案本身 `?name=`（面板的縮圖用），不在時 404 |
+| POST | `/api/projects/{pid}/docs/reveal` | 在檔案總管開啟 docs 資料夾 |
 | GET | `/api/projects/{pid}/shots.csv` | 鏡頭清單 CSV |
 | GET | `/api/projects/{pid}/storyboard` | 分鏡表 HTML |
 | GET | `/api/projects/{pid}/review.html` | 客戶審稿網頁（SB-13）：序列中每個鏡頭的畫面（data: URI，單檔可離線開啟）、秒數、提示詞與字幕，以附件下載（檔名 `<專案>_審稿.html`）。客戶在頁面留言後下載 `{"vc": "review-comments", "version": 1, "project", "name", "by", "at", "note", "shots": [{"id", "no", "name", "text"}]}` 的 .json 檔 |
@@ -738,6 +743,8 @@ print(out["reply"])
 | `id` | 這一輪的代號（英數、`_`、`-`，40 字內），停止時用；不給時自動產生 |
 | `messages` | 對話紀錄 `[{"role": "user" 或 "assistant", "content"}]`，最後一則要是使用者的話。只取最後 20 則，每則前 4000 字 |
 | `attachment` | 選填 `{"name", "text"}`：附加的文字（30 萬字內，Word 檔先用 `/api/script/docx` 轉文字）。模型會看到開頭 1500 字，`import_bilingual` 不給 `text` 時用整份附件 |
+| `docs` | 選填，訊息裡 ＠ 提到的專案文件檔名（最多 8 個，見下方「專案文件」）。文字文件附上開頭 1500 字與總字數，其餘由模型用 `read_document` 分頁讀；圖片文件縮成 768 px 寬的 JPEG 當圖片附上。只提到一份文字文件且沒給 `attachment` 時，`import_bilingual` 不給 `text` 會用它 |
+| `frames` | 選填，附上的預覽畫面 `[{"name", "url"}]`，最多 2 張，`url` 要是 `data:image/jpeg;base64,...`（每張 3 MB 內）。剪輯頁的相機按鈕送的就是這個 |
 
 回應 `{"id", "reply", "steps", "stopped", "made"}`：
 
@@ -745,7 +752,8 @@ print(out["reply"])
 - `made` 是這一輪留在專案上的復原步驟標籤（舊到新，助理自己復原掉的不算）。
 - `stopped`：`null` 正常結束；`"cancel"` 被停止；`"limit"` 已用完 12 輪模型呼叫。
 - 請求會等到這一輪做完才回應，慢的模型可能要好幾分鐘，請把逾時拉長；進度可聽 SSE 的 `chat` 事件。
-- 錯誤：專案不存在 404；文字模型沒開 409；模型連不上、金鑰錯誤、回傳格式不對 502；附件太長 413；`messages` 格式不對 400。
+- 錯誤：專案不存在、`docs` 裡的文件不存在 404；文字模型沒開 409；模型連不上、金鑰錯誤、回傳格式不對 502；附件太長 413；`messages`、`docs`、`frames` 格式不對 400（都在呼叫模型前檢查）。
+- 圖片用 OpenAI 的 `image_url` 內容格式送出（附上的畫面、圖片文件、`view_frame` 與 `read_document` 取得的畫面），一輪最多 12 張。模型不支援圖片而回 502 時，同一次呼叫改成不帶圖重送，並在原位置留一句說明請使用者換模型；APP 記住這個模型（`baseUrl` 加 `model`），之後不再送圖，直到重新啟動。沒帶圖的 502 照常回錯誤。
 
 模型能用的工具：
 
@@ -759,9 +767,16 @@ print(out["reply"])
 | `analyze_picture` | 量一格畫面（3.8 節），回亮度、過曝、平均色的一行說明、測光方式（`metered`：以人物或整體畫面）與建議的白平衡 |
 | `auto_color` | 自動白平衡與曝光（3.8 節），一個復原步驟，標籤「AI 助理：自動調色」。`wb` 是 `auto`（預設，自動判斷）、`on`（一律校正）、`off`；不給 `target` 時用 `"auto"`；`subject` 同 3.8 節；每個鏡頭回 `metered` 一行說明測光方式 |
 | `auto_stabilize` | 量晃動，自動防抖（3.7.2 節），一個復原步驟，標籤「AI 助理：自動防抖」，回每個鏡頭的 `decision`、`jitter`、`reason` 與工作 id |
-| `import_bilingual` | 匯入中英對照（6.1 節） |
+| `import_bilingual` | 匯入中英對照（6.1 節）。`doc` 指定一份專案文件；`text`、`doc` 都不給時用附件或訊息提到的唯一一份文字文件 |
 | `align_captions`、`transcribe` | 送出語音對齊、語音轉字幕工作 |
 | `job_status` | 查一個背景工作 |
 | `undo` | 復原最新一步，只限 AI 助理做的步驟（標籤以「AI 助理：」開頭，或這一輪做的剪輯指令、匯入、自動調色、自動防抖） |
+| `view_frame` | 看剪輯線上的畫面：`at`（序列秒數）、`shot` 加 `t`（鏡頭內秒數），或 `times`（最多 6 個序列秒數，用來比較鏡頭）。畫面套用鏡頭調色與調整圖層，縮成 768 px 寬，在下一則訊息當圖片給模型；字幕、標題字卡、上層軌、遮罩與轉場不會畫上。回 `frames`：每格的 `shot`、`name`、`t`（鏡頭內秒數）、`fileTime`（原始檔秒數）、`grades`（套用的調色數）、`at`（序列秒數，鏡頭不在序列時改為 `note`），畫面關閉的鏡頭另有 `off` |
+| `list_documents` | 專案文件清單（名稱、`text` 或 `image`、大小） |
+| `read_document` | 讀一份專案文件：`offset` 起 `limit` 字（預設 6000，最多 9000），回 `text`、`length`（總字數）、`offset`，還沒讀完時另有 `next`（下一頁的起點）。圖片文件在下一則訊息當圖片給模型 |
+| `app_docs` | 讀 APP 自己的文件：`doc` 是 `api`（本文件，預設）或 `manual`（使用說明）。不給 `section`、`find` 時回標題清單；`section` 是標題編號（如 `"3.7"`）或標題文字，長的章節用 `offset` 翻頁；`find` 回含這些字的行（最多 30 行） |
+| `call_api` | 在 APP 內部呼叫一個 HTTP 路由，給其他工具沒涵蓋的事：`method`（`GET`、`POST`、`PATCH`）、`path`（`{pid}` 代表開啟中的專案，可帶查詢字串）、`body`。可讀：開啟中專案底下的路由，以及 `/api/styles`、`/api/title-templates`、`/api/jobs`、`/api/system/fonts`。可寫：開啟中專案的 `ops`、`edit`、`analyze`、`auto-color`、`auto-stabilize`、`captions/align`、`captions/bilingual`、`script`、`script/apply`、`voice-channels`、`voice-clean`、`media/{mid}/p5/link`，`PATCH` 修改意見的決定，以及 `POST /api/jobs`（例如輸出）。復原、歷史紀錄、選檔視窗、上傳、檔案總管與對話本身不開放。`ops` 要自己給項目 id，回應前 12000 字給模型 |
+
+**專案文件**：每個專案的 `docs/` 資料夾（`GET /api/projects/{pid}/docs` 回傳的 `folder`），直接複製進去的檔案也算。支援 `.docx`（段落、表格一列一行用 ` | ` 隔開、Word 註解附在最後）、`.pdf`（逐頁讀文字層，掃描檔沒有文字層時回說明）、`.txt`、`.md`、`.srt`、`.vtt`、`.csv`、`.tsv`、`.json`、`.ass`（UTF-8、UTF-8 BOM、UTF-16、CP950 自動判斷）與圖片（`.png`、`.jpg`、`.jpeg`、`.webp`、`.bmp`、`.gif`）。隱藏檔、Office 暫存檔（`~$` 開頭）與其他類型不列出。
 
 `POST /api/projects/{pid}/chat/cancel {"id"}` 停止那一輪：在下一次呼叫模型前停下，已經送出的模型呼叫會等它回來。找不到進行中的那一輪時回 `{"stopped": false}`。

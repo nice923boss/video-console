@@ -3,13 +3,13 @@
 // Each acts on the selected item, or with nothing selected on the picture clip under the playhead. The
 // server works out the volume, freeze, detach, reverse and keyframe edits (POST /edit, vc/edits.py), the same
 // ones Claude's edits get; it also refuses what cannot be done there (an image has no sound...).
-import { ops, editCmd, focusShot } from "../lib/actions.js";
+import { ops, editCmd, focusShot, updateShot } from "../lib/actions.js";
 import { getState, setState } from "../lib/store.js";
 import { clock, setTime, setPlaying, onClock } from "../lib/clock.js";
 import { newId, round, clamp, fmtTime } from "../lib/format.js";
 import { clipIndexAt, clipSpeed, audioLength, audioMedia, videoTake } from "../lib/sequence.js";
 import { slipRange } from "../lib/roll.js";
-import { showQueued, upsertJobs } from "../lib/jobs-actions.js";
+import { showQueued, submitJob, upsertJobs } from "../lib/jobs-actions.js";
 import { keyHint } from "../lib/keymap.js";
 import { readPref } from "../lib/prefs.js";
 import { toast } from "./toast.js";
@@ -230,8 +230,67 @@ export function stabilizeShots(ids, on) {
   });
 }
 
+// A stabilize job queued or running for a shot id, or for an upper-track clip id (payload.overlay).
+function stabRendering(id) {
+  const { pid, jobs } = getState();
+  return (jobs || []).some((j) => j.pid === pid && j.kind === "stabilize" && (j.status === "queued" || j.status === "running")
+    && (j.shotId === id || (j.payload && j.payload.overlay === id)));
+}
+
+// The 防抖 keys: on (edit.stabilize) only turns stabilizing on, off (edit.unstabilize) only back off, so a second
+// press never undoes the first; it says the clips already are. They act on the selected video shots or upper-track
+// video clips, else the shot under the playhead.
+export function stabilizeSet(project, clips, sel, on) {
+  const over = sel && sel.type === "overlay";
+  const cur = over ? current(project, clips, sel) : currentShot(project, clips, sel);
+  if (!cur || (!over && cur.type !== "shot")) return warn("先選取影片鏡頭，或把播放頭移到鏡頭上");
+  const sourceOf = over ? (o) => project.media[o.mediaId] : (s) => videoTake(project, s);
+  const items = together(project, over || (sel && sel.type === "shot") ? sel : null, cur.item);
+  const videos = items.filter((x) => { const src = sourceOf(x); return src && src.kind === "video"; });
+  const what = over ? "片段" : "鏡頭";
+  if (!videos.length) return warn(`防抖只能用在影片${what}`);
+  const todo = videos.filter((x) => isStabilized(sourceOf(x)) !== on && !stabRendering(x.id));
+  if (!todo.length) {
+    const busy = videos.some((x) => stabRendering(x.id));
+    const state = on ? "已經防抖" : "沒有防抖";
+    return toast(busy ? "防抖處理中，請稍候" : videos.length > 1 ? `選取的影片${what}都${state}` : `這個${what}${state}`,
+      { id: "stabilize", duration: 2000 });
+  }
+  if (!over && todo.length > 1) return stabilizeShots(todo.map((x) => x.id), on);
+  for (const x of todo) {
+    editCmd({ cmd: "stabilize", id: x.id, type: over ? "overlay" : "shot", on }).then((res) => {
+      if (!res) return;
+      if (res.job) showQueued(res.job);
+      else toast(res.label, { id: "stabilize", duration: 2000 });
+    });
+  }
+}
+
 // Opens the speed setting in the inspector: a shot's (SpeedSection in insp-edit.js), or a selected upper-track
 // video clip's (OverlayPanel in edit-props.js), or the one speed of a set of them picked together.
+// The "隱藏分鏡畫面" key: the selected shot, else the shot under the playhead, shows black while its sound
+// plays (for a full-frame upper-track clip over it), or shows its picture again.
+export function togglePictureHidden(project, clips, sel) {
+  const cur = currentShot(project, clips, sel);
+  if (!cur || cur.type !== "shot") return warn("先選取鏡頭，或把播放頭移到鏡頭上");
+  const hidden = !!cur.item.pictureHidden;
+  updateShot(cur.item.id, { pictureHidden: !hidden }, { label: hidden ? "顯示分鏡畫面" : "隱藏分鏡畫面" });
+}
+
+// The "語音轉字幕" key: the selected shot, else the shot under the playhead, like the shot inspector's button.
+export function transcribeShot(project, clips, sel) {
+  const cur = currentShot(project, clips, sel);
+  if (!cur || cur.type !== "shot") return warn("先選取鏡頭，或把播放頭移到鏡頭上");
+  if (!cur.clip) return warn("這個鏡頭不在序列裡，放回序列後才能轉成字幕");
+  const vid = videoTake(project, cur.item);
+  if (!vid || !vid.hasAudio) return warn("這個鏡頭沒有原聲可以轉成字幕");
+  const { pid, jobs } = getState();
+  const busy = (jobs || []).some((j) => j.pid === pid && j.kind === "transcribe" && j.shotId === cur.item.id
+    && (j.status === "queued" || j.status === "running"));
+  if (busy) return toast("這個鏡頭正在轉成字幕，請稍候", { id: "transcribe", duration: 2000 });
+  submitJob("transcribe", cur.item.id);
+}
+
 export function focusSpeed(project, clips, sel) {
   if (sel && sel.type === "overlay") {
     const cur = current(project, clips, sel);

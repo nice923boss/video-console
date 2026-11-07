@@ -37,6 +37,9 @@ function addAdjustment(span) {
   });
 }
 
+// The "加入調整圖層" key: a layer over the picture clip at t, else DEFAULT_LEN seconds from t.
+export const addAdjustmentAt = (clips, t) => addAdjustment(spanAt(clips, t));
+
 // onGhost({start, length} | null) shows the span a drag would cover while it is over a lane.
 export function AdjustAddButton({ clips, pps, onGhost }) {
   const down = (e) => {

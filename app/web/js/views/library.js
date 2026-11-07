@@ -529,6 +529,7 @@ function MediaPane({ project }) {
       setCurrent(sel && picked.has(sel) ? sel : list[0].id);
       return setPicked(new Set(list.map((m) => m.id)));
     },
+    "library.import": () => importFiles(fileRef, { target: "library" }),
   });
 
   const libKeys = [["library.favorite", "加入最愛"], ["library.rename", "重新命名"], ["library.delete", "刪除"]]

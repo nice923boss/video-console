@@ -347,6 +347,13 @@ export function BoardView() {
     "board.image": () => { const ids = targets(); if (ids.length) generate("image", ids); },
     "board.video": () => { const ids = targets(); if (ids.length) generate("video", ids); },
     "board.preview": () => { if (focus) openShotPreview(pid, project, visible, focus); },
+    "board.sequence": () => {
+      const ids = targets();
+      if (!ids.length) return toast("先選取鏡頭", { level: "warn" });
+      const allOff = ids.every((id) => (project.shots.find((x) => x.id === id) || {}).inSequence === false);
+      updateShots(ids, { inSequence: allOff }, allOff ? "放入序列" : "移出序列");
+    },
+    "board.print": () => printBoard(project, pid, visible, total),
   }, { active: !!project });
 
   const handlers = {

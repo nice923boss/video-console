@@ -12,13 +12,16 @@ import logging
 import math
 import re
 import threading
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from . import autocolor, edits
+from . import agentlook as look
+from . import autocolor, edits, projdocs
 from .bilingual import MAX_TEXT
-from .sequence import video_take
-from .server import Request
+from .export import active_adjustments
+from .sequence import build_sequence, total_duration, video_take
+from .server import FileResponse, Request, Response
 from .util import AppError, new_id
 
 if TYPE_CHECKING:
@@ -36,6 +39,7 @@ LABEL = "AI 助理："  # undo label prefix of the steps apply_ops makes
 CHAT_ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 ID_PREFIX = {"caption.add": ("item", "c"), "marker.add": ("item", "mk"), "captionTrack.add": ("track", "ct")}
 CAPTION_KEYS = ("id", "start", "end", "text", "position", "style", "speaker", "pair", "disabled", "title")
+MAX_DOCS = 8  # documents one message can mention
 
 SYSTEM = """You are the editing assistant inside Video Console, a video editor. You work on the one open project \
 through tools; the user sees every change as an undo step and can undo it.
@@ -78,6 +82,18 @@ When the user attached a file, call it without text. english "double" keeps two 
 them into one. align true then times the captions to the speech in the clips.
 - transcribe, align_captions and some edits start background jobs that take minutes. Start them, tell the user \
 the job was started and that the result appears when it finishes; do not poll job_status in a loop.
+- Seeing the picture: view_frame shows the shot on the timeline at a time through its colour grade and the \
+adjustment layers, as pictures in the next message. Captions, titles, upper-track clips, masks and transitions \
+are not drawn on it: read those with list_captions or timeline. Look before you judge how a shot looks, and say \
+what you saw. Pictures the user attached show the preview as it is.
+- Project documents: the user keeps the script, the client's notes and reference pictures in the project's \
+document folder and mentions one as @name. A mentioned document's beginning comes with the message; read_document \
+reads the rest page by page (next is the offset of the next page) or shows a picture document. list_documents \
+lists them. Follow written notes point by point, and say which ones you could not do and why.
+- How the app works: app_docs reads the API reference (doc api) or the user manual (doc manual): headings first, \
+then a section, or find to search. call_api calls one of the app's own HTTP routes (path with {pid} for the open \
+project) for what no other tool covers, such as GET /api/projects/{pid}/script or POST /api/jobs (an export). \
+Prefer the dedicated tools; call_api cannot delete, undo, open files or windows, or touch other projects.
 - When a tool returns an error, fix the call or explain the problem; never repeat the same call unchanged.
 - undo only reverts a step you made.
 - Reply in Traditional Chinese (繁體中文), short and plain: what you did, or what you need from the user. \
@@ -158,9 +174,10 @@ TOOLS = [
            "settings": {"type": "object"}, "engine": {"type": "string", "enum": ["vidstab", "gyro", "auto"]},
            "gyroFolder": STR}),
     _tool("import_bilingual", "Import a Chinese/English parallel text as captions on two rows (中文 above, English "
-          "below), one after another from start. text: omit to use the user's attachment. replace: clear those "
-          "two rows first. align: then queue speech alignment.",
-          {"text": STR, "english": {"type": "string", "enum": ["double", "single"]}, "start": NUM,
+          "below), one after another from start. text: omit to use the user's attachment or the one document they "
+          "mentioned; doc: a project document's name. replace: clear those two rows first. align: then queue "
+          "speech alignment.",
+          {"text": STR, "doc": STR, "english": {"type": "string", "enum": ["double", "single"]}, "start": NUM,
            "replace": {"type": "boolean"}, "align": {"type": "boolean"}}),
     _tool("align_captions", "Queue a background job that moves one caption row's captions onto the matching "
           "speech in the clips (the row below that shares their times follows).", {"track": STR}, ("track",)),
@@ -168,6 +185,27 @@ TOOLS = [
           {"shotId": STR}, ("shotId",)),
     _tool("job_status", "State and progress of one background job.", {"id": STR}, ("id",)),
     _tool("undo", "Undo the latest undo step, only when you made it."),
+    _tool("view_frame", "Look at the picture: the shot on the timeline at `at` (timeline seconds), or shot + t "
+          "(seconds into that clip), or times (up to 6 timeline seconds, e.g. to compare shots). The frames come as "
+          "pictures in the next message, through the shot's grade and the adjustment layers; captions, titles and "
+          "upper-track clips are not drawn.",
+          {"at": NUM, "shot": STR, "t": NUM, "times": {"type": "array", "items": NUM}}),
+    _tool("list_documents", "The project's documents (script, client notes, reference pictures) by name, kind "
+          "(text or image) and size."),
+    _tool("read_document", "Read a project document: text from offset (characters), limit up to 9000; the result's "
+          "next is where the following page starts. A picture document comes as a picture in the next message.",
+          {"name": STR, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, ("name",)),
+    _tool("app_docs", "Read the app's own documentation. doc: api (HTTP API reference, the default) or manual "
+          "(the user manual). Without section or find: the headings. section: a heading number such as \"3.7\" or "
+          "words of a heading; offset pages through a long one. find: lines containing these words.",
+          {"doc": {"type": "string", "enum": ["api", "manual"]}, "section": STR, "find": STR,
+           "offset": {"type": "integer"}}),
+    _tool("call_api", "Call one of the app's HTTP routes in-process, for what no other tool covers (see app_docs "
+          "api). method GET, POST or PATCH; path such as /api/projects/{pid}/script (a query string is allowed); "
+          "body: the JSON body. Reads anywhere in the open project and the styles, title templates and jobs; writes "
+          "only to the open project's editing routes and POST /api/jobs.",
+          {"method": {"type": "string", "enum": ["GET", "POST", "PATCH"]}, "path": STR,
+           "body": {"type": "object", "additionalProperties": True}}, ("method", "path")),
 ]
 
 
@@ -177,6 +215,8 @@ class _Turn:
     chat_id: str
     attachment: str
     made: list[str] = field(default_factory=list)  # undo labels of the steps this turn made, oldest first
+    images: list[tuple[str, str]] = field(default_factory=list)  # (label, data URL) waiting for the next message
+    sent: int = 0  # pictures sent to the model so far
 
 
 class _Body:
@@ -244,6 +284,7 @@ class Agent:
         self._app = app
         self._stops: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        self._blind: set[tuple[str, str]] = set()  # (baseUrl, model) of models that refused a picture
 
     def cancel(self, chat_id: str) -> bool:
         with self._lock:
@@ -253,7 +294,8 @@ class Agent:
         return bool(stop)
 
     def run(self, pid: str, data: dict) -> dict:
-        """{id?, messages: [{role, content}], attachment?: {name, text}} -> {id, reply, steps, stopped, made}
+        """{id?, messages: [{role, content}], attachment?: {name, text}, docs?: [project document names],
+        frames?: [{name, url: JPEG data URL}]} -> {id, reply, steps, stopped, made}
         (made: the undo labels of the steps the turn left, oldest first)."""
         self._app.store.get(pid)  # 404 before the model is called
         chat_id = str(data.get("id") or new_id("ch"))
@@ -271,7 +313,18 @@ class Agent:
             name = str(attachment.get("name") or "附件")[:120]
             messages[-1]["content"] += (f"\n\n[Attached file \"{name}\", {len(text)} characters. import_bilingual "
                                         f"uses it when called without text. Beginning:]\n{text[:PREVIEW]}")
+        notes, texts, images = self._mentioned(pid, data.get("docs"))
+        messages[-1]["content"] += notes
+        if not attachment and len(texts) == 1:
+            text = texts[0]
+        images += look.frame_list(data.get("frames"))
         turn = _Turn(pid, chat_id, text)
+        if images:
+            if self._blind_model():
+                messages[-1]["content"] += "\n\n" + look.BLIND_NOTE
+            else:
+                messages[-1] = {"role": "user", "content": look.pictures(messages[-1]["content"], images)}
+                turn.sent = len(images)
         stop = threading.Event()
         with self._lock:
             self._stops[chat_id] = stop
@@ -288,7 +341,7 @@ class Agent:
         for _ in range(MAX_STEPS):
             if stop.is_set():
                 return {"reply": "已停止。", "steps": steps, "stopped": "cancel"}
-            answer = self._app.llm.complete(messages, TOOLS)
+            answer = self._complete(messages)
             if not answer["tool_calls"]:
                 return {"reply": answer["content"] or "（模型沒有回覆內容）", "steps": steps, "stopped": None}
             messages.append({"role": "assistant", "content": answer["content"], "tool_calls": [
@@ -302,8 +355,69 @@ class Agent:
                 if len(content) > MAX_RESULT:
                     content = content[:MAX_RESULT] + " ...(truncated; read a smaller window)"
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
+            if turn.images:  # tool results are text only: the pictures go in one user message after them
+                labels = ", ".join(label for label, _ in turn.images)
+                messages.append({"role": "user", "content": look.pictures(f"[Pictures: {labels}]", turn.images)})
+                turn.images = []
         return {"reply": f"已達單次對話的步驟上限（{MAX_STEPS} 輪），先停在這裡；要繼續請再交代一次。",
                 "steps": steps, "stopped": "limit"}
+
+    # ------------------------------------------------------------------ pictures and documents
+    def _model_key(self) -> tuple[str, str]:
+        cfg = self._app.settings.section("llm")
+        return str(cfg.get("baseUrl") or ""), str(cfg.get("model") or "")
+
+    def _blind_model(self) -> bool:
+        return self._model_key() in self._blind
+
+    def _complete(self, messages: list[dict]) -> dict:
+        """One model round. A model that fails on a message with pictures is asked again without them; when that
+        works it is remembered as one that cannot take pictures (until the app restarts)."""
+        if self._blind_model() and look.has_images(messages):
+            messages[:] = look.without_images(messages)
+        try:
+            return self._app.llm.complete(messages, TOOLS)
+        except AppError as exc:
+            if exc.status != 502 or not look.has_images(messages):
+                raise
+            log.info("model call with pictures failed (%s); asking again without them", exc.message)
+            plain = look.without_images(messages)
+            answer = self._app.llm.complete(plain, TOOLS)
+            self._blind.add(self._model_key())
+            messages[:] = plain
+            return answer
+
+    def _can_see(self, turn: _Turn, count: int) -> None:
+        if self._blind_model():
+            raise AppError("目前的文字模型不能看圖片：請使用者到「引擎 › 文字模型」換成支援圖片的模型")
+        if turn.sent + count > look.MAX_IMAGES:
+            raise AppError(f"這一輪已看了 {turn.sent} 張圖，上限 {look.MAX_IMAGES} 張；請先依目前看到的回覆使用者")
+
+    def _show(self, turn: _Turn, label: str, url: str) -> None:
+        turn.images.append((label, url))
+        turn.sent += 1
+
+    def _mentioned(self, pid: str, raw: Any) -> tuple[str, list[str], list[tuple[str, str]]]:
+        """(notes for the message, full texts of the text documents, pictures) of the @mentioned documents."""
+        if raw is None:
+            return "", [], []
+        if not isinstance(raw, list) or len(raw) > MAX_DOCS or not all(isinstance(n, str) for n in raw):
+            raise AppError(f"提到的文件格式不正確（最多 {MAX_DOCS} 個）")
+        project_dir = self._app.store.project_dir(pid)
+        notes, texts, images = "", [], []
+        for name in dict.fromkeys(raw):
+            path = projdocs.find(project_dir, name)
+            if projdocs.kind_of(path.name) == "image":
+                url = projdocs.jpeg_url(self._app.media(), path, project_dir / "media" / "cache")
+                images.append((f"document \"{path.name}\"", url))
+                notes += f"\n\n[Document \"{path.name}\": a picture, shown below.]"
+                continue
+            text = projdocs.text_of(path)
+            texts.append(text)
+            more = (f" {len(text)} characters; read_document reads the rest from offset {PREVIEW}"
+                    if len(text) > PREVIEW else f" {len(text)} characters, all of it")
+            notes += f"\n\n[Document \"{path.name}\",{more}. Beginning:]\n{text[:PREVIEW]}"
+        return notes, texts, images
 
     def _run_tool(self, turn: _Turn, call: dict) -> tuple[dict, Any]:
         name = call["name"]
@@ -334,11 +448,13 @@ class Agent:
             step["job"] = result["job"].get("id")
         return step, result
 
-    def _route(self, method: str, path: str, body: dict) -> Any:
+    def _route(self, method: str, path: str, body: dict, query: dict | None = None) -> Any:
         """Call one of the app's own routes in-process, exactly as the HTTP API would."""
-        fn, params, _ = self._app.router.match(method, path)
+        fn, params, other = self._app.router.match(method, path)
+        if fn is None:
+            raise AppError(f"沒有這個 API：{method} {path}" + ("（這個路徑要用別的 method）" if other else ""), 404)
         raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        return fn(Request(_Body(raw), method, path, {}, params))
+        return fn(Request(_Body(raw), method, path, query or {}, params))
 
     # ------------------------------------------------------------------ tools
     def _t_project_info(self, turn: _Turn, args: dict) -> dict:
@@ -451,9 +567,13 @@ class Agent:
         return {"changed": out.get("changed"), "shots": shots, "jobs": [j["id"] for j in out.get("jobs") or []]}
 
     def _t_import_bilingual(self, turn: _Turn, args: dict) -> dict:
-        body = {**args, "text": args.get("text") or turn.attachment}
+        body = {k: v for k, v in args.items() if k != "doc"}
+        if args.get("doc"):
+            body["text"] = projdocs.text_of(projdocs.find(self._app.store.project_dir(turn.pid), str(args["doc"])))
+        else:
+            body["text"] = args.get("text") or turn.attachment
         if not body["text"]:
-            raise AppError("沒有要匯入的文字：使用者沒有附加檔案，也沒有給 text")
+            raise AppError("沒有要匯入的文字：使用者沒有附加檔案或提到文件，也沒有給 text")
         out = self._route("POST", f"/api/projects/{turn.pid}/captions/bilingual", body)
         turn.made.append("匯入雙語字幕")
         return {**out, "segments": out["segments"][:5]}  # the model needs the count, not every line back
@@ -478,3 +598,85 @@ class Agent:
         if turn.made and turn.made[-1] == label:
             turn.made.pop()
         return out
+
+    # ------------------------------------------------------------------ pictures, documents, manuals, the API
+    def _t_view_frame(self, turn: _Turn, args: dict) -> dict:
+        p = self._app.store.get(turn.pid)
+        clips = build_sequence(p)
+        times = args.get("times")
+        if isinstance(times, list) and times:
+            wanted = [look.timeline_point(clips, _num(x, 0.0)) for x in times[:look.MAX_LOOK]]
+        elif args.get("shot"):
+            shot_id = str(args["shot"])
+            t = max(0.0, _num(args.get("t"), 0.0))
+            clip = next((c for c in clips if c["shot"]["id"] == shot_id), None)
+            wanted = [(shot_id, t, clip["start"] + min(t, clip["length"]) if clip else None)]
+        else:
+            wanted = [look.timeline_point(clips, _num(args.get("at"), 0.0))]
+        self._can_see(turn, len(wanted))
+        project_dir = self._app.store.project_dir(turn.pid)
+        spans = active_adjustments(p, total_duration(clips)) if clips else []
+        frames = []
+        for shot_id, t, at in wanted:
+            info, url = look.render_frame(self._app.media(), p, project_dir, spans, shot_id, t, at)
+            frames.append(info)
+            where = f"{info['at']}s" if "at" in info else f"{info['t']}s into the shot"
+            self._show(turn, f"frame at {where} (shot {shot_id})", url)
+        return {"frames": frames, "note": "The pictures follow in the next message, in this order. They show the "
+                                          "shot with its grade and the adjustment layers; captions, titles, "
+                                          "upper-track clips, masks and transitions are not drawn."}
+
+    def _t_list_documents(self, turn: _Turn, args: dict) -> dict:
+        docs = projdocs.listing(self._app.store.project_dir(turn.pid))
+        out: dict = {"documents": docs}
+        if not docs:
+            out["note"] = "沒有專案文件：使用者可以在 AI 助理面板的「專案文件」上傳"
+        return out
+
+    def _t_read_document(self, turn: _Turn, args: dict) -> dict:
+        project_dir = self._app.store.project_dir(turn.pid)
+        path = projdocs.find(project_dir, str(args.get("name") or ""))
+        if projdocs.kind_of(path.name) == "image":
+            self._can_see(turn, 1)
+            self._show(turn, f"document \"{path.name}\"",
+                       projdocs.jpeg_url(self._app.media(), path, project_dir / "media" / "cache"))
+            return {"name": path.name, "kind": "image", "note": "The picture follows in the next message."}
+        text = projdocs.text_of(path)
+        offset = _int(args.get("offset"), 0, 0, len(text))
+        limit = _int(args.get("limit"), look.PAGE, 200, look.MAX_PAGE)
+        out: dict = {"name": path.name, "kind": "text", "length": len(text), "offset": offset,
+                     "text": text[offset:offset + limit]}
+        if offset + limit < len(text):
+            out["next"] = offset + limit
+        return out
+
+    def _t_app_docs(self, turn: _Turn, args: dict) -> dict:
+        return look.lookup(str(args.get("doc") or "api"), str(args.get("section") or "").strip(),
+                           str(args.get("find") or "").strip(), _int(args.get("offset"), 0, 0, 10 ** 9))
+
+    def _t_call_api(self, turn: _Turn, args: dict) -> Any:
+        method = str(args.get("method") or "GET").upper()
+        split = urllib.parse.urlsplit(str(args.get("path") or "").strip())
+        path = split.path.replace("{pid}", turn.pid).rstrip("/")
+        query = dict(urllib.parse.parse_qsl(split.query, keep_blank_values=True))
+        body = args.get("body") or {}
+        if not isinstance(body, dict):
+            raise AppError("body 要是 JSON 物件")
+        if not look.api_allowed(method, path, turn.pid):
+            raise AppError(f"call_api 不能用 {method} {path or '/'}：只能讀這個專案與樣式、標題範本、背景工作；寫入只限"
+                           "這個專案的剪輯 API 與 POST /api/jobs。刪除、復原、開檔案或視窗請使用者自己在介面上操作", 403)
+        if path == "/api/jobs":
+            body = {**body, "pid": turn.pid}
+        before = self._app.store.undo_state(turn.pid)
+        out = self._route(method, path, body, query)
+        after = self._app.store.undo_state(turn.pid)
+        if after["undoLabel"] and (after["undo"], after["undoLabel"]) != (before["undo"], before["undoLabel"]):
+            turn.made.append(after["undoLabel"])
+        if isinstance(out, FileResponse):
+            return {"note": f"這個 API 回傳檔案 {out.path.name}，助理讀不到檔案內容"}
+        if isinstance(out, Response):
+            if not out.content_type.startswith(("text/", "application/json")):
+                return {"note": f"這個 API 回傳 {out.content_type}，不是文字"}
+            data = out.body.decode("utf-8", "replace") if isinstance(out.body, bytes) else out.body
+            return {"status": out.status, "contentType": out.content_type, "text": data}
+        return out if out is not None else {"ok": True}
