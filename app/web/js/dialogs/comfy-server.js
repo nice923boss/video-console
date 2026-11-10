@@ -1,4 +1,4 @@
-// Add or edit one ComfyUI server: name, id (new servers only), address, enabled, and a connection test
+// Add or edit one ComfyUI server: name, id (new servers only), address, launch program, enabled, and a connection test
 // that uses the stored access token when the server already has one. A new server can take its token
 // here too; it is sent to the encrypted store right after the server itself is saved. The server list is replaced as a
 // whole on save, the same way the backend stores it.
@@ -11,10 +11,11 @@ import { openModal, Modal } from "../components/overlay.js";
 import { Button, Field, TextInput, Toggle } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
 import { SecretField } from "../components/secret-field.js";
-import { toast } from "../components/toast.js";
+import { toast, toastError } from "../components/toast.js";
 
 const ID_RE = /^[a-z0-9_-]{1,32}$/;
 const URL_RE = /^https?:\/\/[^\s/]+/;
+const ABS_PATH_RE = /^([a-zA-Z]:[\\/]|\\\\)/;
 
 function suggestId(name, taken) {
   const base = name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "server";
@@ -55,6 +56,8 @@ function ServerDialog({ server, close }) {
   const [idTouched, setIdTouched] = useState(false);
   const [url, setUrl] = useState(server ? server.url : "http://127.0.0.1:8000");
   const [enabled, setEnabled] = useState(server ? server.enabled !== false : true);
+  const [launch, setLaunch] = useState(server ? server.launch || "" : "");
+  const [picking, setPicking] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
@@ -65,7 +68,21 @@ function ServerDialog({ server, close }) {
   const idError = isNew && (!ID_RE.test(effectiveId) ? "只能用小寫英數字、底線、連字號（最多 32 字）"
     : taken.has(effectiveId) ? "這個代號已經有伺服器使用" : "");
   const urlError = urlClean && !URL_RE.test(urlClean) ? "格式例如 http://127.0.0.1:8000" : "";
-  const invalid = !name.trim() || !urlClean || !!idError || !!urlError;
+  const launchClean = launch.trim().replace(/^"+|"+$/g, "");
+  const launchError = launchClean && !ABS_PATH_RE.test(launchClean) ? "要填完整路徑，例如 D:\\ComfyUI\\run_nvidia_gpu.bat" : "";
+  const invalid = !name.trim() || !urlClean || !!idError || !!urlError || !!launchError;
+
+  const pickLaunch = async () => {
+    setPicking(true);
+    try {
+      const r = await api.post("/api/comfy/pick-launch", { start: launchClean });
+      if (r && r.path) setLaunch(r.path);
+    } catch (err) {
+      toastError(err, "無法開啟選檔視窗");
+    } finally {
+      setPicking(false);
+    }
+  };
 
   const test = async () => {
     setTesting(true);
@@ -82,7 +99,7 @@ function ServerDialog({ server, close }) {
 
   const save = async () => {
     setSaving(true);
-    const entry = { id: effectiveId, name: name.trim(), url: urlClean, enabled };
+    const entry = { id: effectiveId, name: name.trim(), url: urlClean, enabled, ...(launchClean ? { launch: launchClean } : {}) };
     const next = isNew ? [...servers, entry] : servers.map((s) => (s.id === server.id ? entry : s));
     const saved = await saveSettings({ comfy: { servers: next } });
     if (!saved) {
@@ -114,6 +131,11 @@ function ServerDialog({ server, close }) {
     <${Field} label="位址" error=${urlError}
       hint="本機用 http://127.0.0.1:8000；另一台電腦可用區網 IP 或 Tailscale 網址。ComfyUI 需加上 --listen 才接受其他電腦連線">
       <${TextInput} mono value=${url} placeholder="http://127.0.0.1:8000" onChange=${(v) => { setUrl(v); setResult(null); }} />
+    <//>
+    <${Field} label="啟動程式（選填）" error=${launchError}
+        hint="ComfyUI 沒開時，卡片上的「啟動 ComfyUI」會開啟這個程式（等同在檔案總管雙擊），例如 run_nvidia_gpu.bat。只能啟動這台電腦上的程式"
+        after=${html`<${Button} size="sm" kind="ghost" icon="folder" busy=${picking} onClick=${pickLaunch}>選擇<//>`}>
+      <${TextInput} mono value=${launch} spellcheck=${false} placeholder="D:\\ComfyUI\\run_nvidia_gpu.bat" onChange=${setLaunch} />
     <//>
     <${Toggle} checked=${enabled} onChange=${setEnabled} label="啟用"
       hint="停用的伺服器不會被檢查，也不會接到生成工作" />

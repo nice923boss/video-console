@@ -184,10 +184,11 @@ export function TopBar({ commands }) {
 function ComfyStatus({ server }) {
   const d = server.device;
   const pending = server.queue ? (server.queue.running || 0) + (server.queue.pending || 0) : 0;
-  const tone = !server.online ? "danger" : pending ? "accent" : "ok";
+  const launching = !server.online && !!server.launching;
+  const tone = launching ? "warn" : !server.online ? "danger" : pending ? "accent" : "ok";
   const title = server.online
     ? `${server.name}：已連線${server.latencyMs != null ? `，延遲 ${server.latencyMs} ms` : ""}${d ? `\n${d.name}` : ""}`
-    : `${server.name}：${server.error || "離線"}`;
+    : launching ? `${server.name}：正在啟動，等 ComfyUI 回應` : `${server.name}：${server.error || "離線"}`;
   return html`<button type="button" class="sb-item sb-btn" title=${title}
       onClick=${() => navigate("engines", { enginesTab: "comfy" })}>
     <${Dot} tone=${tone} pulse=${!!pending} />
@@ -195,7 +196,7 @@ function ComfyStatus({ server }) {
     ${server.online && d && d.vramTotal > 0 && html`<span class="sb-dim mono">
       VRAM ${fmtBytes(d.vramTotal - d.vramFree)} / ${fmtBytes(d.vramTotal)}</span>`}
     ${server.online && pending > 0 && html`<span class="sb-dim">佇列 ${pending}</span>`}
-    ${!server.online && html`<span class="sb-dim">離線</span>`}
+    ${!server.online && html`<span class="sb-dim">${launching ? "啟動中" : "離線"}</span>`}
   </button>`;
 }
 

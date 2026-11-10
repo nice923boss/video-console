@@ -144,6 +144,8 @@
 }
 
 .cs-offline > p:first-child { color: var(--tone-text); font-weight: 550; }
+.cs-launch { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.cs-launch > .mono { flex: 1; min-width: 0; overflow: hidden; font-size: calc(11.5px * var(--text-scale)); text-overflow: ellipsis; white-space: nowrap; }
 .cs-foot { padding: 8px 16px; border-top: 1px solid var(--border); font-size: calc(11.5px * var(--text-scale)); }
 
 /* Model list dialog */

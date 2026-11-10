@@ -148,6 +148,28 @@ def _hex(v: Any) -> str:
     return v.lower()
 
 
+def _opt_hex(v: Any) -> str | None:
+    return None if v in (None, "") else _hex(v)
+
+
+MAX_KT = 501  # one wipe mark per character of a 500-character caption, plus the end of the last one
+
+
+def _kt(v: Any) -> list[float] | None:
+    """KTV wipe marks: seconds after the caption's start at which each character of its trimmed text starts
+    turning the highlight colour, then the moment the last one is done (so one more than the characters).
+    Never earlier than the mark before; None: no wipe."""
+    if v is None:
+        return None
+    if not isinstance(v, list) or not 2 <= len(v) <= MAX_KT:
+        raise AppError("字幕關鍵幀格式不正確")
+    out: list[float] = []
+    for t in v:
+        f = round(_float(0, 36000)(t), 3)
+        out.append(max(f, out[-1]) if out else f)
+    return out
+
+
 CHROMA_DEFAULT = {"on": False, "color": "#00ff00", "similarity": 0.15, "blend": 0.1}
 
 
@@ -378,6 +400,7 @@ CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _s
                   "title": _bool,  # a title card (GR-10): burnt in like the rest, left out of the .srt
                   "track": _opt_id,  # one of project.captionTracks; None: the main 字幕 row
                   "pair": _opt_id,  # the caption this one translates (bilingual import); speech alignment times both
+                  "kt": _kt,  # KTV wipe marks (lyrics alignment, dragged on the timeline); see _kt
                   "disabled": _bool}
 # Sizes and distances are pixels on a 1080-high frame, as in the burnt-in ASS script.
 CAPTION_STYLE_FIELDS = {
@@ -408,6 +431,7 @@ CAPTION_STYLE_FIELDS = {
     "y": _opt_float(0, 1),
     "highlight": _bool,  # CP-13: each character turns highlightColor as the caption's voice-over says it
     "highlightColor": _hex,
+    "highlightOutline": _opt_hex,  # outline of the sung part of a KTV caption; None: the outline colour
 }
 # The look captions had before styles existed.
 DEFAULT_CAPTION_STYLE = {
@@ -416,6 +440,7 @@ DEFAULT_CAPTION_STYLE = {
     "shadow": True, "shadowColor": "#000000", "shadowOpacity": 0.4, "shadowDistance": 1.0, "shadowBlur": 0.0,
     "box": False, "boxColor": "#000000", "boxOpacity": 0.6, "boxPadding": 12.0, "align": "center",
     "marginV": 65.0, "marginH": 80.0, "x": None, "y": None, "highlight": False, "highlightColor": "#ffd400",
+    "highlightOutline": None,
 }
 MAX_CAPTION_STYLES = 50
 # The style a new project starts with as its default; mirrors the first PRESET_STYLES entry in

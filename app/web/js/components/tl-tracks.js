@@ -21,6 +21,7 @@ import { clickClip } from "./tl-clip-sel.js";
 import { trimDown } from "./tl-roll.js";
 import { liftShot, overlayToShot } from "./tl-lift.js";
 import { inView } from "./tl-view.js";
+import { KtvMarks, wipeMarks } from "./tl-ktv.js";
 
 // Row heights in CSS pixels; timeline.js uses the same numbers for the label column.
 export const VIDEO_H = 60;
@@ -353,6 +354,7 @@ export function rowCaptions(project, track) {
 
 export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
   const [drag, setDrag] = useState(null);
+  const [ktTip, setKtTip] = useState(null);
   const { pps } = ctx;
   const glossaryText = useStore((s) => s.settings && s.settings.glossary);
   const glossary = useMemo(() => parseGlossary(glossaryText), [glossaryText]);
@@ -384,7 +386,7 @@ export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
         if (!free && taken.some((sp) => Math.abs(sp.e - next.start) < 1e-3 || Math.abs(sp.s - next.end) < 1e-3)) {
           text += "，碰到相鄰字幕（按住 Shift 可重疊）";
         }
-        setDrag({ id: cap.id, ...next, tip: { t: mode === "r" ? next.end : next.start, text } });
+        setDrag({ id: cap.id, mode, ...next, tip: { t: mode === "r" ? next.end : next.start, text } });
       },
       onEnd: (moved, ev, cancelled) => {
         setDrag(null);
@@ -406,7 +408,8 @@ export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
     const member = castMember(project, cap.speaker);
     const voice = member ? voiceState(project, cap) : null;
     const typos = glossary.length ? glossaryHits(cap.text, glossary) : [];
-    const cls = ["tl-cap", sel && "is-selected", drag && drag.id === cap.id && "is-dragging", voice === "stale" && "is-stale",
+    const kt = wipeMarks(project, cap);
+    const cls = ["tl-cap", kt && "has-kt", sel && "is-selected", drag && drag.id === cap.id && "is-dragging", voice === "stale" && "is-stale",
       cap.disabled && "is-off", typos.length && "has-typo"].filter(Boolean).join(" ");
     const who = member ? `${member.name || "未命名"}，${VOICE_STATES[voice].label}\n` : "";
     const bound = cap.shot ? project.shots.findIndex((s) => s.id === cap.shot) : -1;
@@ -420,10 +423,12 @@ export function CaptionTrack({ project, ctx, editSel, track = "main" }) {
       ${typos.length > 0 && html`<${Icon} name="alert" size=${11} class="tl-cap-typo" />`}
       ${member && html`<b class="tl-cap-who">${member.name || "未命名"}</b>`}
       <span class="tl-cap-text">${text}</span>
+      ${kt && html`<${KtvMarks} cap=${cap} kt=${kt} pps=${pps} offset=${cur.mode === "l" ? cur.start - cap.start : 0}
+        active=${sel && ctx.tool === "select"} snapper=${ctx.snapper} onTip=${setKtTip} />`}
       <${Handles} onDown=${(e, side) => begin(e, cap, side)} />
     </div>`;
   })}
-  <${Tip} tip=${drag && drag.tip} pps=${pps} />`;
+  <${Tip} tip=${(drag && drag.tip) || ktTip} pps=${pps} />`;
 }
 
 // ---------------------------------------------------------------- soundtrack lane

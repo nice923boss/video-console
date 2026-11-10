@@ -28,7 +28,7 @@ import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.j
 import {
   MARKER_COLORS, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
   markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet, slipFrame,
-  stabilizeSet, togglePictureHidden, transcribeShot,
+  stabilizeSet, togglePictureHidden, transcribeShot, extendCaption, extendSelRow,
 } from "./tl-commands.js";
 import { autoGradeShot } from "./grade-panel.js";
 import { liftSelected, dropSelected } from "./tl-lift.js";
@@ -459,6 +459,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.dropDown": on((p, c, sel) => dropSelected(p, c, sel, (t) => shotIndexAt(p, c, t))),
     "edit.toggleEnabled": on(toggleEnabled),
     "edit.addCaption": () => addCaption(),
+    "edit.extendCaption": on(extendCaption),
+    "edit.extendAllCaptions": on(extendSelRow),
     "edit.markerAdd": on(markerAdd),
     "edit.markerColor": on(markerColor),
     "edit.markerNext": () => centerOn(markerJump(dataRef.current.project, 1)),

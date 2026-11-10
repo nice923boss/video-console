@@ -64,6 +64,8 @@ const BUILT_IN = [
   cmd("edit", "edit.dropDown", "把上層軌的片段移回畫面軌", ["mod+alt+arrowdown"]),
   cmd("edit", "edit.toggleEnabled", "啟用或停用選取的片段", ["v"]),
   cmd("edit", "edit.addCaption", "在播放頭新增字幕", ["alt+c"]),
+  cmd("edit", "edit.extendCaption", "選取的字幕延長到下一句的開頭", ["e"]),
+  cmd("edit", "edit.extendAllCaptions", "整列字幕延長到下一句的開頭（選取字幕所在的列，沒選就是字幕列）", []),
   cmd("edit", "edit.importSrt", "匯入 SRT 字幕", []),
   cmd("edit", "edit.importBilingual", "匯入雙語字幕", []),
   cmd("edit", "edit.transcribe", "語音轉字幕：選取鏡頭或播放頭所在鏡頭的原聲", []),

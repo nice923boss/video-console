@@ -8,7 +8,7 @@ import { fileUrl } from "../lib/format.js";
 import { clipIndexAt, clipSpeed, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged, shownCaptions } from "../lib/caption-style.js";
-import { litCount, fillCaption } from "../lib/karaoke.js";
+import { litCount, fillCaption, ktvMarks, fillKtv, paintKtv } from "../lib/karaoke.js";
 import { releaseFocus } from "../lib/keys.js";
 import { filterMarkup, isNeutral } from "../lib/grade.js";
 import { chromaMarkup } from "../lib/chroma.js";
@@ -172,6 +172,7 @@ export function createEngine(host, hooks = {}) {
   let lastPic = 0;
   let scale = 1; // preview resolution: 1, 2 (half) or 4 (quarter)
   let capKey = "";
+  let ktvCells = []; // [{start, cells}]: the KTV captions drawn now, repainted every frame (lib/karaoke.js)
   let legacy = 52;
   let shiftCache = { project: null, height: 0, shifts: new Map() }; // dragShifts() for this project and size
   let drag = null;
@@ -408,24 +409,30 @@ export function createEngine(host, hooks = {}) {
       const s = resolveStyle(project, c, legacy);
       const at = anchorOf(s, c);
       const point = at && { x: at.x, y: at.y + (shifts.get(c.id) || 0) / 1080 };
-      return { c, s, point, row: ZONES.includes(c.position) ? c.position : "bottom", lit: s.highlight ? litCount(project, c, t) : null };
+      const kt = s.highlight ? ktvMarks(c) : null; // KTV lyrics wipe; else CP-13 voice karaoke
+      return { c, s, point, row: ZONES.includes(c.position) ? c.position : "bottom", kt,
+        lit: s.highlight && !kt ? litCount(project, c, t) : null };
     });
-    const key = JSON.stringify(looks.map((k) => [k.c.id, k.row, k.c.text, k.s, k.point, k.lit]));
-    if (key === capKey) return;
-    capKey = key;
-    ZONES.forEach((z) => zones[z].replaceChildren());
-    caps.querySelectorAll(":scope > .pl-cap").forEach((n) => n.remove());
-    for (const look of looks) {
-      const node = el("div", "pl-cap", look.point ? caps : zones[look.row]);
-      node.style.cssText = blockCss(look.s, look.point);
-      const text = el("span", "pl-cap-text", node);
-      text.style.cssText = textCss(look.s);
-      fillCaption(text, look.c.text.trim(), look.lit, look.s); // lit: CP-13 karaoke
-      node.addEventListener("pointerdown", (e) => startDrag(e, node, look));
+    const key = JSON.stringify(looks.map((k) => [k.c.id, k.row, k.c.text, k.s, k.point, k.lit, k.kt, k.c.start]));
+    if (key !== capKey) {
+      capKey = key;
+      ktvCells = [];
+      ZONES.forEach((z) => zones[z].replaceChildren());
+      caps.querySelectorAll(":scope > .pl-cap").forEach((n) => n.remove());
+      for (const look of looks) {
+        const node = el("div", "pl-cap", look.point ? caps : zones[look.row]);
+        node.style.cssText = blockCss(look.s, look.point);
+        const text = el("span", "pl-cap-text", node);
+        text.style.cssText = textCss(look.s);
+        if (look.kt) ktvCells.push({ start: look.c.start, cells: fillKtv(text, look.c.text.trim(), look.kt, look.s) });
+        else fillCaption(text, look.c.text.trim(), look.lit, look.s); // lit: CP-13 karaoke
+        node.addEventListener("pointerdown", (e) => startDrag(e, node, look));
+      }
+      ZONES.forEach((z) => {
+        zones[z].style.cssText = zonePad(z, looks.filter((k) => !k.point && k.row === z).map((k) => k.s));
+      });
     }
-    ZONES.forEach((z) => {
-      zones[z].style.cssText = zonePad(z, looks.filter((k) => !k.point && k.row === z).map((k) => k.s));
-    });
+    for (const k of ktvCells) paintKtv(k.cells, t - k.start);
   }
 
   // Dragging a caption: it leaves its row, follows the pointer and is dropped at a new anchor. A press

@@ -22,6 +22,7 @@ const FOLDER_LABEL = {
 
 function stateOf(st, server) {
   if (server.enabled === false) return { tone: "neutral", label: "已停用" };
+  if (st && st.launching && !st.online) return { tone: "warn", label: "啟動中" };
   if (!st || !st.checked) return { tone: "neutral", label: "尚未檢查" };
   return st.online ? { tone: "ok", label: "在線" } : { tone: "danger", label: "離線" };
 }
@@ -100,6 +101,15 @@ function ServerCard({ server, st, index, count, onMove, onToggle, onRemove }) {
   const state = stateOf(st, server);
   const online = st && st.online && server.enabled !== false;
   const dev = st && st.device;
+  const launching = !!(st && st.launching);
+  const start = async () => {
+    try {
+      await api.post(`/api/comfy/${enc(server.id)}/launch`);
+      toast(`正在啟動「${server.name}」，連上後卡片會自動變成在線`);
+    } catch (err) {
+      toastError(err, "無法啟動 ComfyUI");
+    }
+  };
   const recheck = async () => {
     setBusy(true);
     await refreshOne(server.id);
@@ -111,6 +121,8 @@ function ServerCard({ server, st, index, count, onMove, onToggle, onRemove }) {
       onClick: () => navigate("engines", { enginesTab: "workflows", wfCheck: { sid: server.id, at: Date.now() } }) },
     { label: "釋放顯示卡記憶體", icon: "zap", disabled: !online, onClick: () => serverAction(server, "free") },
     { label: "中斷目前的工作", icon: "stop", disabled: !online, onClick: () => serverAction(server, "interrupt") },
+    { label: "啟動 ComfyUI", icon: "play", disabled: online || launching || !server.launch || server.enabled === false,
+      onClick: start },
     { label: "在瀏覽器開啟 ComfyUI", icon: "external", onClick: () => window.open(server.url, "_blank", "noopener") },
     { label: server.enabled === false ? "啟用" : "停用", icon: "power", onClick: onToggle },
     { label: "往前移", icon: "chevron-up", disabled: index === 0, onClick: () => onMove(-1) },
@@ -124,7 +136,7 @@ function ServerCard({ server, st, index, count, onMove, onToggle, onRemove }) {
         <b>${server.name}</b>
         <span class="mono dim" title=${server.url}>${server.url}</span>
       </div>
-      <${Badge} tone=${state.tone === "ok" ? "ok" : state.tone === "danger" ? "danger" : "neutral"}>${state.label}<//>
+      <${Badge} tone=${["ok", "danger", "warn"].includes(state.tone) ? state.tone : "neutral"}>${state.label}<//>
       ${index === 0 && html`<${Badge} tone="neutral" title="路由設成「自動」時，依順序選第一台在線且模型齊全的伺服器">優先<//>`}
       <span class="grow"></span>
       <${IconButton} icon="refresh" title="重新檢查" disabled=${busy || server.enabled === false} onClick=${recheck} />
@@ -153,8 +165,15 @@ function ServerCard({ server, st, index, count, onMove, onToggle, onRemove }) {
       : html`<div class="cs-body cs-offline">
           ${server.enabled === false
             ? html`<p class="dim">已停用，不會接到生成工作。</p>`
-            : html`<p class=${st && st.checked ? "danger-text" : "dim"}>${(st && st.error) || "尚未檢查"}</p>
-              <p class="dim">請確認 ComfyUI 已啟動、位址與連接埠正確；另一台電腦需以 --listen 啟動 ComfyUI。</p>`}
+            : html`<p class=${launching ? "" : st && st.checked ? "danger-text" : "dim"}>
+                ${launching ? "正在啟動，等 ComfyUI 回應…" : (st && st.error) || "尚未檢查"}</p>
+              ${server.launch
+                ? html`<div class="cs-launch">
+                    <${Button} kind="primary" icon="play" busy=${launching} onClick=${start}>${launching ? "啟動中" : "啟動 ComfyUI"}<//>
+                    <span class="dim mono" title=${server.launch}>${server.launch}</span>
+                  </div>`
+                : html`<p class="dim">請確認 ComfyUI 已啟動、位址與連接埠正確；另一台電腦需以 --listen 啟動 ComfyUI。
+                    按「編輯」填入啟動程式，就能從這裡直接開啟。</p>`}`}
         </div>`}
     ${st && st.checked && html`<footer class="cs-foot dim">上次檢查：${fmtRelTime(st.checked)}</footer>`}
   </article>`;

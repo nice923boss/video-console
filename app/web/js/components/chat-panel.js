@@ -13,8 +13,8 @@ import { grabFrame } from "../lib/scope-frame.js";
 import { Button, IconButton, TextArea, Spinner } from "./ui.js";
 import { Icon } from "./icons.js";
 import { toast, toastError } from "./toast.js";
-import { DOC_ACCEPT, useProjectDocs, uploadDocs, mentionAt, matchDocs, mentionedDocs, MentionMenu, DocsDrawer }
-  from "./chat-docs.js";
+import { DOC_ACCEPT, LYRICS_TEMPLATE, useProjectDocs, uploadDocs, mentionAt, matchDocs, mentionedDocs, MentionMenu,
+  DocsDrawer } from "./chat-docs.js";
 
 const HISTORY = 20; // the server keeps the last 20 messages
 const MAX_FRAMES = 2; // vc/agentlook.py MAX_FRAMES
@@ -27,6 +27,7 @@ const TOOL_LABEL = {
   edit: "剪輯指令",
   import_bilingual: "匯入雙語字幕",
   align_captions: "語音對齊字幕",
+  align_lyrics: "歌詞對齊（KTV）",
   transcribe: "語音轉字幕",
   job_status: "查看工作進度",
   undo: "復原",
@@ -44,6 +45,7 @@ const EXAMPLES = [
   "照 @修改意見.docx 修改字幕",
   "列出目前的字幕，找出錯字並改正",
   "在 10 秒的位置分割所有軌道",
+  "用 @歌詞範例.txt 上 KTV 歌詞字幕",
 ];
 
 // pid -> { messages, run }; run is the turn in flight: { id, steps } (steps arrive as "chat" events).
@@ -289,6 +291,7 @@ export function ChatPanel({ project, onClose }) {
       ${!messages.length && html`<div class="chat-intro">
         <p>用一般的話交代要改什麼，助理會讀取專案、看畫面、剪輯與上字幕。每次修改都是一個「AI 助理：…」復原步驟，可以按復原取消。</p>
         <p>客戶的劇本、修改意見、參考圖：拖到這個面板或按上傳，存進專案文件，訊息裡打 ＠ 選檔案。相機按鈕會附上目前的預覽畫面。</p>
+        <p>KTV 歌詞字幕：<a href=${LYRICS_TEMPLATE} download="歌詞範例.txt">下載歌詞範例</a>，照格式換成你的歌詞後拖進來，再說「用 ＠檔名 上 KTV 歌詞字幕」。</p>
         ${!llmOn && html`<p class="chat-warn">尚未開啟文字模型，請先到「引擎 › 文字模型」開啟。
           <${Button} size="sm" onClick=${() => navigate("engines", { enginesTab: "llm" })}>前往設定<//></p>`}
         <p class="dim">例如：</p>

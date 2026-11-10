@@ -1,11 +1,14 @@
 // Caption rows on the edit timeline: the main 字幕 row, then one row per caption track (project.captionTracks, top to
-// bottom; the bilingual import adds 中文 above English). Each row hides on its own, and its menu times the row's
-// captions to the speech in the clips (vc/align.py), or renames or removes an added row.
+// bottom; the bilingual import adds 中文 above English). Each row hides on its own, runs every caption on to the next
+// one's start (closing the gaps between lines), and its menu times the row's captions to the speech in the clips
+// (vc/align.py), or renames or removes an added row.
 import { html } from "../lib/h.js";
 import { api } from "../lib/api.js";
 import { ops } from "../lib/actions.js";
 import { openMenu, confirmDialog, promptDialog } from "./overlay.js";
 import { IconButton } from "./ui.js";
+import { extendRow } from "./tl-commands.js";
+import { keyHint } from "../lib/keymap.js";
 import { toast, toastError } from "./toast.js";
 import { CaptionTrack, CAPTION_H, rowCaptions } from "./tl-tracks.js";
 
@@ -43,17 +46,22 @@ function menuBtn(project, t) {
   return html`<${IconButton} icon="more-v" size=${14} title="這條字幕軌的選項" onClick=${(e) => openMenu(e, items)} />`;
 }
 
+// track: "main" or a caption track id.
+const extendBtn = (project, track) => html`<${IconButton} icon="skip-forward" size=${14}
+  title=${`整列字幕延長到下一句的開頭，補掉句子之間的空檔${keyHint("edit.extendAllCaptions")}`}
+  onClick=${() => extendRow(project, track)} />`;
+
 // row, label, lane, eyeBtn and setTrack are the timeline's own row helpers (components/timeline.js).
 export function captionRows({ project, ctx, editSel, tracks, row, label, lane, eyeBtn, setTrack }) {
   const body = (track) => lane("tl-lane-caption",
     html`<${CaptionTrack} project=${project} ctx=${ctx} editSel=${editSel} track=${track} />`);
   const mainHidden = !!tracks.captionsHidden;
   const main = row("captions", CAPTION_H, html`
-    ${label("captions", "字幕", html`${eyeBtn(mainHidden,
+    ${label("captions", "字幕", html`${extendBtn(project, "main")}${eyeBtn(mainHidden,
       () => setTrack("captionsHidden", mainHidden ? "顯示字幕軌" : "隱藏字幕軌"))}${menuBtn(project, null)}`)}
     ${body("main")}`, { hidden: mainHidden });
   return [main, ...(project.captionTracks || []).map((t) => row(`ct:${t.id}`, CAPTION_H, html`
-    ${label("captions", t.name || "字幕", html`${eyeBtn(!!t.hidden,
+    ${label("captions", t.name || "字幕", html`${extendBtn(project, t.id)}${eyeBtn(!!t.hidden,
       () => ops([{ op: "captionTrack.update", id: t.id, patch: { hidden: !t.hidden } }],
         { label: `${t.hidden ? "顯示" : "隱藏"}字幕軌「${t.name}」` }))}${menuBtn(project, t)}`)}
     ${body(t.id)}`, { hidden: !!t.hidden }))];

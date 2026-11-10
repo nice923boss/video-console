@@ -80,8 +80,10 @@ A shot's freeze still is 5 seconds unless the freeze edit gets length (seconds).
 - import_bilingual puts a Chinese/English parallel text onto two caption rows (Chinese above, English below). \
 When the user attached a file, call it without text. english "double" keeps two English lines, "single" joins \
 them into one. align true then times the captions to the speech in the clips.
-- transcribe, align_captions and some edits start background jobs that take minutes. Start them, tell the user \
-the job was started and that the result appears when it finishes; do not poll job_status in a loop.
+- align_lyrics makes KTV lyric captions: it times the song's lyrics, one sung line per row, to the singing on the timeline and puts them on the 歌詞上 and 歌詞下 rows with a blue wipe, replacing what those rows had. The song must already be on the timeline, with picture (a video or a background image) lasting until the song ends. When the user attached the lyrics or mentioned the document, call it with doc (or without text for an attachment); lyrics typed in the message go in text unchanged, every line in order. Section tags such as [Chorus] and lines starting with # are left out. Lines it could not hear come back switched off: tell the user which ones to check.
+- transcribe, align_captions, align_lyrics and some edits start background jobs that take minutes. Start them, tell the user \
+the job was started and that the result appears when it finishes, with a notice from the app; you are not told when \
+it finishes, so do not promise to report back, and do not poll job_status in a loop.
 - Seeing the picture: view_frame shows the shot on the timeline at a time through its colour grade and the \
 adjustment layers, as pictures in the next message. Captions, titles, upper-track clips, masks and transitions \
 are not drawn on it: read those with list_captions or timeline. Look before you judge how a shot looks, and say \
@@ -181,6 +183,11 @@ TOOLS = [
            "replace": {"type": "boolean"}, "align": {"type": "boolean"}}),
     _tool("align_captions", "Queue a background job that moves one caption row's captions onto the matching "
           "speech in the clips (the row below that shares their times follows).", {"track": STR}, ("track",)),
+    _tool("align_lyrics", "Queue a background job that times a song's lyrics to the singing on the timeline and "
+          "puts them as KTV captions (blue wipe) on the 歌詞上 and 歌詞下 rows, replacing those rows. text: the "
+          "lyrics, one sung line per row; omit to use the user's attachment or the one document they mentioned; doc: "
+          "a project document's name. language: a Whisper code such as zh, en or ja (default: guessed from the text).",
+          {"text": STR, "doc": STR, "language": STR}),
     _tool("transcribe", "Queue a background job that turns one video shot's speech into captions.",
           {"shotId": STR}, ("shotId",)),
     _tool("job_status", "State and progress of one background job.", {"id": STR}, ("id",)),
@@ -312,7 +319,7 @@ class Agent:
                 raise AppError(f"附件太長（上限 {MAX_TEXT} 字）", 413)
             name = str(attachment.get("name") or "附件")[:120]
             messages[-1]["content"] += (f"\n\n[Attached file \"{name}\", {len(text)} characters. import_bilingual "
-                                        f"uses it when called without text. Beginning:]\n{text[:PREVIEW]}")
+                                        f"and align_lyrics use it when called without text. Beginning:]\n{text[:PREVIEW]}")
         notes, texts, images = self._mentioned(pid, data.get("docs"))
         messages[-1]["content"] += notes
         if not attachment and len(texts) == 1:
@@ -580,6 +587,16 @@ class Agent:
 
     def _t_align_captions(self, turn: _Turn, args: dict) -> dict:
         return self._route("POST", f"/api/projects/{turn.pid}/captions/align", {"track": args.get("track")})
+
+    def _t_align_lyrics(self, turn: _Turn, args: dict) -> dict:
+        if args.get("doc"):
+            text = projdocs.text_of(projdocs.find(self._app.store.project_dir(turn.pid), str(args["doc"])))
+        else:
+            text = args.get("text") or turn.attachment
+        if not text:
+            raise AppError("沒有歌詞：使用者沒有附加檔案或提到文件，也沒有給 text")
+        return self._route("POST", f"/api/projects/{turn.pid}/captions/lyrics",
+                           {"text": text, "language": args.get("language")})
 
     def _t_transcribe(self, turn: _Turn, args: dict) -> dict:
         return {"job": self._app.jobs.submit("transcribe", turn.pid, str(args.get("shotId") or "") or None, {})}

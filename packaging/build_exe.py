@@ -55,7 +55,7 @@ def build() -> Path:
         "--add-data", f"{APP / 'web'};web", "--add-data", f"{APP / 'workflows'};workflows",
         "--add-data", f"{stamp};vc",
         "--add-data", f"{APP / 'vc' / 'providers' / 'model_lists.json'};vc/providers",
-        "--add-data", f"{APP / 'vc' / 'deps.json'};vc",
+        "--add-data", f"{APP / 'vc' / 'deps.json'};vc", "--add-data", f"{APP / 'vc' / 'lyrics_worker.py'};vc",
         "--add-data", f"{APP / 'vc' / 'review_kit'};vc/review_kit", *cascades,
         # PyMuPDF imports pandas (Table.to_pandas), PIL (Pixmap.pil_save) and fontTools (Document.subset_fonts)
         # inside functions the app never calls; followed, pandas drags scipy, torch, transformers and gradio in

@@ -80,13 +80,15 @@ class SttClient:
         _require_protocol(report.get("protocol"))
         return {**report, "folder": str(folder), "python": str(python)}
 
-    def run(self, job_file: Path, ctl: JobControl, on_progress: Callable[[float, str], None]) -> dict:
-        """Run one transcription; returns the worker's "done" message. Cancelling kills the whole tree."""
+    def run(self, job_file: Path, ctl: JobControl, on_progress: Callable[[float, str], None],
+            script: Path | None = None, label: str = "轉錄") -> dict:
+        """Run one transcription (or another worker script of the same protocol with STS's Python, such as
+        lyrics_worker.py); returns the worker's "done" message. Cancelling kills the whole tree."""
         folder = self.folder()
         python = self.python(folder)
         log_path = job_file.with_name("worker.log")
         with open(log_path, "wb") as err:
-            proc = _start([str(python), str(folder / WORKER), str(job_file)], folder, err)
+            proc = _start([str(python), str(script or folder / WORKER), str(job_file)], folder, err)
             stop = threading.Event()
             timed_out = threading.Event()
 
@@ -108,7 +110,7 @@ class SttClient:
                     if not msg:
                         continue
                     if msg.get("t") == "progress":
-                        on_progress(float(msg.get("percent") or 0) / 100, str(msg.get("message") or "轉錄中"))
+                        on_progress(float(msg.get("percent") or 0) / 100, str(msg.get("message") or f"{label}中"))
                     elif msg.get("t") == "done":
                         done = msg
                     elif msg.get("t") == "error":
@@ -118,11 +120,11 @@ class SttClient:
                 stop.set()
         ctl.check()
         if timed_out.is_set():
-            raise AppError(f"轉錄超過 {RUN_TIMEOUT // 60} 分鐘，已停止", 504)
+            raise AppError(f"{label}超過 {RUN_TIMEOUT // 60} 分鐘，已停止", 504)
         if done is None:
-            reason = error or f"轉錄程式異常結束（結束碼 0x{code & 0xFFFFFFFF:08X}）"
+            reason = error or f"{label}程式異常結束（結束碼 0x{code & 0xFFFFFFFF:08X}）"
             log.warning("stt worker failed (%s): %s", code, _tail(log_path.read_bytes()))
-            raise AppError(f"Speech-to-subtitle 轉錄失敗：{reason}", 502)
+            raise AppError(f"Speech-to-subtitle {label}失敗：{reason}", 502)
         return done
 
 

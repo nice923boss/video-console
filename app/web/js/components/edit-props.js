@@ -23,7 +23,8 @@ import { Inspector } from "./inspector.js";
 import { VoicePanel } from "./voice-panel.js";
 import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
-import { addKeyframe, isStabilized, stabilizeClip } from "./tl-commands.js";
+import { addKeyframe, isStabilized, stabilizeClip, extendCaption } from "./tl-commands.js";
+import { extendTarget } from "../lib/caption-extend.js";
 import { StabilizeSettings } from "./stab-panel.js";
 import { P5TextField } from "./p5-panel.js";
 import { clipKeysHint, keyHint, keyLabel, undoKeyText } from "../lib/keymap.js";
@@ -459,6 +460,7 @@ function PositionField({ project, cap }) {
 function CaptionPanel({ project, cap }) {
   const len = cap.end - cap.start;
   const text = (cap.text || "").trim();
+  const extend = extendTarget(project, cap.id);
   const glossaryText = useStore((s) => s.settings && s.settings.glossary);
   const glossary = useMemo(() => parseGlossary(glossaryText), [glossaryText]);
   const typos = glossary.length ? glossaryHits(cap.text, glossary) : [];
@@ -502,6 +504,9 @@ function CaptionPanel({ project, cap }) {
             const start = round(clock.time, 3);
             updateCaption(cap.id, { start, end: round(start + len, 3) }, "移動字幕");
           }}>移到播放頭<//>
+        <${Button} size="sm" icon="skip-forward" disabled=${!!extend.error}
+          title=${extend.error || `結尾延長到同一列下一句的開頭${keyHint("edit.extendCaption")}`}
+          onClick=${() => extendCaption(project, null, { type: "caption", id: cap.id })}>延長到下一句<//>
       </div>
     </div>
     <div class="insp-foot">

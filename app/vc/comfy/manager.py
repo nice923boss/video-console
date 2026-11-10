@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -24,6 +26,8 @@ log = logging.getLogger("vc.comfy")
 HEALTH_INTERVAL = 10.0
 OBJECT_INFO_TTL = 600.0
 OFFLINE_GRACE = 60.0
+LAUNCH_WATCH = 180.0  # how long 啟動 keeps re-checking a server it just started
+LAUNCH_POLL = 3.0
 
 ProgressFn = Callable[[float, str], None]
 PreviewFn = Callable[[str, bytes], None]
@@ -292,6 +296,7 @@ class ComfyManager:
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_payload: list | None = None
+        self._launching: set[str] = set()
 
     # ---------------------------------------------------------------- config
     def servers(self) -> list[dict]:
@@ -395,6 +400,7 @@ class ComfyManager:
         with self._lock:
             states = dict(self._states)
             hubs = dict(self._hubs)
+            launching = set(self._launching)
         out = []
         for s in self.servers():
             st = states.get(s["id"]) or {"id": s["id"], "online": False, "checked": 0, "error": "尚未檢查",
@@ -402,7 +408,8 @@ class ComfyManager:
                                          "queue": {"running": 0, "pending": 0}}
             hub = hubs.get(s["id"])
             out.append({**st, "name": s["name"], "url": s["url"], "enabled": s.get("enabled", True),
-                        "hasToken": bool(self.token(s["id"])), "feed": bool(hub and hub.connected)})
+                        "hasToken": bool(self.token(s["id"])), "feed": bool(hub and hub.connected),
+                        "launching": s["id"] in launching})
         return out
 
     def _publish(self) -> None:
@@ -433,6 +440,54 @@ class ComfyManager:
         started = time.monotonic()
         stats = client.system_stats(timeout=8)
         return {"ok": True, "latencyMs": int((time.monotonic() - started) * 1000), **summarize_stats(stats)}
+
+    # ---------------------------------------------------------------- launch
+    def launch(self, sid: str) -> dict:
+        """Open the server's launch program (like double-clicking it), then re-check until ComfyUI answers."""
+        server = self.server(sid)
+        path = str(server.get("launch") or "")
+        if not path:
+            raise AppError(f"「{server['name']}」還沒設定啟動程式，請按「編輯」填入", 400)
+        if sys.platform != "win32":
+            raise AppError("啟動程式目前只支援 Windows", 501)
+        if not server.get("enabled", True):
+            raise AppError(f"「{server['name']}」已停用，請先啟用再啟動", 409)
+        target = Path(path)
+        if not target.is_file():
+            raise AppError(f"找不到啟動程式：{path}", 404)
+        with self._lock:
+            if sid in self._launching:
+                return {"launching": True}
+            if (self._states.get(sid) or {}).get("online"):
+                raise AppError(f"「{server['name']}」已經在執行中", 409)
+            self._launching.add(sid)
+        try:
+            os.startfile(str(target), cwd=str(target.parent))
+        except OSError as exc:
+            with self._lock:
+                self._launching.discard(sid)
+            log.warning("Could not start %s for ComfyUI %s: %s", path, sid, exc)
+            raise AppError(f"無法開啟啟動程式：{exc.strerror or exc}", 500) from None
+        log.info("Started %s for ComfyUI %s", path, sid)
+        self._publish()
+        threading.Thread(target=self._watch_launch, args=(sid,), name=f"comfy-launch-{sid}", daemon=True).start()
+        return {"launching": True}
+
+    def _watch_launch(self, sid: str) -> None:
+        deadline = time.monotonic() + LAUNCH_WATCH
+        try:
+            while not self._stop.wait(LAUNCH_POLL) and time.monotonic() < deadline:
+                try:
+                    server = self.server(sid)
+                except AppError:
+                    return  # removed while starting
+                if self._check(server)["online"]:
+                    return
+                self._publish()
+        finally:
+            with self._lock:
+                self._launching.discard(sid)
+            self._publish()
 
     # ---------------------------------------------------------------- node info
     def object_info(self, sid: str, force: bool = False) -> dict:

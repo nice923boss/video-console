@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .. import providers
+from .. import folderpick, providers
 from ..comfy.export import comfy_json, comfy_zip, file_names
 from ..providers.base import duration_seconds
 from ..providers.catalog import UNUSABLE, model_status, same_line
@@ -21,6 +23,7 @@ log = logging.getLogger("vc.api")
 
 SID_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
 PROVIDER_TEST_TIMEOUT = 30
+LAUNCH_TYPES = [("啟動程式（*.bat、*.cmd、*.exe、*.lnk）", "*.bat;*.cmd;*.exe;*.lnk"), ("所有檔案", "*.*")]
 
 
 def provider_secret_names() -> set[str]:
@@ -143,6 +146,20 @@ def register(router: Router, app: App) -> None:
     @router.route("POST", "/api/comfy/{sid}/interrupt")
     def comfy_interrupt(req: Request) -> None:
         comfy.interrupt(req.params["sid"])
+
+    @router.route("POST", "/api/comfy/{sid}/launch")
+    def comfy_launch(req: Request) -> dict:
+        return comfy.launch(req.params["sid"])
+
+    @router.route("POST", "/api/comfy/pick-launch")
+    def comfy_pick_launch(req: Request) -> dict:
+        """The open-file dialog for a server's launch program; {path: ""} when canceled."""
+        if sys.platform != "win32":
+            raise AppError("只有 Windows 支援系統選檔視窗，請直接貼上啟動程式的路徑", 501)
+        start = str(req.json_object().get("start") or "").strip().strip('"')
+        folder = Path(start).parent if start and Path(start).suffix else (Path(start) if start else None)
+        chosen = folderpick.pick_files(folder, "選擇啟動 ComfyUI 的程式", LAUNCH_TYPES)
+        return {"path": chosen[0] if chosen else ""}
 
     # ------------------------------------------------------------------ workflow templates
     @router.route("GET", "/api/workflows")

@@ -160,6 +160,14 @@ def _validate(cfg: dict) -> None:
         s["url"] = url
         s["name"] = str(s.get("name") or s["id"])[:60]
         s["enabled"] = bool(s.get("enabled", True))
+        # launch: the program on this computer the card's 啟動 button opens (a .bat, .exe or shortcut), or none
+        launch = str(s.get("launch") or "").strip().strip('"')
+        if launch and not re.match(r"^([a-zA-Z]:[\\/]|\\\\)", launch):
+            raise AppError(f"ComfyUI 啟動程式要填完整路徑，例如 D:\\ComfyUI\\run_nvidia_gpu.bat：{launch}")
+        if launch:
+            s["launch"] = launch[:400]
+        else:
+            s.pop("launch", None)
     route_ids: set[str] = set()
     if not cfg["routes"]:
         raise AppError("至少需要保留一條運算路由")

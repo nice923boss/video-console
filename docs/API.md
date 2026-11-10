@@ -55,7 +55,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `settings` | `width`、`height`（自動對齊 8 的倍數）、`fps`（1~60，整數或 29.97；29.97 輸出成 30000/1001）、`aspect`、`fadeIn`、`fadeOut`、`captionStyle`（專案預設字幕樣式的 id，指向 `captionStyles` 裡的一個樣式；新專案預設帶一個「常用：白字細黑框」樣式並設為預設，樣式庫開了自動加入且有樣式時改帶樣式庫） |
 | `shots` | 鏡頭陣列，順序就是時間軸順序 |
 | `takes` | `{take_id: 版本}`，每支匯入或生成的影片、圖片都是一個版本。影片版本與素材可能有 `preview2`、`preview4`：1/2、1/4 解析度預覽檔的路徑（`media/thumbs/<id>_p2.mp4`），由 `preview-files` 產生，只供預覽播放，輸出一律用原檔。有聲音的版本與素材另有 `previewAudio`：預覽播放聲音用的 16 位元立體聲 48 kHz WAV（`media/thumbs/<id>_a.wav`），由 `audio-files` 產生。以 1 以外速度播放的聲音另有 `previewAudioSpeeds`：`{速度鍵: 路徑}`，速度鍵是四捨五入到小數 4 位、去掉尾端 0 的速度（`0.5`、`1.3333`），檔案（`media/thumbs/<id>_a_<速度鍵>.wav`）用輸出同一組 atempo 變速、音高不變 |
-| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title, track, pair, disabled}`，時間是序列上的秒數。`track` 是所在的字幕軌（`captionTracks` 的 id；沒有或指向已不存在的軌道時算在主字幕軌）。`pair` 是這句所翻譯那句字幕的 id（雙語匯入時英文指向中文），語音對齊時兩句一起移動。`disabled: true` 時保留位置，但不顯示、不輸出、不寫進 SRT。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
+| `captions` | 字幕陣列 `{id, start, end, text, position, speaker, style, x, y, shot, title, track, pair, disabled, kt}`，時間是序列上的秒數。`kt` 是 KTV 刷字關鍵幀（6.3 節）：去掉頭尾空白後每個字開始變色的時間，加上最後一個字唱完的時間（比字數多 1 個），都是相對字幕開始的秒數，不會比前一個早；字幕樣式開了 `highlight` 且個數對得上字數時，預覽與輸出把唱到的部分刷成 `highlightColor`（外框 `highlightOutline`）。用 `caption.update` 改文字時，留下的字保留原本的關鍵幀，換掉的字平分被換掉那段的時間；只改 `start`（修剪開頭）時關鍵幀留在時間軸上的原位；整句移動時一起移動。`track` 是所在的字幕軌（`captionTracks` 的 id；沒有或指向已不存在的軌道時算在主字幕軌）。`pair` 是這句所翻譯那句字幕的 id（雙語匯入時英文指向中文），語音對齊時兩句一起移動。`disabled: true` 時保留位置，但不顯示、不輸出、不寫進 SRT。`title: true` 是標題字卡（GR-10）：照樣燒進輸出，但不寫進 SRT。`shot` 是對應的鏡頭，同一鏡頭可以對應多句。設了 `x`、`y`（拖曳過）的字幕在同時出現又互相蓋到時，輸出與預覽會依開始時間把後出現的往畫面中央方向移開 |
 | `captionTracks` | 主字幕軌以外的字幕軌 `{id, name, hidden}`。陣列順序是時間軸上由上到下的順序，主字幕軌永遠在最上面。同時出現在畫面下方的字幕，越下面的軌道越靠近畫面底邊（雙語匯入的英文軌在中文軌下面，所以英文在最下一行、中文在上一行）；畫面上方與中間的字幕相反，越上面的軌道越靠近邊緣。`hidden: true` 的軌道預覽與輸出都不顯示；主字幕軌的開關是 `tracks.captionsHidden` |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
 | `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed`。`denoise` 是降噪 `{on, strength, low, mid, high, sample}`：數值 0~1（預設 0.6、1、1、1），`sample` 是原始檔裡只有雜音的一段 `{from, to}`（秒，至少 0.25 秒，超過 10 秒只取前 10 秒），`null` 時還沒取樣、不降噪。`dereverb` 是去回音 `{on, strength, release, dryness, bass, body, tone}`：`body`、`tone` 是 -1~1，其餘 0~1（預設強度 0.6、release 0.3、dryness 0.5，其餘 0）。`channel` 是只播原始檔的哪一個聲道 `{stream, index}`（第幾條音訊串流、其中第幾個聲道，0~63），`null` 時播第一條音訊串流混成的立體聲。`on: false` 保留設定但不處理；有取樣的降噪、去回音或指定聲道時，預覽與輸出播 `media/clean/` 裡處理好的檔（`voice-clean`） |
@@ -489,6 +489,7 @@ p5-comfyui-animation 做的透明 WebM 可以連結它的 p5 頁面，列出片�
 | `ingest` | 匯入檔案 | 由 upload 端點建立，不要直接送 |
 | `transcribe` | 語音轉字幕 | `{}`，需要 `shotId` |
 | `align` | 語音對齊字幕（6.2 節） | `{"track": "main" 或字幕軌 id}`，不需要 `shotId` |
+| `lyrics` | 歌詞對齊（KTV，6.3 節） | `{"text": 歌詞, "language"}`，不需要 `shotId` |
 | `export` | 輸出影片 | 見第 7 節 |
 | `package` | 打包 ZIP | `{"includeVideos", "includeExport", "fullBackup"}` |
 | `voice` | 文字轉配音 | 依配音引擎設定 |
@@ -576,6 +577,20 @@ vc.wait(out["job"]["id"])                                     # align: true 時�
 - 結果寫成一個 undo 步驟（標籤「語音對齊字幕」）；工作的 `result` 是 `{"message", "heard", "unheard"}`。聲音裡完全辨識不到語音時不修改字幕，`message` 會說明。
 - 送出時檢查：軌道不存在 404；軌道上沒有可對齊的字幕、時間軸上沒有片段、Speech-to-subtitle 找不到時 400。和 ComfyUI、語音轉字幕共用同一個執行位置。
 - 限制：比對依時間先後進行，影片內容的順序和字幕順序不同（段落對調、整段重複）時，那幾段會對錯或對不上。
+
+### 6.3 歌詞對齊（KTV）
+
+`POST /api/projects/{pid}/captions/lyrics {"text": 歌詞, "language": "zh"}` → `{"job": {...}}`（等同 `POST /api/jobs {"kind": "lyrics", "pid", "payload": {"text", "language"}}`）。
+
+- `text`：一行一句，空行、段落標記（整行是 `[Verse 1]`、`【副歌】`、`［間奏］` 這類括號）與行首是 `#`（或全形 `＃`）的說明行略過，行內連續空白合成一個。格式範例檔在 `GET /assets/lyrics-template.txt`（AI 助理面板與專案文件清單都有下載按鈕），給模型或使用者照著填。上限 20000 字、300 句、每句 60 字。`language` 是 Whisper 語言代碼，不給時依文字猜：有假名 `ja`、有韓文 `ko`、有漢字 `zh`，其他 `en`。
+- 把時間軸目前的聲音（和輸出相同的混音）轉成 16 kHz 單聲道，用 Speech-to-subtitle 的 Python 執行 stable-ts（模型 `medium`，需要 NVIDIA GPU）把已知歌詞對到歌聲，拿到每個字的時間。
+- 每句歌詞成為一句字幕，`kt` 是每個字開始刷色的時間（2 節 `captions`）。奇數句放「歌詞上」軌、樣式「KTV 上行（置左）」，偶數句放「歌詞下」軌、樣式「KTV 下行（置右）」；軌道、樣式沒有時新增，有同名的就沿用。這兩軌原有的字幕先刪掉（綁在上面的配音一起移除），所以重跑會整批取代。
+- 換頁時間依參考 KTV 影片量測：一段（歌曲開頭，或停唱超過 6 秒後的第一句）的前兩句在第一句開唱前 3 秒出現；唱完的句子保留到同一列的下一句接手（上列在下一句開唱前 1.2 秒換，下列在中間那句上列開唱前 0.2 秒換），每句唱完至少留 0.3 秒；一段最後兩句在最後一個字唱完後 2 秒消失。
+- 模型聽不出位置的句子（被壓到幾乎沒有時間）排在前後聽得出的句子之間的空檔，設成 `disabled: true` 等人檢查；離同句其他字太遠的字拉回旁邊、被壓成零秒的字分到時間，這些句子算「修正過」。
+- 結果寫成一個 undo 步驟（標籤「歌詞對齊」）；工作的 `result` 是 `{"message", "lines", "unheard", "repaired"}`，`unheard`、`repaired` 是句子編號（從 1 起算）。整首都聽不出歌詞時 422，不修改專案。
+- 送出時檢查：沒有歌詞、只有段落標記、超過上限 400（太長 413）；時間軸上沒有畫面，或歌曲比畫面長超過 0.5 秒 400（聲音只混到畫面結束，請先拉長背景圖）；Speech-to-subtitle 找不到 400。和 ComfyUI、語音轉字幕共用同一個執行位置。
+- 需要：Speech-to-subtitle 的 Python 裝了 stable-ts（`pip install stable-ts`），第一次執行會下載約 1.5 GB 的 `medium` 模型。
+- 對齊後可在時間軸上拖曳每句字幕的關鍵幀調整刷字速度，或直接改字（關鍵幀跟著字走，2 節）。
 
 ## 7. 輸出
 
@@ -674,6 +689,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/projects/{pid}/captions.srt` | 匯入 SRT 字幕（第 6 節） |
 | POST | `/api/projects/{pid}/captions/bilingual` | 匯入中英對照文字成兩軌字幕（6.1 節） |
 | POST | `/api/projects/{pid}/captions/align` | 語音對齊一條字幕軌（6.2 節） |
+| POST | `/api/projects/{pid}/captions/lyrics` | 歌詞對齊成 KTV 字幕（6.3 節） |
 | POST | `/api/projects/{pid}/voice-clean` | 音訊片段的降噪、去回音、指定聲道處理檔 `{"id"}`：沒有符合目前設定的檔就先處理完才回應，回 `{"stems": {file, from, to}}`，不需處理時 `null`。檔案是 48 kHz 16 位元 WAV，依序是原音、降噪後、再去回音後各一組聲道（指定聲道時各 1 聲道，否則各 2），涵蓋片段前後各多 2 秒的原始檔（`from`、`to` 是原始檔秒數）。強度、Low／Mid／High、低頻衰減、厚度、明亮在播放時混合，改這些不用重新處理；同一片段有新的請求時舊的回 499 |
 | POST | `/api/projects/{pid}/voice-channels` | 音訊片段原始檔每條音訊串流、每個聲道在片段範圍內的音量 `{"id"}`，回 `{"streams": [{"stream", "channels": [{"peaks", "peakDb", "rmsDb"}]}]}`：`peaks` 是 200 格 0~100（對應 -60~0 dBFS），整段無聲的聲道 dB 為 `null`；同專案有新的請求時舊的回 499 |
 | POST | `/api/projects/{pid}/chat` | AI 助理對話一輪（第 11 節），等模型做完才回應 |
@@ -769,13 +785,14 @@ print(out["reply"])
 | `auto_stabilize` | 量晃動，自動防抖（3.7.2 節），一個復原步驟，標籤「AI 助理：自動防抖」，回每個鏡頭的 `decision`、`jitter`、`reason` 與工作 id |
 | `import_bilingual` | 匯入中英對照（6.1 節）。`doc` 指定一份專案文件；`text`、`doc` 都不給時用附件或訊息提到的唯一一份文字文件 |
 | `align_captions`、`transcribe` | 送出語音對齊、語音轉字幕工作 |
+| `align_lyrics` | 送出歌詞對齊（KTV）工作：`text` 歌詞、`doc` 專案文件名稱（讀文件內容當歌詞）、`language`；都沒給時用使用者附加的檔案 |
 | `job_status` | 查一個背景工作 |
 | `undo` | 復原最新一步，只限 AI 助理做的步驟（標籤以「AI 助理：」開頭，或這一輪做的剪輯指令、匯入、自動調色、自動防抖） |
 | `view_frame` | 看剪輯線上的畫面：`at`（序列秒數）、`shot` 加 `t`（鏡頭內秒數），或 `times`（最多 6 個序列秒數，用來比較鏡頭）。畫面套用鏡頭調色與調整圖層，縮成 768 px 寬，在下一則訊息當圖片給模型；字幕、標題字卡、上層軌、遮罩與轉場不會畫上。回 `frames`：每格的 `shot`、`name`、`t`（鏡頭內秒數）、`fileTime`（原始檔秒數）、`grades`（套用的調色數）、`at`（序列秒數，鏡頭不在序列時改為 `note`），畫面關閉的鏡頭另有 `off` |
 | `list_documents` | 專案文件清單（名稱、`text` 或 `image`、大小） |
 | `read_document` | 讀一份專案文件：`offset` 起 `limit` 字（預設 6000，最多 9000），回 `text`、`length`（總字數）、`offset`，還沒讀完時另有 `next`（下一頁的起點）。圖片文件在下一則訊息當圖片給模型 |
 | `app_docs` | 讀 APP 自己的文件：`doc` 是 `api`（本文件，預設）或 `manual`（使用說明）。不給 `section`、`find` 時回標題清單；`section` 是標題編號（如 `"3.7"`）或標題文字，長的章節用 `offset` 翻頁；`find` 回含這些字的行（最多 30 行） |
-| `call_api` | 在 APP 內部呼叫一個 HTTP 路由，給其他工具沒涵蓋的事：`method`（`GET`、`POST`、`PATCH`）、`path`（`{pid}` 代表開啟中的專案，可帶查詢字串）、`body`。可讀：開啟中專案底下的路由，以及 `/api/styles`、`/api/title-templates`、`/api/jobs`、`/api/system/fonts`。可寫：開啟中專案的 `ops`、`edit`、`analyze`、`auto-color`、`auto-stabilize`、`captions/align`、`captions/bilingual`、`script`、`script/apply`、`voice-channels`、`voice-clean`、`media/{mid}/p5/link`，`PATCH` 修改意見的決定，以及 `POST /api/jobs`（例如輸出）。復原、歷史紀錄、選檔視窗、上傳、檔案總管與對話本身不開放。`ops` 要自己給項目 id，回應前 12000 字給模型 |
+| `call_api` | 在 APP 內部呼叫一個 HTTP 路由，給其他工具沒涵蓋的事：`method`（`GET`、`POST`、`PATCH`）、`path`（`{pid}` 代表開啟中的專案，可帶查詢字串）、`body`。可讀：開啟中專案底下的路由，以及 `/api/styles`、`/api/title-templates`、`/api/jobs`、`/api/system/fonts`。可寫：開啟中專案的 `ops`、`edit`、`analyze`、`auto-color`、`auto-stabilize`、`captions/align`、`captions/bilingual`、`captions/lyrics`、`script`、`script/apply`、`voice-channels`、`voice-clean`、`media/{mid}/p5/link`，`PATCH` 修改意見的決定，以及 `POST /api/jobs`（例如輸出）。復原、歷史紀錄、選檔視窗、上傳、檔案總管與對話本身不開放。`ops` 要自己給項目 id，回應前 12000 字給模型 |
 
 **專案文件**：每個專案的 `docs/` 資料夾（`GET /api/projects/{pid}/docs` 回傳的 `folder`），直接複製進去的檔案也算。支援 `.docx`（段落、表格一列一行用 ` | ` 隔開、Word 註解附在最後）、`.pdf`（逐頁讀文字層，掃描檔沒有文字層時回說明）、`.txt`、`.md`、`.srt`、`.vtt`、`.csv`、`.tsv`、`.json`、`.ass`（UTF-8、UTF-8 BOM、UTF-16、CP950 自動判斷）與圖片（`.png`、`.jpg`、`.jpeg`、`.webp`、`.bmp`、`.gif`）。隱藏檔、Office 暫存檔（`~$` 開頭）與其他類型不列出。
 

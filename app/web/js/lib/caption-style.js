@@ -12,6 +12,7 @@ export const DEFAULT_STYLE = {
   shadow: true, shadowColor: "#000000", shadowOpacity: 0.4, shadowDistance: 1, shadowBlur: 0,
   box: false, boxColor: "#000000", boxOpacity: 0.6, boxPadding: 12, align: "center",
   marginV: 65, marginH: 80, x: null, y: null, highlight: false, highlightColor: "#ffd400",
+  highlightOutline: null,
 };
 export const MAX_STYLES = 50;
 

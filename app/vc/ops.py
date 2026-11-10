@@ -10,6 +10,7 @@ import copy
 import re
 from typing import Any, Callable
 
+from . import ktv
 from .linked import follow_ops
 from .p5src import clean_link as _p5_link
 from .opfields import (
@@ -291,6 +292,8 @@ def _list_update(key: str, fields: dict) -> Callable[[dict, dict], dict | None]:
         if key == "captions" and patch.get("track") and _find(p.get("captionTracks") or [], patch["track"]) < 0:
             raise AppError("字幕軌道不存在")
         item = p[key][i]
+        if key == "captions":
+            patch = ktv.follow(item, patch)  # the KTV wipe stays on its words through edits and trims
         undo = _update_item(item, op, patch, fields)
         p[key].sort(key=lambda it: it.get("start", 0))
         return {"op": f"{_SINGULAR[key]}.update", "id": item["id"], **undo}

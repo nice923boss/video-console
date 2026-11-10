@@ -1,4 +1,5 @@
-"""Caption imports that go beyond one .srt: a 中英對照 text onto two caption tracks, and speech alignment."""
+"""Caption imports that go beyond one .srt: a 中英對照 text onto two caption tracks, speech alignment, and KTV
+lyrics timed to the song."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -48,3 +49,12 @@ def register(router: Router, app: App) -> None:
         captions paired with them) to what is said on the timeline."""
         data = req.json_object()
         return {"job": app.jobs.submit("align", req.params["pid"], None, {"track": str(data.get("track") or "main")})}
+
+    @router.route("POST", "/api/projects/{pid}/captions/lyrics")
+    def captions_lyrics(req: Request) -> dict:
+        """{text: the lyrics, one sung line per row, language: optional Whisper code}: queue lyrics alignment,
+        which times each line to the singing on the timeline and puts it, with KTV wipe marks, on the 歌詞上 and
+        歌詞下 caption tracks (replacing what they had)."""
+        data = req.json_object()
+        payload = {"text": data.get("text"), "language": data.get("language")}
+        return {"job": app.jobs.submit("lyrics", req.params["pid"], None, payload)}

@@ -223,8 +223,11 @@ def split_ops(g: dict, t: float, local: float, project: dict) -> list[dict]:
         return [{"op": "adjust.update", "id": item["id"], "patch": {"length": r3(local), **key_patch(item, head_keys)}},
                 {"op": "adjust.add", "item": {**item, "id": new_id("adj"), "start": t, "length": r3(g["length"] - local),
                                               **key_patch(item, tail_keys)}}]
+    tail = {**item, "id": new_id("c"), "start": t, "shot": None}
+    if isinstance(item.get("kt"), list):  # the KTV wipe stays where it was on the timeline (vc/ktv.py)
+        tail["kt"] = [r3(max(0.0, float(k) - local)) for k in item["kt"]]
     return [{"op": "caption.update", "id": item["id"], "patch": {"end": t}},
-            {"op": "caption.add", "item": {**item, "id": new_id("c"), "start": t, "shot": None}}]
+            {"op": "caption.add", "item": tail}]
 
 
 def split(project: dict, t: float, kind: str = "shot", item_id: str | None = None) -> dict:

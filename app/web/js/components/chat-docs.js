@@ -11,6 +11,8 @@ import { toast, toastError } from "./toast.js";
 
 // vc/projdocs.py TEXT_EXTS, DOC_EXTS and util.IMAGE_EXTS
 export const DOC_ACCEPT = ".docx,.pdf,.txt,.md,.srt,.vtt,.csv,.tsv,.json,.ass,.png,.jpg,.jpeg,.webp,.bmp,.gif";
+// The lyrics format align_lyrics reads (vc/lyrics.py parse_lyrics), to fill in and upload as a project document.
+export const LYRICS_TEMPLATE = "/assets/lyrics-template.txt";
 const MAX_FILE = 100 * 1024 ** 2; // vc/projdocs.py MAX_FILE
 const MAX_MENTIONS = 8; // vc/agent.py MAX_DOCS
 const docsPath = (pid) => `/api/projects/${encodeURIComponent(pid)}/docs`;
@@ -109,6 +111,8 @@ export function DocsDrawer({ pid, docs, refresh, onMention, onUpload }) {
       <${IconButton} icon="refresh" size=${14} title="重新讀取" onClick=${refresh} />
       <${IconButton} icon="folder" size=${14} title="開啟 docs 資料夾（直接放進去的檔案也算）" onClick=${reveal} />
       <${IconButton} icon="upload" size=${14} title="上傳文件" onClick=${onUpload} />
+      <a class="icon-btn" href=${LYRICS_TEMPLATE} download="歌詞範例.txt" title="下載歌詞範例（KTV 歌詞字幕的格式）"
+        aria-label="下載歌詞範例"><${Icon} name="download" size=${14} /></a>
     </div>
     ${docs.length ? html`<ul class="chat-docs-list">
       ${docs.map((d) => html`<li>

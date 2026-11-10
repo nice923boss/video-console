@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Callable
 
-from . import karaoke
+from . import karaoke, ktv
 from .fontmetrics import measurer, registry_fonts
 from .opfields import DEFAULT_CAPTION_STYLE
 
@@ -102,6 +102,10 @@ def _style_lines(key: str, s: dict) -> list[str]:
     if s["box"]:
         box = _colour(s["boxColor"], s["boxOpacity"])
         lines.append(line(f"{key}B", "&HFF000000", box, box, 3, s["boxPadding"], 0))
+    if s.get("highlight"):  # the sung part of a KTV caption (ktv.py), drawn over the text on layer 4
+        sung = _colour(s["highlightColor"], s["opacity"])
+        lines.append(line(f"{key}K", sung, _colour(s.get("highlightOutline") or s["outlineColor"]), "&HFF000000",
+                          1, outline, 0))
     return lines
 
 
@@ -233,11 +237,29 @@ def caption_ass(project: dict, captions: list[dict], play_x: int, legacy_size: i
             events.append(f"Dialogue: 1,{times},{key}B,,0,0,0,,{{{place}}}{text}")
         if s["shadow"]:
             events.append(f"Dialogue: 2,{times},{key}S,,0,0,0,,{{{place}{_shadow_tags(s)}}}{text}")
-        if s.get("highlight"):  # CP-13: lit as the voice-over says each character
+        kt = ktv.marks(cap) if s.get("highlight") else None
+        if s.get("highlight") and kt is None:  # CP-13: lit as the voice-over says each character
             lit = _fill_tags(1, s["highlightColor"], s["opacity"]) + _fill_tags(2, s["color"], s["opacity"])
             text = karaoke.karaoke_text(project, cap, lines, lit) or text
         events.append(f"Dialogue: 3,{times},{key}T,,0,0,0,,{{{place}}}{text}")
+        if kt is not None:
+            width = laid[i][4]
+            lefts = [_line_left(s, point, width(line), play_x) for line in lines]
+            pad = (float(s["outlineWidth"]) if s["outline"] else 0.0) + 2
+            alpha = _colour(s["color"], s["opacity"])[2:4]  # the see-through lines end, the line shows
+            events += ktv.overlay_events(cap, kt, lines, lefts, width, pad, place, times, f"{key}K",
+                                         f"\\1a&H{alpha}&\\3a&H00&")
     return styles, events
+
+
+def _line_left(s: dict, point: tuple[float, float] | None, w: float, play_x: int) -> float:
+    r"""Where libass puts the left edge of a line w pixels wide: in its row between the side margins, or at a
+    dragged caption's anchor (\an4/5/6 align each line on it)."""
+    if point is None:
+        margin = float(s["marginH"])
+        return {"left": margin, "right": play_x - margin - w}.get(s["align"], (play_x - w) / 2)
+    x = point[0] * play_x
+    return {"left": x, "right": x - w}.get(s["align"], x - w / 2)
 
 
 def _fill_tags(n: int, hex_rgb: str, opacity: float) -> str:

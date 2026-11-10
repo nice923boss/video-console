@@ -568,6 +568,17 @@
 .tl-cap.is-stale { background: var(--warn-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 60%, transparent); }
 .tl-cap.is-stale .tl-cap-who { color: var(--warn); }
 .tl-cap-typo { flex: none; margin-right: 4px; color: var(--danger); pointer-events: none; }
+
+/* KTV wipe marks (components/tl-ktv.js): short ticks along the bottom; on the selected caption each character
+   sits between its ticks and the ticks can be dragged. */
+.tl-kt { position: absolute; inset: 0; pointer-events: none; }
+.tl-kt-mark { position: absolute; bottom: 0; width: 1px; height: 5px; background: color-mix(in srgb, var(--blue) 70%, transparent); }
+.tl-kt.is-active .tl-kt-mark { top: 0; height: auto; width: 9px; margin-left: -4px; background: none; pointer-events: auto; cursor: ew-resize; }
+.tl-kt.is-active .tl-kt-mark::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: var(--accent); }
+.tl-kt.is-active .tl-kt-mark:hover::after { left: 3px; width: 3px; }
+.tl-kt-ch { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; }
+.tl-kt-ch.is-odd { background: color-mix(in srgb, var(--blue) 16%, transparent); }
+.tl-cap.has-kt.is-selected > .tl-cap-text { visibility: hidden; }
 .tl-cap.has-typo .tl-cap-text { text-decoration: underline wavy var(--danger); text-underline-offset: 3px; }
 
 /* Audio */

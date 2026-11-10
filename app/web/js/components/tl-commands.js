@@ -10,8 +10,9 @@ import { newId, round, clamp, fmtTime } from "../lib/format.js";
 import { clipIndexAt, clipSpeed, audioLength, audioMedia, videoTake } from "../lib/sequence.js";
 import { slipRange } from "../lib/roll.js";
 import { showQueued, submitJob, upsertJobs } from "../lib/jobs-actions.js";
-import { keyHint } from "../lib/keymap.js";
+import { keyHint, undoKeyText } from "../lib/keymap.js";
 import { readPref } from "../lib/prefs.js";
+import { extendTarget, extendAllTargets, captionRow } from "../lib/caption-extend.js";
 import { toast } from "./toast.js";
 import { multiAudio } from "./tl-audio-sel.js";
 import { multiClip, CLIP_SEL_TYPES } from "./tl-clip-sel.js";
@@ -72,6 +73,26 @@ export function toggleEnabled(project, clips, sel) {
   ops(items.map((x) => ({ op: `${cur.type}.update`, id: x.id, patch: { [field]: off } })),
     { label: `${off ? "停用" : "啟用"}${what}` });
 }
+
+// The selected caption runs on to where the next caption on its row starts.
+export function extendCaption(project, clips, sel) {
+  const to = extendTarget(project, sel && sel.type === "caption" ? sel.id : null);
+  if (to.error) return warn(to.error);
+  ops([{ op: "caption.update", id: sel.id, patch: { end: to.end } }], { label: "延長字幕到下一句" });
+}
+
+// Every caption on one row runs on to where the next one starts, as one undo step: the row header button
+// (components/tl-captions.js) names the row; the key takes the selected caption's row, else the main 字幕 row.
+export async function extendRow(project, track) {
+  const list = extendAllTargets(project, track);
+  if (!list.length) return warn("這一列的字幕之間沒有空檔可以補");
+  const res = await ops(list.map(({ id, end }) => ({ op: "caption.update", id, patch: { end } })),
+    { label: `整列字幕延長到下一句（${list.length} 句）` });
+  if (res) toast(`已把 ${list.length} 句字幕延長到下一句的開頭，${undoKeyText()}一次還原`, { level: "success" });
+}
+
+export const extendSelRow = (project, clips, sel) =>
+  extendRow(project, captionRow(project, sel && sel.type === "caption" ? sel.id : null));
 
 // ---------------------------------------------------------------- volume
 const fmtDb = (v) => (v <= 0.0011 ? "靜音" : `${(20 * Math.log10(v)).toFixed(1)} dB`);

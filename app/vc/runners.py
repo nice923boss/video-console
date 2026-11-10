@@ -17,6 +17,7 @@ from .costs import CostLedger
 from .jobs import JobControl
 from .llm import LLMClient
 from .localjobs import LOCAL_KINDS, LocalJobs, number
+from .lyrics import LyricsJobs
 from .media import Media
 from .opfields import MAX_REFS, MAX_SEED, snap16
 from .p5render import P5Jobs
@@ -115,6 +116,7 @@ class Runners:
         self._voice = VoiceJobs(store, Audio8Voice(settings), media, VoAI(secrets))
         self._stt = SttJobs(store, SttClient(settings), media)
         self._align = AlignJobs(store, SttClient(settings), media)
+        self._lyrics = LyricsJobs(store, SttClient(settings), media)
         self._p5 = P5Jobs(store, media)
         self._llm = LLMClient(settings, secrets)
 
@@ -129,6 +131,8 @@ class Runners:
             return self._stt.prepare(project, shot_id)
         if kind == "align":
             return self._align.prepare(project, payload)
+        if kind == "lyrics":
+            return self._lyrics.prepare(project, payload)
         if kind == "p5render":
             return self._p5.prepare(project, payload)
         if kind == "upscale":
@@ -153,6 +157,8 @@ class Runners:
             return self._stt.execute(ctl)
         if ctl.kind == "align":
             return self._align.execute(ctl)
+        if ctl.kind == "lyrics":
+            return self._lyrics.execute(ctl)
         if ctl.kind == "p5render":
             return self._p5.execute(ctl)
         work =self._store.project_dir(ctl.pid) / "media" / "cache" / f"job-{ctl.id}"
@@ -167,7 +173,7 @@ class Runners:
             shutil.rmtree(work, ignore_errors=True)
 
     def after_restart(self, job: dict) -> str:
-        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe", "align", "p5render"):
+        if job.get("kind") in (*LOCAL_KINDS, "voice", "transcribe", "align", "lyrics", "p5render"):
             return "restart"
         remote = job.get("remote") or {}
         if remote.get("type") == "comfy":

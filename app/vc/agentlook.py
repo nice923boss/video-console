@@ -35,7 +35,7 @@ BLIND_NOTE = ("[A picture was left out here: the current model cannot take pictu
 # call_api: writes the assistant may make in the open project (paths after /api/projects/{pid}); undo, history,
 # file pickers, uploads, Explorer and the chat itself stay with the user. The SRT import reads a raw body and the
 # revision apply route runs the assistant itself, so neither is here.
-API_WRITES = re.compile(r"^/(ops|edit|analyze|auto-color|auto-stabilize|captions/align|captions/bilingual"
+API_WRITES = re.compile(r"^/(ops|edit|analyze|auto-color|auto-stabilize|captions/align|captions/bilingual|captions/lyrics"
                         r"|script|script/apply|voice-channels|voice-clean|media/[^/]+/p5/link)$")
 API_PATCHES = re.compile(r"^/revisions/[^/]+/items/[^/]+$")
 API_GLOBAL_GETS = re.compile(r"^/api/(styles|title-templates|jobs|jobs/[^/]+|system/fonts)$")

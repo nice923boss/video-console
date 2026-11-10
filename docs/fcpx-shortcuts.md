@@ -47,6 +47,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 |---|---|---|---|---|---|
 | Enable/Disable | V | 啟用或停用選取的片段 | V | V | 停用的鏡頭保留位置，預覽與輸出是黑畫面加靜音 |
 | Add Caption | Option-C | 在播放頭新增字幕 | Alt+C | Alt+C | 新增一句 2 秒的字幕 |
+| 無 | 無 | 選取的字幕延長到下一句的開頭 | E | E | 結尾接到同一列下一句的開頭。Final Cut Pro 的 E 是 Append to Storyline，Video Console 沒有這個指令 |
 | Add Marker | M | 在播放頭新增標記 | M | M | |
 | Add Marker and Modify | Option-M | 切換播放頭處標記的顏色 | Alt+M | 無 | Final Cut Pro 是新增並開編輯視窗；Video Console 沒有標記編輯視窗，顏色與刪除在標記的右鍵選單 |
 | Next Marker | Control-' | 跳到下一個標記 | F8 | 無 | Control 鍵的指令不設鍵，見文件開頭 |

@@ -158,6 +158,7 @@ export const KIND_LABEL = {
   ingest: "匯入", export: "輸出影片", package: "打包", voice: "配音",
   transcribe: "語音轉字幕",
   align: "語音對齊字幕",
+  lyrics: "歌詞對齊（KTV）",
 };
 
 export const STATUS_LABEL = {
