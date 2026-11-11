@@ -459,8 +459,8 @@ p5-comfyui-animation 做的透明 WebM 可以連結它的 p5 頁面，列出片�
 
 | 端點 | 說明 |
 |---|---|
-| `GET /api/projects/{pid}/media/{mid}/p5` | 沒連結時回 `{"linked": false, "segment": 依檔名猜的片段代號, "page": 同專案其他素材連結的頁面}`；連結時回 `{"linked": true, "page", "segment", "file", "line", "texts": [{"file", "at", "line", "original", "text", "edited"}], "stale": [原始碼裡找不到的舊字串]}`，頁面讀不到時 `texts` 是空陣列並帶 `error` |
-| `POST /api/projects/{pid}/media/{mid}/p5/link` | `{"page": index.html 完整路徑, "segment": "M04"}` 連結（一個復原步驟，同一頁同一段重新連結時保留改過的字）；找不到頁面或 `SCENES.<segment>` 時 404；`page` 為 `""` 時取消連結 |
+| `GET /api/projects/{pid}/media/{mid}/p5` | 沒連結時回 `{"linked": false, "segment": 依檔名猜的片段代號, "page", "found"}`：同專案已連結的頁面或它旁邊的 .html（例如 three.html）畫得出這個片段時 `page` 是那一頁、`found` 為 true，否則 `page` 是同專案第一個連結的頁面；連結時回 `{"linked": true, "page", "segment", "file", "line", "texts": [{"file", "at", "line", "original", "text", "edited"}], "stale": [原始碼裡找不到的舊字串]}`，頁面讀不到時 `texts` 是空陣列並帶 `error` |
+| `POST /api/projects/{pid}/media/{mid}/p5/link` | `{"page": index.html 完整路徑, "segment": "M04"}` 連結（一個復原步驟，同一頁同一段重新連結時保留改過的字）。同專案其他還沒連結、檔名是片段代號（`M05.webm`）的影片，這一頁或同資料夾其他 .html 畫得出來的，也在同一個復原步驟連上，數量回在 `alsoLinked`；之後匯入素材庫的同類影片也會自動連結。找不到頁面或 `SCENES.<segment>` 時 404；`page` 為 `""` 時取消連結 |
 | `POST /api/projects/{pid}/pick-p5-page` | `{"start"}` 開系統選檔視窗，回 `{"page"}`（取消時 `""`）；只有 Windows，其他系統 501 |
 
 重算是 `p5render` 工作：`{"kind": "p5render", "pid", "payload": {"media": 素材 id, "texts": [{"at", "text"}]}}`，`texts` 給全部字串（改回原文的會略過）。用 Edge 或 Chrome 無頭模式依 `?id=<segment>&t=0` 開頁面，等 `window.READY`，逐格呼叫 `window.renderAt(t)`，長度取 `SEG.dur`（沒有時用素材長度），影格率用素材的 `fps`（預設 30），ffmpeg 編成 VP9 帶 alpha 的 WebM 後重新連結素材並更新 `p5.edits`，一個復原步驟（標籤「修改 p5 文字」，文字沒變時是「重算 p5 動畫」）。沒連結時 409，`at` 對不到原始碼的字串時 409，找不到瀏覽器或 ffmpeg 沒有 libvpx-vp9 時 503。頁面從網路載入 p5.js 時要能上網。
@@ -491,7 +491,7 @@ p5-comfyui-animation 做的透明 WebM 可以連結它的 p5 頁面，列出片�
 | `align` | 語音對齊字幕（6.2 節） | `{"track": "main" 或字幕軌 id}`，不需要 `shotId` |
 | `lyrics` | 歌詞對齊（KTV，6.3 節） | `{"text": 歌詞, "language"}`，不需要 `shotId` |
 | `export` | 輸出影片 | 見第 7 節 |
-| `package` | 打包 ZIP | `{"includeVideos", "includeExport", "fullBackup"}` |
+| `package` | 打包 ZIP（`fullBackup` 時標題為「匯出專案」） | `{"includeVideos", "includeExport", "fullBackup", "includeP5", "folder"}`：`fullBackup` 另外放進 docs/（AI 助理文件）、reviews/（審稿紀錄）、media/clean/ 裡仍在使用的人聲淨化檔；`includeP5`（預設 true，只在 `fullBackup` 時有效）把每個連結的 p5 頁面所在資料夾放進 `p5src/N/`（略過 node_modules、venv、__pycache__ 與隱藏檔，單一資料夾超過 2 GB 或找不到時略過並寫進工作備註），manifest.json 的 `p5Sources` 列出 `[{"from": 原資料夾, "dir": "p5src/N"}]`；`folder` 是這次存放的完整資料夾路徑（不改匯出資料夾設定，相對路徑 400），省略時存到匯出資料夾 |
 | `voice` | 文字轉配音 | 依配音引擎設定 |
 | `image`、`video` | ComfyUI 或雲端生成 | 依工作流程設定。`image` 可帶 `chainVideo: true`（完成後接著生影片）與 `chainUpscale: true`（先用 ComfyUI 放大範本放大，放大後的圖片成為鏡頭圖片再生影片，只在 `chainVideo` 時有效） |
 | `upscale`、`upscalevideo` | 放大 | 需要 video2x |
@@ -662,7 +662,9 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/settings/default-updates` | 回答「預設值已更新」提示：`{"apply": [項目, ...]}` 列出的換成新預設，其餘保留，回 `{"settings", "providers"}` |
 | GET／PUT | `/api/secrets` | API 金鑰（只回是否已設定與遮罩後的值） |
 | GET／POST | `/api/projects` | 專案列表／新增 `{"name", "settings", "starter"}` |
-| POST | `/api/projects/import?name=x.zip` | 匯入打包的 ZIP（本文為檔案） |
+| POST | `/api/projects/import?name=x.zip` | 匯入打包的 ZIP（本文為檔案），回 `{"project", "fullBackup", "files", "dropped", "p5Moved"}`：一定新增專案；`p5Moved` 是原本的 p5 頁面在這台電腦找不到、改連到包內 `p5src/` 副本的影片數；預覽檔（`preview2`、`preview4`、`previewAudio`、`previewAudioSpeeds`）不在包內，匯入時移除 |
+| POST | `/api/projects/pick-zip` | 開啟 Windows 選檔視窗（從匯出資料夾開始）選專案 ZIP，回 `{"path"}`（取消時 `""`）；非 Windows 501 |
+| POST | `/api/projects/import-file` | 匯入這台電腦上的 ZIP `{"path": 完整路徑}`，不另外複製上傳，原檔留在原處；回傳同 `/api/projects/import`。不是 .zip 時 415，相對路徑或找不到時 404 |
 | GET／DELETE | `/api/projects/{pid}` | 讀取／移到垃圾桶（有工作時 409）。DELETE 加 `?exports=1` 一併刪掉匯出資料夾裡這個專案輸出的檔，回 `{"removedExports", "exportsInUse"}`（被其他程式開著刪不掉的檔數），這些檔無法從垃圾桶還原 |
 | POST | `/api/projects/{pid}/open` | 設為最近開啟的專案 |
 | POST | `/api/projects/{pid}/duplicate` | 複製專案 `{"name": "第一版交稿"}`（可省略，最多 120 字，預設原名加「（副本）」），回傳 `{"project": {...}}`，鏡頭與字幕代號和原專案相同，`folder` 與原專案相同；輸出檔、版本紀錄與快取不複製 |

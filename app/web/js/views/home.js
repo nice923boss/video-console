@@ -13,7 +13,7 @@ import { openMenu, promptDialog, confirmDialog } from "../components/overlay.js"
 import { toast, toastError } from "../components/toast.js";
 import { openNewProject } from "../dialogs/new-project.js";
 import { openScriptImport } from "../dialogs/script-import.js";
-import { openExportDialog } from "../dialogs/export-dialog.js";
+import { openProjectExport } from "../dialogs/project-export.js";
 import { openBatchExport } from "../dialogs/batch-export.js";
 
 const enc = encodeURIComponent;
@@ -113,11 +113,6 @@ function folderMenu(e, f, count) {
   ]);
 }
 
-// Packaging works on the open project, so make this one current (staying on the home page) first.
-async function exportProject(pid) {
-  if (await openProject(pid, "home")) openExportDialog("package", { fullBackup: true });
-}
-
 function projectMenu(e, p, currentPid) {
   e.preventDefault();
   e.stopPropagation();
@@ -131,7 +126,7 @@ function projectMenu(e, p, currentPid) {
     { label: "重新命名…", icon: "pencil", onClick: () => renameProject(p, currentPid) },
     { label: "建立副本…", icon: "copy", onClick: () => duplicateProject(p.id) },
     { label: "移到資料夾…", icon: "folder", onClick: () => folderPicker(at, p, currentPid) },
-    { label: "匯出專案…", icon: "download", onClick: () => exportProject(p.id) },
+    { label: "匯出專案…", icon: "download", onClick: () => openProjectExport(p.id) },
     { divider: true },
     { label: "移到垃圾桶", icon: "trash", danger: true, onClick: () => deleteProject(p.id, p.name) },
   ]);
@@ -172,7 +167,7 @@ function Hero({ projects, jobs, comfy, lastProject }) {
       <div class="hero-actions">
         <${Button} kind="primary" icon="plus" onClick=${() => openNewProject()}>新增專案<//>
         <${Button} icon="file" onClick=${startFromScript}>從劇本開始<//>
-        <${Button} icon="upload" onClick=${pickProjectZip} title="匯入「打包專案」產生的 ZIP 檔，也可以直接把 ZIP 拖進視窗">匯入專案<//>
+        <${Button} icon="upload" onClick=${pickProjectZip} title="打開另一台電腦「匯出專案」產生的 ZIP，接著剪輯；也可以直接把 ZIP 拖進視窗">匯入專案<//>
         ${lastProject && html`<${Button} kind="ghost" icon="arrow-right" onClick=${() => openProject(lastProject.id)}
           title=${lastProject.name}>繼續「${lastProject.name}」<//>`}
       </div>

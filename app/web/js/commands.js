@@ -8,6 +8,7 @@ import { shotCover } from "./lib/sequence.js";
 import { VIEWS } from "./components/shell.js";
 import { openNewProject } from "./dialogs/new-project.js";
 import { openExportDialog } from "./dialogs/export-dialog.js";
+import { openProjectExport } from "./dialogs/project-export.js";
 import { openShortcuts } from "./dialogs/shortcuts.js";
 import { openEditHelp } from "./dialogs/edit-help.js";
 import { openTour } from "./dialogs/tour.js";
@@ -37,6 +38,7 @@ defineCommands([
   { id: "project:new", label: "新增專案" },
   { id: "project:starter", label: "從範例專案開始" },
   { id: "project:import", label: "匯入專案" },
+  { id: "project:export", label: "匯出專案" },
   { id: "project:script", label: "從劇本拆解鏡頭" },
   { id: "project:history", label: "版本紀錄" },
   { id: "project:folder", label: "開啟專案資料夾" },
@@ -80,6 +82,8 @@ function projectCommands(s) {
       run: () => openNewProject({ starter: true }) },
     { id: "project:import", group: "專案", label: "匯入專案…", icon: "upload", keywords: "zip 備份 還原 打包 import",
       run: () => pickProjectZip() },
+    has && { id: "project:export", group: "專案", label: "匯出專案…", icon: "download",
+      keywords: "zip 備份 移轉 換電腦 接力 export", run: () => openProjectExport() },
     has && { id: "project:script", group: "專案", label: "從劇本拆解鏡頭…", icon: "file", keywords: "script 劇本 匯入",
       run: () => openScriptImport() },
     has && { id: "project:history", group: "專案", label: "版本紀錄…", icon: "history", keywords: "還原 快照 history",

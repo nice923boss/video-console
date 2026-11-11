@@ -142,7 +142,19 @@ export async function duplicateProject(pid) {
   }
 }
 
-// Bring a .zip made by 打包專案 back in as a new project, then open it.
+async function openImported(res) {
+  const notes = [];
+  if (res.dropped) notes.push(res.fullBackup
+    ? `${res.dropped} 個版本或素材在匯出的電腦上就找不到檔案，沒有放進包內`
+    : `這是交付用的打包檔，未選用的 ${res.dropped} 個版本或素材不在包內`);
+  if (res.p5Moved) notes.push(`${res.p5Moved} 段 p5 動畫找不到原本的原始碼資料夾，改用包內的副本`);
+  toast(`已匯入「${res.project.name}」${notes.map((n) => `；${n}`).join("")}`,
+    { level: "success", duration: notes.length ? 8000 : null });
+  await openProject(res.project.id);
+  return res.project;
+}
+
+// Bring a .zip made by 匯出專案 or 打包專案 back in as a new project, then open it.
 export async function importProjectZip(file) {
   if (!/\.zip$/i.test(file.name)) {
     toast(`只能匯入 Video Console 打包的 ZIP 檔：${file.name}`, { level: "warn" });
@@ -154,10 +166,7 @@ export async function importProjectZip(file) {
       updateToast(id, { message: p < 1 ? `正在上傳 ${file.name}…` : `正在解開 ${file.name}…`, progress: p < 1 ? p : null });
     });
     dismissToast(id);
-    const note = res.dropped ? `；這是交付用的打包檔，未選用的 ${res.dropped} 個版本或素材不在包內` : "";
-    toast(`已匯入「${res.project.name}」${note}`, { level: "success", duration: res.dropped ? 8000 : null });
-    await openProject(res.project.id);
-    return res.project;
+    return await openImported(res);
   } catch (err) {
     dismissToast(id);
     toastError(err, "匯入專案失敗");
@@ -165,12 +174,37 @@ export async function importProjectZip(file) {
   }
 }
 
-export function pickProjectZip() {
+function browseProjectZip() {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = ".zip,application/zip";
   input.onchange = () => input.files[0] && importProjectZip(input.files[0]);
   input.click();
+}
+
+// The Windows open-file dialog lets the server read the ZIP where it is (a USB drive), so a big backup is not
+// uploaded again; the browser's file picker is the fallback off Windows or on an older server.
+export async function pickProjectZip() {
+  let path;
+  try {
+    path = (await api.post("/api/projects/pick-zip", {})).path;
+  } catch (err) {
+    if (err.status === 501 || err.status === 405 || err.status === 404) return browseProjectZip();
+    toastError(err, "無法開啟選檔視窗");
+    return null;
+  }
+  if (!path) return null;
+  const name = path.split(/[\\/]/).pop();
+  const id = toast(`正在匯入 ${name}…`, { duration: 0, progress: null });
+  try {
+    const res = await api.post("/api/projects/import-file", { path });
+    dismissToast(id);
+    return await openImported(res);
+  } catch (err) {
+    dismissToast(id);
+    toastError(err, "匯入專案失敗");
+    return null;
+  }
 }
 
 async function restoreDeleted(pid) {

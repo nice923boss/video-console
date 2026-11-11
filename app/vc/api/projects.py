@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import copy
 import shutil
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .. import edits, scriptsync, shake
+from .. import edits, folderpick, scriptsync, shake
 from ..cover import newly_covered
 from ..exportcheck import export_check
-from ..exportdir import remove_shared_exports
+from ..exportdir import export_root, remove_shared_exports
 from ..ops import apply_ops
 from ..pacing import break_down, fill_coverage, pace_notes
 from ..script import MAX_SHOTS, docx_to_text, normalize_shot, parse_script
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from ..app import App
 
 MAX_IMPORT = 32 * 1024 ** 3  # a full backup carries every take, so it may be far larger than one upload
+ZIP_TYPES = [("Video Console 專案 ZIP", "*.zip"), ("所有檔案", "*.*")]
 MAX_DOCX = 50 * 1024 ** 2
 
 
@@ -104,6 +107,18 @@ def register(router: Router, app: App) -> None:
         app.settings.set_last_project(project["id"])
         return {"project": project}
 
+    def import_zip(archive: Path, work: Path) -> dict:
+        """Unpack archive into work and adopt it as a new project (nothing is overwritten)."""
+        try:
+            work.mkdir(parents=True)
+            result = unpack_package(archive, work)
+            project = store.adopt(work, result["project"])
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        app.settings.set_last_project(project["id"])
+        return {"project": project, "fullBackup": result["fullBackup"], "files": result["files"],
+                "dropped": result["dropped"], "p5Moved": result["p5Moved"]}
+
     @router.route("POST", "/api/projects/import")
     def project_import(req: Request) -> dict:
         """Raw body: a .zip made by 打包專案. It always becomes a new project, so nothing is overwritten."""
@@ -114,15 +129,28 @@ def register(router: Router, app: App) -> None:
         archive = work.with_suffix(".zip")
         try:
             req.save_body(archive, MAX_IMPORT)
-            work.mkdir()
-            result = unpack_package(archive, work)
-            project = store.adopt(work, result["project"])
+            return import_zip(archive, work)
         finally:
             archive.unlink(missing_ok=True)
-            shutil.rmtree(work, ignore_errors=True)
-        app.settings.set_last_project(project["id"])
-        return {"project": project, "fullBackup": result["fullBackup"], "files": result["files"],
-                "dropped": result["dropped"]}
+
+    @router.route("POST", "/api/projects/pick-zip")
+    def project_pick_zip(req: Request) -> dict:
+        """The open-file dialog for a project ZIP, starting in the export folder; {path: ""} when canceled."""
+        if sys.platform != "win32":
+            raise AppError("只有 Windows 支援系統選檔視窗，請把 ZIP 檔拖進視窗匯入", 501)
+        start = export_root(str(app.settings.section("export").get("folder") or ""), app.paths.data)
+        chosen = folderpick.pick_files(start, "選擇要匯入的專案 ZIP", ZIP_TYPES)
+        return {"path": chosen[0] if chosen else ""}
+
+    @router.route("POST", "/api/projects/import-file")
+    def project_import_file(req: Request) -> dict:
+        """{path}: import a .zip on this computer (USB drive, shared folder) without uploading a copy."""
+        archive = Path(str(req.json_object().get("path") or "").strip().strip('"'))
+        if archive.suffix.lower() != ".zip":
+            raise AppError("只能匯入 Video Console 打包的 .zip 檔", 415)
+        if not archive.is_absolute() or not archive.is_file():
+            raise AppError(f"找不到 {archive.name}", 404)
+        return import_zip(archive, app.paths.tmp / new_id("import"))
 
     @router.route("GET", "/api/projects/{pid}")
     def project_get(req: Request) -> dict:

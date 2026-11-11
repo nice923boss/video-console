@@ -26,13 +26,37 @@ def _media(project: dict, mid: str) -> dict:
     return item
 
 
-def _suggested_page(project: dict) -> str:
-    """The page another clip of this project is linked to: animations of one video usually share a page."""
+def _suggestion(project: dict, name: str) -> dict:
+    """{page, found}: the page that draws this clip's segment next to a page the project already links
+    (index.html or three.html), found True; else the first linked page: animations of one video share a folder."""
+    link = p5src.project_link(project, name)
+    if link:
+        return {"page": link["page"], "found": True}
+    pages = p5src.linked_pages(project)
+    return {"page": pages[0] if pages else "", "found": False}
+
+
+def _unlinked_clips(project: dict, skip: str) -> dict[str, list[str]]:
+    """{segment: [media ids]} of the videos named after a segment (M04.webm) that have no p5 link yet."""
+    out: dict[str, list[str]] = {}
     for item in project["media"].values():
         link = item.get("p5")
-        if isinstance(link, dict) and link.get("page"):
-            return str(link["page"])
-    return ""
+        if item["id"] == skip or item.get("kind") != "video" or (isinstance(link, dict) and link.get("page")):
+            continue
+        segment = p5src.segment_guess(item.get("name") or "")
+        if segment:
+            out.setdefault(segment, []).append(item["id"])
+    return out
+
+
+def sibling_links(project: dict, page: str, skip: str = "") -> list[dict]:
+    """media.update ops linking every unlinked clip whose segment `page` or a page next to it draws."""
+    clips = _unlinked_clips(project, skip)
+    if not clips:
+        return []
+    hits = p5src.segment_pages(p5src.check_page(page), list(clips))
+    return [{"op": "media.update", "id": mid, "patch": {"p5": {"page": str(hits[seg]), "segment": seg, "edits": []}}}
+            for seg, ids in clips.items() if seg in hits for mid in ids]
 
 
 def register(router: Router, app: App) -> None:
@@ -44,8 +68,8 @@ def register(router: Router, app: App) -> None:
         item = _media(project, req.params["mid"])
         link = item.get("p5")
         if not isinstance(link, dict) or not link.get("page"):
-            return {"linked": False, "segment": p5src.segment_guess(item.get("name") or ""),
-                    "page": _suggested_page(project)}
+            name = item.get("name") or ""
+            return {"linked": False, "segment": p5src.segment_guess(name), **_suggestion(project, name)}
         try:
             return {"linked": True, **p5src.read_texts(link["page"], link["segment"], link.get("edits") or [])}
         except AppError as err:  # moved or renamed source: the panel still offers to link again
@@ -54,9 +78,12 @@ def register(router: Router, app: App) -> None:
 
     @router.route("POST", "/api/projects/{pid}/media/{mid}/p5/link")
     def p5_link(req: Request) -> dict:
-        """{page, segment}: link (checked against the source); page "" unlinks."""
+        """{page, segment}: link (checked against the source); page "" unlinks. The other unlinked clips named
+        after a segment that this page or a page next to it draws are linked in the same undo step
+        (returned as "alsoLinked")."""
         pid, body = req.params["pid"], req.json_object()
-        item = _media(store.get(pid), req.params["mid"])
+        project = store.get(pid)
+        item = _media(project, req.params["mid"])
         page = str(body.get("page") or "").strip().strip('"')
         if not page:
             if "p5" not in item:
@@ -70,8 +97,10 @@ def register(router: Router, app: App) -> None:
         old = item.get("p5") if isinstance(item.get("p5"), dict) else {}
         if (old.get("page"), old.get("segment")) == (link["page"], link["segment"]):
             link["edits"] = old.get("edits") or []  # linking again to the same place keeps the edits
-        store.apply(pid, [{"op": "media.update", "id": item["id"], "patch": {"p5": link}}], label="連結 p5 原始碼")
-        return {"linked": True, **p5src.read_texts(link["page"], link["segment"], link["edits"])}
+        more = sibling_links(project, link["page"], skip=item["id"])
+        store.apply(pid, [{"op": "media.update", "id": item["id"], "patch": {"p5": link}}, *more],
+                    label="連結 p5 原始碼")
+        return {"linked": True, "alsoLinked": len(more), **p5src.read_texts(link["page"], link["segment"], link["edits"])}
 
     @router.route("POST", "/api/projects/{pid}/pick-p5-page")
     def p5_pick(req: Request) -> dict:

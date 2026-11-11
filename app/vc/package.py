@@ -1,11 +1,14 @@
 """Zip a project for hand-off: storyboard, shot list, captions, active pictures and videos, audio, latest export.
 
-A full backup also carries every referenced media file under its own media/ path, so it can be imported
-back without loss; manifest.json says which kind a package is."""
+A full backup also carries every referenced media file under its own media/ path, the AI assistant's
+documents, review snapshots, voice-clean stems and the folders of the linked p5 pages (p5src/N/, listed in
+manifest.json as p5Sources), so it can be imported on another computer and edited on; manifest.json says
+which kind a package is."""
 from __future__ import annotations
 
 import json
 import logging
+import os
 import zipfile
 from pathlib import Path
 from typing import Callable
@@ -14,15 +17,24 @@ from urllib.parse import quote
 from . import VERSION
 from .export import captions_srt, export_filename, shots_csv
 from .exportdir import file_ref, project_exports, unique_path
+from .p5src import linked_pages
+from .projdocs import FOLDER as DOCS_DIR
+from .review_pack import REVIEWS
 from .sequence import video_take
 from .storyboard import render_storyboard, shot_picture
 from .util import AppError, replace_with_retry, safe_filename
+from .voiceclean import CLEAN_DIR
 
 log = logging.getLogger("vc.package")
 
 _CHUNK = 1 << 20
 FORMAT = "video-console-package"
 _FILE_KEYS = ("file", "thumb", "strip", "wave")
+P5_DIR = "p5src"
+# Folders and files a full backup restores besides the media/ files package_layout lists.
+EXTRA_PREFIXES = (f"{DOCS_DIR}/", f"{REVIEWS}/", f"{CLEAN_DIR}/", f"{P5_DIR}/")
+_P5_SKIP = {"node_modules", "__pycache__", "venv"}
+P5_MAX = 2 * 1024 ** 3  # a p5 page folder is scripts, fonts and pictures; past this it is not one
 
 
 def _entry(prefix: str, index: int, name: str, ext: str) -> str:
@@ -79,8 +91,55 @@ def package_layout(project: dict, opts: dict) -> list[tuple[str, str, str | None
     return out
 
 
+def _tree(root: Path, prefix: str, limit: int | None = None) -> list[tuple[str, Path]] | None:
+    """(prefix/relative name, path) of every file under root, hidden and half-written ones left out;
+    None once the files add up to more than limit bytes."""
+    out: list[tuple[str, Path]] = []
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _P5_SKIP and not d.startswith("."))
+        for name in sorted(filenames):
+            if not name.startswith(".") and not name.endswith(".part"):
+                path = Path(dirpath) / name
+                total += path.stat().st_size if limit is not None else 0
+                if limit is not None and total > limit:
+                    return None
+                out.append((f"{prefix}/{path.relative_to(root).as_posix()}", path))
+    return out
+
+
+def live_audio_clips(project: dict) -> set[str]:
+    """Ids of the audio clips on the timeline or parked on a shot: the ones whose voice-clean stems are used."""
+    parked = [a for s in project.get("shots") or [] for a in (s.get("parked") or {}).get("audio") or []]
+    return {a["id"] for a in [*(project.get("audio") or []), *parked] if isinstance(a, dict) and a.get("id")}
+
+
+def backup_extras(project: dict, project_dir: Path, p5: bool = True) -> tuple[list[tuple[str, Path]], list[dict], list[str]]:
+    """What a full backup holds besides media files: (archive name, path) pairs, the p5 source folders
+    [{dir: "p5src/1", from: original folder}] (when p5), and the p5 folders it could not take (missing or
+    too big)."""
+    files = [*_tree(project_dir / DOCS_DIR, DOCS_DIR), *_tree(project_dir / REVIEWS, REVIEWS)]
+    live = live_audio_clips(project)
+    clean = project_dir / CLEAN_DIR
+    for path in sorted(clean.glob("*.wav")) if clean.is_dir() else []:
+        if not path.name.startswith(".") and path.name.split("-")[0] in live:
+            files.append((f"{CLEAN_DIR}/{path.name}", path))
+    sources: list[dict] = []
+    left: list[str] = []
+    roots = list(dict.fromkeys(Path(page).parent for page in linked_pages(project))) if p5 else []
+    for root in roots:
+        tree = _tree(root, f"{P5_DIR}/{len(sources) + 1}", P5_MAX) if root.is_dir() else None
+        if not tree:
+            left.append(str(root))
+            continue
+        sources.append({"dir": f"{P5_DIR}/{len(sources) + 1}", "from": str(root)})
+        files.extend(tree)
+    return files, sources, left
+
+
 def plan_package(project: dict, project_dir: Path, opts: dict) -> tuple[list[tuple[str, Path]], dict[str, str], int]:
-    """(archive name, source path) pairs, the storyboard picture per shot id, and the count of missing files."""
+    """(archive name, source path) pairs, the storyboard picture per shot id, and the count of missing files.
+    A full backup's extras (backup_extras) are not included."""
     files: list[tuple[str, Path]] = []
     pictures: dict[str, str] = {}
     missing: set[str] = set()
@@ -111,9 +170,15 @@ def build_package(
     out_dir: Path | None = None,
 ) -> dict:
     """Write <out_dir>/<name>_<time>_package.zip (default the project's exports/) and return
-    {file, name, size, count, missing}."""
-    opts = {"includeVideos": True, "includeExport": True, "fullBackup": False, **(opts or {})}
+    {file, name, size, count, missing, p5Sources, p5Left}."""
+    opts = {"includeVideos": True, "includeExport": True, "fullBackup": False, "includeP5": True, **(opts or {})}
     files, pictures, missing = plan_package(project, project_dir, opts)
+    sources: list[dict] = []
+    left: list[str] = []
+    if opts["fullBackup"]:
+        extras, sources, left = backup_extras(project, project_dir, bool(opts["includeP5"]))
+        taken = {arc for arc, _ in files}
+        files.extend((arc, path) for arc, path in extras if arc not in taken)
     texts = {
         "storyboard.html": render_storyboard(project, lambda shot: quote(pictures[shot["id"]])
                                              if shot["id"] in pictures else None),
@@ -121,7 +186,8 @@ def build_package(
         "project.json": json.dumps(project, ensure_ascii=False, indent=2),
         "manifest.json": json.dumps({"format": FORMAT, "version": 1, "app": VERSION,
                                      "fullBackup": bool(opts["fullBackup"]),
-                                     "includeVideos": bool(opts["includeVideos"])}, ensure_ascii=False, indent=2),
+                                     "includeVideos": bool(opts["includeVideos"]),
+                                     "p5Sources": sources}, ensure_ascii=False, indent=2),
     }
     srt = captions_srt(project)
     if srt:
@@ -156,4 +222,4 @@ def build_package(
         raise
     log.info("Packaged %s (%d files, %d missing)", name, len(files) + len(texts), missing)
     return {"file": file_ref(final, project_dir), "name": name, "size": final.stat().st_size,
-            "count": len(files) + len(texts), "missing": missing}
+            "count": len(files) + len(texts), "missing": missing, "p5Sources": len(sources), "p5Left": left}

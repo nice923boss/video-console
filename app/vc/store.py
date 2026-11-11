@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import opfields
+from . import opfields, p5src
 from . import ops as opsmod
 from .events import EventBus
 from .paths import Paths
@@ -524,6 +524,7 @@ class ProjectStore:
             (dst_dir / sub).mkdir(parents=True, exist_ok=True)
         name = str(name or "").strip()[:120] or f"{src['name']}（副本）"
         src.update({"id": new_pid, "name": name, "rev": 0, "created": now(), "updated": now()})
+        p5src.rebase_pages(src, dst_dir, src_dir)  # a backup's own p5 copy came along
         write_json_atomic(dst_dir / "project.json", src)
         with self._lock:
             self._entries[new_pid] = _Entry(src)
@@ -548,8 +549,9 @@ class ProjectStore:
                         "settings": settings, "name": str(project.get("name") or "").strip()[:120] or "匯入的專案"})
         for sub in _SUBDIRS:
             (folder / sub).mkdir(parents=True, exist_ok=True)
-        write_json_atomic(folder / "project.json", project)
         dst = self.paths.projects / pid
+        p5src.rebase_pages(project, dst)
+        write_json_atomic(folder / "project.json", project)
         shutil.move(str(folder), str(dst))
         loaded = self._load_file(dst)
         if not loaded:

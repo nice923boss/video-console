@@ -261,6 +261,71 @@ def find_segment(page: Path, segment: str) -> dict:
     raise AppError(f"在 {page.name} 載入的程式裡找不到 SCENES.{segment}（片段代號對嗎？）", 404)
 
 
+def sibling_pages(page: Path) -> list[Path]:
+    """The page and the other pages next to it (index.html and three.html of one animation), page first."""
+    others = sorted(p for p in page.parent.iterdir()
+                    if p.is_file() and p.suffix.lower() in PAGE_SUFFIXES and p.name != page.name)
+    return [page, *others]
+
+
+def segment_pages(page: Path, segments: list[str]) -> dict[str, Path]:
+    """{segment: the page that draws it} for the segments found in `page` or a page next to it.
+    Each page and script is read once, so a whole project's clips are matched in one pass."""
+    wanted = [s for s in dict.fromkeys(segments) if SEGMENT_RE.match(s or "")]
+    found: dict[str, Path] = {}
+    for p in sibling_pages(page):
+        if len(found) == len(wanted):
+            break
+        try:
+            html = _read(p)
+            texts = [html, *(_read(p.parent / rel) for rel in page_scripts(p, html))]
+        except AppError:
+            continue  # an unreadable neighbour is not the page the user chose
+        for seg in wanted:
+            if seg not in found and any(_head_re(seg).search(t) for t in texts):
+                found[seg] = p
+    return found
+
+
+def linked_pages(project: dict) -> list[str]:
+    """The p5 pages the project's clips are linked to, first linked first."""
+    pages: list[str] = []
+    for item in project.get("media", {}).values():
+        link = item.get("p5")
+        if isinstance(link, dict) and link.get("page") and link["page"] not in pages:
+            pages.append(str(link["page"]))
+    return pages
+
+
+def rebase_pages(project: dict, new: Path, old: Path | None = None) -> None:
+    """Make the p5 links of a project now in folder `new` point into it: a page relative to the project folder
+    (the p5 copy an imported backup carries, unpack.py) or one inside `old` (the folder it was copied from)."""
+    for item in project.get("media", {}).values():
+        link = item.get("p5")
+        if not isinstance(link, dict) or not isinstance(link.get("page"), str) or not link["page"]:
+            continue
+        page = Path(link["page"])
+        if not page.is_absolute():
+            link["page"] = str(new / page)
+        elif old is not None and page.is_relative_to(old):
+            link["page"] = str(new / page.relative_to(old))
+
+
+def project_link(project: dict, name: str) -> dict | None:
+    """The link for a clip named after a segment (M04.webm) when a page the project already links, or a page
+    next to it, draws that segment; None otherwise. Animations of one video share a folder, so a new render
+    dropped into the project finds its source without the user picking it."""
+    segment = segment_guess(name)
+    for page in linked_pages(project) if segment else []:
+        try:
+            hit = segment_pages(check_page(page), [segment]).get(segment)
+        except (AppError, OSError):
+            continue
+        if hit:
+            return {"page": str(hit), "segment": segment, "edits": []}
+    return None
+
+
 def _literals(found: dict) -> list[dict]:
     text, out = found["text"], []
     _, spans = statement_literals(text, found["start"])

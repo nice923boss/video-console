@@ -201,10 +201,14 @@
 .tb-project > svg.icon { color: var(--muted); }
 .tb-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 匯入專案 / 匯出專案: always in sight for handing a project to another computer */
+.tb-transfer { display: flex; flex: none; gap: 6px; padding-left: 12px; border-left: 1px solid var(--border); }
+
 .tb-meta {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex: 1 1 0; /* only the space the project name and buttons leave */
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -313,6 +317,7 @@
 
 @media (max-width: 1100px) {
   .tb-meta { display: none; }
+  .tb-transfer .btn-text { display: none; }
 }
 
 @media (max-width: 880px) {

@@ -9,7 +9,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
-from . import gyro
+from . import gyro, p5src
 from .edits import freeze_overlay, track_busy
 from .export import AUDIO_CODECS, export_options, render
 from .exportdir import ensure_root, export_root, record_export, unique_path
@@ -462,6 +462,10 @@ class LocalJobs:
             ops = [{"op": "media.add", "media": item}]
             # Checked and added under the project lock: two sounds dropped on one spot finish side by side.
             with self._store.locked(ctl.pid):
+                if staged["kind"] == "video":  # a p5 render (M05.webm) finds the source its siblings link to
+                    link = p5src.project_link(self._store.get(ctl.pid), p["name"])
+                    if link:
+                        item["p5"] = link
                 if staged["kind"] == "audio" and p.get("track"):
                     clip = {"id": new_id("a"), "mediaId": mid, "name": p["name"][:120], "start": p.get("start", 0.0),
                             "volume": p.get("gain", 1.0)}
@@ -580,18 +584,28 @@ class LocalJobs:
         return path.replace(path.with_name(f"{video_stem}_無配樂.mp3")).name
 
     def _prepare_package(self, project: dict, shot_id: str | None, payload: dict) -> dict:
-        return {"title": f"打包專案：{project['name']}", "lane": "local:export", "shotId": None,
+        full = bool(payload.get("fullBackup", False))
+        folder = str(payload.get("folder") or "").strip().strip('"')
+        if folder and not Path(folder).is_absolute():
+            raise AppError("存放位置要是完整的資料夾路徑")
+        return {"title": f"{'匯出專案' if full else '打包專案'}：{project['name']}", "lane": "local:export",
+                "shotId": None,
                 "payload": {"includeVideos": bool(payload.get("includeVideos", True)),
                             "includeExport": bool(payload.get("includeExport", True)),
-                            "fullBackup": bool(payload.get("fullBackup", False))}}
+                            "fullBackup": full, "includeP5": bool(payload.get("includeP5", True)),
+                            "folder": folder}}
 
     def _run_package(self, ctl: JobControl, work: Path) -> dict:
         ctl.progress(0.0, "打包中")
         pdir = self._store.project_dir(ctl.pid)
+        folder = ctl.payload.get("folder")
+        out_dir = ensure_root(Path(folder)) if folder else self._export_root()
         result = build_package(self._store.get(ctl.pid), pdir, ctl.payload,
                                on_progress=lambda f: ctl.progress(f, "打包中"), cancelled=ctl.cancelled,
-                               out_dir=self._export_root())
+                               out_dir=out_dir)
         record_export(pdir, pdir / result["file"])
         if result["missing"]:
             ctl.note(f"有 {result['missing']} 個檔案找不到，沒有放進打包檔")
+        for left in result["p5Left"]:
+            ctl.note(f"p5 原始碼資料夾找不到或超過 2 GB，沒有放進備份：{left}")
         return {"file": result["file"], "package": result, "message": f"打包完成：{result['name']}"}

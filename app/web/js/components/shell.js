@@ -1,7 +1,7 @@
 // App frame: the navigation rail on the left, the top bar and the status bar.
 import { html, useMemo } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
-import { navigate, openProject, undo, redo, updateProject, saveSettings, revealInFolder, duplicateProject } from "../lib/actions.js";
+import { navigate, openProject, undo, redo, updateProject, saveSettings, revealInFolder, duplicateProject, pickProjectZip } from "../lib/actions.js";
 import { fmtTime, fmtBytes } from "../lib/format.js";
 import { buildSequence, sequenceDuration } from "../lib/sequence.js";
 import { useTheme } from "../lib/theme.js";
@@ -11,6 +11,7 @@ import { Icon } from "./icons.js";
 import { Dot, Keys, Spinner, Button, IconButton } from "./ui.js";
 import { openMenu, promptDialog } from "./overlay.js";
 import { openRevisions } from "../dialogs/revisions-dialog.js";
+import { openProjectExport } from "../dialogs/project-export.js";
 
 export const VIEWS = [
   { id: "home", label: "專案", icon: "home" },
@@ -107,6 +108,8 @@ function projectMenu(e, { project, projects, commands }) {
     project && { label: "重新命名專案…", icon: "pencil", onClick: rename },
     project && { label: "建立副本…", icon: "copy", onClick: () => duplicateProject(project.id) },
     project && { label: "開啟專案資料夾", icon: "folder-open", onClick: () => revealInFolder() },
+    project && { label: "匯出專案…", icon: "download", onClick: () => openProjectExport() },
+    { label: "匯入專案…", icon: "upload", onClick: () => pickProjectZip() },
     { label: "所有專案", icon: "home", onClick: () => navigate("home") },
     { label: "新增專案…", icon: "plus", onClick: commands.newProject },
   ]);
@@ -152,6 +155,12 @@ export function TopBar({ commands }) {
         <span class="tb-project-name">${project ? project.name : "Video Console"}</span>
         <${Icon} name="chevron-down" size=${15} />
       </button>
+      ${!watch && html`<div class="tb-transfer">
+        <${Button} icon="upload" onClick=${pickProjectZip}
+          title="打開另一台電腦匯出的專案 ZIP，接著剪輯；也可以直接把 ZIP 拖進視窗">匯入專案<//>
+        ${project && html`<${Button} icon="download" onClick=${() => openProjectExport()}
+          title="把整個專案存成一個 ZIP，帶到另一台電腦用「匯入專案」接著剪輯">匯出專案<//>`}
+      </div>`}
       ${stats && html`<span class="tb-meta">
         <span>${stats.shots} 個鏡頭</span><i></i><span class="mono">${fmtTime(stats.duration, { tenths: false })}</span>
         <i></i><span>${project.settings.width}×${project.settings.height}</span>

@@ -267,6 +267,15 @@ class VC:
             return self._request("POST", f"/api/projects/{pid}/upload?{urllib.parse.urlencode(query)}", f,
                                  timeout=3600, length=size)["job"]
 
+    def link_p5(self, pid: str, media_id: str, page: str | Path, segment: str = "") -> dict:
+        """Link a rendered p5 / Three.js clip to its source page (absolute .html path) so the inspector can edit
+        its texts. segment defaults to the clip's name (M04.webm -> M04). The other unlinked clips named after a
+        segment that this page or a page next to it draws are linked too (one undo step, "alsoLinked")."""
+        if not segment:
+            segment = Path(self.project(pid)["media"][media_id]["name"]).stem
+        return self.post(f"/api/projects/{pid}/media/{media_id}/p5/link",
+                         {"page": str(Path(page).resolve()), "segment": segment})
+
     def job(self, kind: str, pid: str, shot_id: str | None = None, payload: dict | None = None) -> dict:
         return self.post("/api/jobs", {"kind": kind, "pid": pid, "shotId": shot_id, "payload": payload or {}})["job"]
 

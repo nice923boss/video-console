@@ -7,7 +7,7 @@ import { Icon } from "./icons.js";
 import { useStore } from "../lib/store.js";
 import { api } from "../lib/api.js";
 import { submitJob } from "../lib/jobs-actions.js";
-import { toastError } from "./toast.js";
+import { toast, toastError } from "./toast.js";
 
 const enc = encodeURIComponent;
 const OLD_APP = "這個功能要重新啟動 Video Console 才能使用";
@@ -83,6 +83,7 @@ export function P5TextField({ media }) {
       if (r.linked) {
         prune(key, r);
         setInfo(r);
+        if (r.alsoLinked) toast(`另外 ${r.alsoLinked} 段同名的 p5 動畫也自動連上原始碼`, { title: "已連結 p5 原始碼" });
       } else {
         drafts.delete(key);
         setReload((n) => n + 1);
@@ -105,9 +106,20 @@ export function P5TextField({ media }) {
 
   if (form || !info.linked) {
     if (!form) {
+      const choose = () => setForm({ page: info.page || "", segment: info.segment || "" });
+      // Another clip of this project links a page that draws this segment: one click links it.
+      if (info.found && info.page && info.segment) {
+        const file = info.page.split(/[\\/]/).pop();
+        return html`<${Field} label="p5 文字" hint=${HINT}>
+          <div class="row">
+            <${Button} size="sm" kind="primary" icon="link" busy=${sending} title=${info.page}
+              onClick=${() => link(info.page, info.segment)}>連結 ${file}（${info.segment}）<//>
+            <${Button} size="sm" kind="ghost" onClick=${choose}>其他頁面…<//>
+          </div>
+        <//>`;
+      }
       return html`<${Field} label="p5 文字" hint=${HINT}>
-        <${Button} size="sm" icon="link" onClick=${() => setForm({ page: info.page || "", segment: info.segment || "" })}>
-          連結 p5 原始碼…<//>
+        <${Button} size="sm" icon="link" onClick=${choose}>連結 p5 原始碼…<//>
       <//>`;
     }
     return html`<${Field} label="連結 p5 原始碼"

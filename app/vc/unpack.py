@@ -1,7 +1,10 @@
 """Bring a package made by package.py back in: extract its media and a project.json that only references them.
 
-A full backup restores every take and media file. A hand-off package only holds the active pictures,
-videos and audio, so takes and media whose files it lacks are dropped from the imported project."""
+A full backup restores every take and media file, the AI assistant's documents, review snapshots,
+voice-clean stems and the p5 page folders (p5src/N/); clips linked to a p5 page this computer does not have
+are pointed at the copy (a page path relative to the project folder, made absolute by store.adopt). A hand-off
+package only holds the active pictures, videos and audio, so takes and media whose files it lacks are dropped
+from the imported project. Preview proxies are never packed, so they are made again after import."""
 from __future__ import annotations
 
 import json
@@ -11,7 +14,7 @@ import zipfile
 from pathlib import Path
 
 from .ops import _MEDIA_PATH
-from .package import FORMAT, package_layout
+from .package import EXTRA_PREFIXES, FORMAT, package_layout
 from .util import AppError, is_within
 
 log = logging.getLogger("vc.unpack")
@@ -46,6 +49,16 @@ def _prune(project: dict, restored: set[str]) -> int:
             for extra in ("thumb", "strip", "wave"):
                 if item.get(extra) and item[extra] not in restored:
                     item[extra] = item["file"] if extra == "thumb" and item.get("kind") == "image" else None
+            for preview in ("preview2", "preview4", "previewAudio"):  # unset: made again when played
+                if preview in item and item[preview] not in restored:
+                    del item[preview]
+            if "previewAudioSpeeds" in item:
+                speeds = item["previewAudioSpeeds"] if isinstance(item["previewAudioSpeeds"], dict) else {}
+                speeds = {k: v for k, v in speeds.items() if v in restored}
+                if speeds:
+                    item["previewAudioSpeeds"] = speeds
+                else:
+                    del item["previewAudioSpeeds"]
             kept[item_id] = item
         project[key] = kept
     for shot in project["shots"]:
@@ -75,10 +88,37 @@ def _prune(project: dict, restored: set[str]) -> int:
     return dropped
 
 
+def _safe_extra(name: str, dst: Path) -> bool:
+    """A full backup's document / review / stem / p5 file name that stays inside dst."""
+    parts = name.split("/")
+    return (name.startswith(EXTRA_PREFIXES) and not name.endswith("/") and "\\" not in name and ":" not in name
+            and all(part not in ("", ".", "..") for part in parts) and is_within(dst / name, dst))
+
+
+def _rebase_p5(project: dict, sources: object, restored: set[str]) -> int:
+    """Point p5 links whose page this computer lacks at the packed copy (relative to the project folder);
+    returns how many were moved."""
+    folders = {}
+    for src in sources if isinstance(sources, list) else []:
+        if isinstance(src, dict) and isinstance(src.get("dir"), str) and isinstance(src.get("from"), str):
+            folders[Path(src["from"])] = src["dir"]
+    moved = 0
+    for item in project.get("media", {}).values():
+        link = item.get("p5") if isinstance(item, dict) else None
+        if not isinstance(link, dict) or not isinstance(link.get("page"), str) or not link["page"]:
+            continue
+        page = Path(link["page"])
+        copy = f"{folders[page.parent]}/{page.name}" if page.parent in folders else ""
+        if copy in restored and not page.is_file():
+            link["page"] = copy
+            moved += 1
+    return moved
+
+
 def unpack_package(zip_path: Path, dst: Path) -> dict:
     """Extract the package at zip_path into the empty folder dst.
 
-    Returns {"project", "fullBackup", "files", "dropped"}; the project still carries its old id."""
+    Returns {"project", "fullBackup", "files", "dropped", "p5Moved"}; the project still carries its old id."""
     try:
         zf = zipfile.ZipFile(zip_path)
     except (zipfile.BadZipFile, OSError):
@@ -103,7 +143,19 @@ def unpack_package(zip_path: Path, dst: Path) -> dict:
             with zf.open(arc) as src, open(target, "wb") as out:
                 shutil.copyfileobj(src, out, _CHUNK)
             restored.add(rel)
+        for name in sorted(names) if full else []:
+            if name in restored or not name.startswith(EXTRA_PREFIXES):
+                continue
+            if not _safe_extra(name, dst):
+                log.warning("Skipped unsafe package path %r", name)
+                continue
+            target = dst / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(name) as src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out, _CHUNK)
+            restored.add(name)
     dropped = _prune(project, restored)
+    moved = _rebase_p5(project, manifest.get("p5Sources"), restored)
     log.info("Unpacked %s (%s, %d files, %d dropped)", zip_path.name, "full" if full else "hand-off",
              len(restored), dropped)
-    return {"project": project, "fullBackup": full, "files": len(restored), "dropped": dropped}
+    return {"project": project, "fullBackup": full, "files": len(restored), "dropped": dropped, "p5Moved": moved}
