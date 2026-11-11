@@ -185,7 +185,8 @@ export function TopBar({ commands }) {
       <${QueueChip} />
       ${project && view !== "home" && !watch && html`<${Button} icon="message" onClick=${openRevisions}
         title="載入客戶從審稿頁回傳的 ZIP，逐條審核、套用">修改意見<//>`}
-      ${project && view !== "home" && !watch && html`<${Button} kind="primary" icon="film" onClick=${commands.export}>輸出影片<//>`}
+      ${project && view !== "home" && !watch && html`<${Button} kind="primary" icon="film" onClick=${commands.export}
+        title="輸出影片">輸出影片<//>`}
     </div>
   </header>`;
 }

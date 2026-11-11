@@ -168,9 +168,11 @@
 
 /* Top bar */
 
+/* Space goes first to the actions on the right (never squeezed), then to the transfer buttons and up to 12em of
+   the project name, then to the search box (32px to 420px); what is left keeps the search box centred. */
 .topbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(min-content, 1fr) minmax(32px, 420px) minmax(max-content, 1fr);
   align-items: center;
   gap: 12px;
   flex: none;
@@ -187,6 +189,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  min-width: calc-size(max-content, min(size, 12em)); /* a short name whole, a long one cut at 12em */
   max-width: 320px;
   height: 32px;
   padding: 0 8px 0 10px;
@@ -199,7 +202,14 @@
 
 .tb-project:hover { background: var(--surface-hover); }
 .tb-project > svg.icon { color: var(--muted); }
-.tb-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* One line with an ellipsis; wrapping (not nowrap) lets the name shrink when the bar works out its minimum width */
+.tb-project-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 
 /* 匯入專案 / 匯出專案: always in sight for handing a project to another computer */
 .tb-transfer { display: flex; flex: none; gap: 6px; padding-left: 12px; border-left: 1px solid var(--border); }
@@ -210,6 +220,7 @@
   gap: 8px;
   flex: 1 1 0; /* only the space the project name and buttons leave */
   min-width: 0;
+  contain: inline-size; /* never asks the bar for room */
   overflow: hidden;
   color: var(--muted);
   font-size: calc(12px * var(--text-scale));
@@ -222,7 +233,9 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  width: clamp(220px, 32vw, 420px);
+  width: 100%; /* its column: 32px to 420px */
+  min-width: 0;
+  container-type: inline-size;
   height: 32px;
   padding: 0 5px 0 12px;
   border-radius: var(--r-pill);
@@ -236,6 +249,11 @@
 .tb-search > span:not(.keys) { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .tb-search:hover { border-color: var(--border-strong); color: var(--text-2); }
 .tb-search .kbd { background: var(--surface-3); }
+@container (max-width: 270px) { .tb-search > .keys { display: none; } } /* the placeholder wins over Ctrl Shift P */
+@container (max-width: 60px) { /* below about two characters of placeholder */
+  .tb-search > span:not(.keys) { display: none; }
+  .tb-search > svg.icon { margin-inline: auto; translate: -3.5px 0; } /* centred: padding is 12px left, 5px right */
+}
 
 .tb-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; }
 .tb-history { display: flex; gap: 2px; padding-right: 8px; border-right: 1px solid var(--border); }
@@ -315,13 +333,22 @@
 .sb-spacer { flex: 1; min-width: 8px; }
 .sb-credit { flex: none; padding: 0 8px 0 10px; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
 
+/* Icon-only buttons keep their names in the tooltip */
 @media (max-width: 1100px) {
   .tb-meta { display: none; }
   .tb-transfer .btn-text { display: none; }
+  .tb-transfer .btn { width: 34px; padding: 0; }
 }
 
 @media (max-width: 880px) {
-  .tb-search { width: 32px; padding: 0; justify-content: center; }
-  .tb-search > span:not(.keys),
-  .tb-search > .keys { display: none; }
+  .tb-right .btn-text { display: none; }
+  .tb-right .btn { width: 34px; padding: 0; }
+}
+
+/* Half of a laptop screen: the queue chip keeps its icon (counts stay on the rail badge and the status bar),
+   a long project name gives way down to 8em */
+@media (max-width: 760px) {
+  .tb-project { min-width: calc-size(max-content, min(size, 8em)); }
+  .qchip { justify-content: center; width: 34px; padding: 0; }
+  .qchip > span:not(.qchip-bar) { display: none; }
 }
