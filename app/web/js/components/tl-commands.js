@@ -12,7 +12,7 @@ import { slipRange } from "../lib/roll.js";
 import { showQueued, submitJob, upsertJobs } from "../lib/jobs-actions.js";
 import { keyHint, undoKeyText } from "../lib/keymap.js";
 import { readPref } from "../lib/prefs.js";
-import { extendTarget, extendAllTargets, captionRow } from "../lib/caption-extend.js";
+import { extendTarget, extendAllTargets, captionRow, trimJoinTarget } from "../lib/caption-extend.js";
 import { toast } from "./toast.js";
 import { multiAudio } from "./tl-audio-sel.js";
 import { multiClip, CLIP_SEL_TYPES } from "./tl-clip-sel.js";
@@ -93,6 +93,16 @@ export async function extendRow(project, track) {
 
 export const extendSelRow = (project, clips, sel) =>
   extendRow(project, captionRow(project, sel && sel.type === "caption" ? sel.id : null));
+
+// Shift+F1 / Shift+F3: trim the caption under the playhead like F1 / F3, and the caption before (or after) it on
+// the row meets the cut like E, as one undo step.
+export async function trimJoinCaption(project, clips, sel, side) {
+  const got = trimJoinTarget(project, sel && sel.type === "caption" ? sel.id : null, clock.time, side);
+  if (got.error) return warn(got.error);
+  const left = side === "start";
+  const res = await ops(got.ops, { label: `${left ? "向左" : "向右"}裁剪字幕${got.joined ? `並接上${left ? "前" : "後"}一句` : ""}` });
+  if (res && !got.joined) toast(`${left ? "前面" : "後面"}沒有字幕可以接上，只裁剪了這句`, { id: "tl-trim-join" });
+}
 
 // ---------------------------------------------------------------- volume
 const fmtDb = (v) => (v <= 0.0011 ? "靜音" : `${(20 * Math.log10(v)).toFixed(1)} dB`);

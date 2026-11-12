@@ -28,7 +28,7 @@ import { splitAtPlayhead, splitAllAtPlayhead, trimAtPlayhead } from "./tl-edit.j
 import {
   MARKER_COLORS, toggleEnabled, nudgeVolume, markIn, markOut, rangeFromClip, playRange, clearRange, markerAdd, markerColor,
   markerJump, freezeFrame, detachAudio, reverseClip, focusSpeed, addKeyframe, toggleKeyPanel, notYet, slipFrame,
-  stabilizeSet, togglePictureHidden, transcribeShot, extendCaption, extendSelRow,
+  stabilizeSet, togglePictureHidden, transcribeShot, extendCaption, extendSelRow, trimJoinCaption,
 } from "./tl-commands.js";
 import { autoGradeShot } from "./grade-panel.js";
 import { liftSelected, dropSelected } from "./tl-lift.js";
@@ -450,6 +450,8 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.splitAll": on(splitAllAtPlayhead),
     "edit.trimStart": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "start"),
     "edit.trimEnd": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "end"),
+    "edit.trimJoinStart": on((p, c, sel) => trimJoinCaption(p, c, sel, "start")),
+    "edit.trimJoinEnd": on((p, c, sel) => trimJoinCaption(p, c, sel, "end")),
     "edit.toolSelect": () => setState({ editTool: "select" }),
     "edit.toolBlade": () => setState({ editTool: "blade" }),
     "edit.toolTrim": () => setState({ editTool: "trim" }),

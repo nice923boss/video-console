@@ -55,6 +55,8 @@ const BUILT_IN = [
   cmd("edit", "edit.splitAll", "在播放頭分割所有軌道", ["alt+shift+b"], ["mod+shift+b"]),
   cmd("edit", "edit.trimStart", "向左裁剪（刪掉播放頭前面的部分）", ["f1"], ["alt+["]),
   cmd("edit", "edit.trimEnd", "向右裁剪（刪掉播放頭後面的部分）", ["f3"], ["alt+]"]),
+  cmd("edit", "edit.trimJoinStart", "字幕向左裁剪，前一句結尾接到播放頭", ["shift+f1"]),
+  cmd("edit", "edit.trimJoinEnd", "字幕向右裁剪，後一句開頭接到播放頭", ["shift+f3"]),
   cmd("edit", "edit.toolSelect", "選擇模式", ["a"]),
   cmd("edit", "edit.toolBlade", "分割模式：點片段就在點的位置切開", ["b"]),
   cmd("edit", "edit.toolTrim", "修剪模式：滾動剪接點、滑動內容、滑移鏡頭", ["t"]),
