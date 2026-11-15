@@ -57,6 +57,7 @@ const BUILT_IN = [
   cmd("edit", "edit.trimEnd", "向右裁剪（刪掉播放頭後面的部分）", ["f3"], ["alt+]"]),
   cmd("edit", "edit.trimJoinStart", "字幕向左裁剪，前一句結尾接到播放頭", ["shift+f1"]),
   cmd("edit", "edit.trimJoinEnd", "字幕向右裁剪，後一句開頭接到播放頭", ["shift+f3"]),
+  cmd("edit", "edit.splitCaptionText", "字幕文字框：游標後面的文字拆成下一句，時間切在播放頭", ["mod+enter"]),
   cmd("edit", "edit.toolSelect", "選擇模式", ["a"]),
   cmd("edit", "edit.toolBlade", "分割模式：點片段就在點的位置切開", ["b"]),
   cmd("edit", "edit.toolTrim", "修剪模式：滾動剪接點、滑動內容、滑移鏡頭", ["t"]),
@@ -290,8 +291,11 @@ export function useDialogKeys(handlers, opts) {
   useHotkeys(map, opts);
 }
 
-// Whether a key pressed in a dialog's text box is the confirm key.
-export const isConfirmKey = (e) => {
+// Whether a key pressed in a text box is one of command id's keys; a bare printable key types there instead.
+export const isTextKey = (e, id) => {
   const combo = comboOf(e);
-  return !printable(combo) && keysOf("dialog.confirm").includes(combo);
+  return !printable(combo) && keysOf(id).includes(combo);
 };
+
+// Whether a key pressed in a dialog's text box is the confirm key.
+export const isConfirmKey = (e) => isTextKey(e, "dialog.confirm");

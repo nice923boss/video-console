@@ -101,7 +101,13 @@ export function useDraft(value, commit, delay = 600) {
     timer.current = setTimeout(tick, delay);
   }, [delay, tick]);
   useEffect(() => () => flush(), []);
-  return [draft, change, flush];
+  // Forgets the unsaved draft, for an edit that saves the field itself (the caption split key).
+  const drop = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = null;
+    dirty.current = false;
+  }, []);
+  return [draft, change, flush, drop];
 }
 
 export function DraftText({ value, onCommit, multiline = false, rows = 3, autosize = true, delay = 600, ...rest }) {
