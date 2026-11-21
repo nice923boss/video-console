@@ -25,7 +25,7 @@ import { GradePanel } from "./grade-panel.js";
 import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe, isStabilized, stabilizeClip, extendCaption } from "./tl-commands.js";
 import { extendTarget } from "../lib/caption-extend.js";
-import { splitTextTarget } from "../lib/caption-split.js";
+import { mergeTextTarget, moveHeadTarget, moveTailTarget, splitTextTarget } from "../lib/caption-split.js";
 import { StabilizeSettings } from "./stab-panel.js";
 import { P5TextField } from "./p5-panel.js";
 import { clipKeysHint, isTextKey, keyHint, keyLabel, undoKeyText } from "../lib/keymap.js";
@@ -458,23 +458,35 @@ function PositionField({ project, cap }) {
   <//>`;
 }
 
-// The caption's text box saves itself like DraftText. The split key (Ctrl+Enter) cuts the line at the text cursor:
+// The caption's text box saves itself like DraftText. The split key (Alt+Enter) cuts the line at the text cursor:
 // the words after it become the next caption from the playhead on, and the panel moves to it (lib/caption-split.js).
-function CaptionText({ cap }) {
+// The merge key (Ctrl+Enter) puts the box's words on the end of the previous caption and the panel moves there;
+// the move key (Alt+Shift+Enter) puts the words after the cursor on the front of the next caption, cut at the playhead,
+// and Ctrl+Shift+Enter puts the words before it on the end of the previous caption, cut there too.
+function CaptionText({ project, cap }) {
   const [draft, change, flush, drop] = useDraft(cap.text || "",
     (v) => updateCaption(cap.id, { text: v }, "修改字幕", `caption-text:${cap.id}`));
   const onKeyDown = (e) => {
-    if (e.isComposing || !isTextKey(e, "edit.splitCaptionText")) return;
+    if (e.isComposing) return;
+    const kind = ["edit.splitCaptionText", "edit.mergeCaptionText", "edit.moveCaptionTail", "edit.moveCaptionHead"]
+      .find((id) => isTextKey(e, id));
+    if (!kind) return;
     e.preventDefault();
     const el = e.currentTarget;
-    const got = splitTextTarget(cap, el.value, el.selectionStart, el.selectionEnd, clock.time, newId("c"));
+    const [from, to] = [el.selectionStart, el.selectionEnd];
+    const got = kind === "edit.mergeCaptionText" ? mergeTextTarget(project, cap, el.value)
+      : kind === "edit.moveCaptionTail" ? moveTailTarget(project, cap, el.value, from, to, clock.time)
+        : kind === "edit.moveCaptionHead" ? moveHeadTarget(project, cap, el.value, from, to, clock.time)
+          : splitTextTarget(cap, el.value, from, to, clock.time, newId("c"));
     if (got.error) {
       toast(got.error, { level: "warn", id: "caption-split" });
       return;
     }
-    drop(); // the split saves this caption's text; the pending draft would write the whole line back
-    ops(got.ops, { label: "拆成下一句" }).then((res) => {
-      if (res) setState({ editSel: { type: "caption", id: got.id } });
+    drop(); // the ops save this caption's text; the pending draft would write the whole line back
+    const label = { "edit.mergeCaptionText": "合併到上一句", "edit.moveCaptionTail": "文字移到下一句開頭",
+      "edit.moveCaptionHead": "文字移到上一句結尾" }[kind] || "拆成下一句";
+    ops(got.ops, { label }).then((res) => {
+      if (res && got.id !== cap.id && kind !== "edit.moveCaptionTail") setState({ editSel: { type: "caption", id: got.id } });
     });
   };
   return html`<${TextArea} rows=${3} autosize value=${draft} maxlength="500" onChange=${change} onBlur=${flush}
@@ -486,6 +498,9 @@ function CaptionPanel({ project, cap }) {
   const text = (cap.text || "").trim();
   const extend = extendTarget(project, cap.id);
   const splitKey = keyLabel("edit.splitCaptionText");
+  const mergeKey = keyLabel("edit.mergeCaptionText");
+  const moveKey = keyLabel("edit.moveCaptionTail");
+  const headKey = keyLabel("edit.moveCaptionHead");
   const glossaryText = useStore((s) => s.settings && s.settings.glossary);
   const glossary = useMemo(() => parseGlossary(glossaryText), [glossaryText]);
   const typos = glossary.length ? glossaryHits(cap.text, glossary) : [];
@@ -498,8 +513,8 @@ function CaptionPanel({ project, cap }) {
       sub=${html`${fmtSeconds(cap.start, 2)} 到 ${fmtSeconds(cap.end, 2)}<i></i>長 ${fmtSeconds(len, 2)}`} />
     <div class="insp-scroll">
       <${Field} label="字幕文字" hint=${cap.title ? "標題字卡：會燒進匯出的影片，不會寫進 SRT 字幕檔；改顏色按下方「編輯樣式」"
-        : `可以換行；${splitKey ? `${splitKey} 把游標後面的文字拆成下一句（切在播放頭）；` : ""}空白字幕不會出現在預覽與匯出`}>
-        <${CaptionText} cap=${cap} />
+        : `可以換行；${splitKey ? `${splitKey} 把游標後面的文字拆成下一句（切在播放頭）；` : ""}${moveKey ? `${moveKey} 把游標後面的文字移到下一句開頭（切在播放頭）；` : ""}${headKey ? `${headKey} 把游標前面的文字移到上一句結尾（切在播放頭）；` : ""}${mergeKey ? `${mergeKey} 把這句合併到上一句結尾；` : ""}空白字幕不會出現在預覽與匯出`}>
+        <${CaptionText} project=${project} cap=${cap} />
       <//>
       ${typos.length > 0 && html`<div class="note note-warn"><${Icon} name="alert" size=${15} />
         <span class="note-text">可能的錯字（比對設定的字幕用語詞庫）：${hitText(typos)}</span>

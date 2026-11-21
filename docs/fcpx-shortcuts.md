@@ -50,7 +50,10 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | 無 | 無 | 選取的字幕延長到下一句的開頭 | E | E | 結尾接到同一列下一句的開頭（重疊時縮到下一句的開頭）。Final Cut Pro 的 E 是 Append to Storyline，Video Console 沒有這個指令 |
 | 無 | 無 | 字幕向左裁剪，前一句結尾接到播放頭 | Shift+F1 | Shift+F1 | 播放頭所在的字幕（選取字幕所在的列，沒選取時是字幕列）開頭移到播放頭，同一列前一句的結尾也移到播放頭，等於 F1 加前一句按 E，一次復原。Final Cut Pro 沒有對應指令 |
 | 無 | 無 | 字幕向右裁剪，後一句開頭接到播放頭 | Shift+F3 | Shift+F3 | 同上反方向：這句結尾移到播放頭，同一列後一句的開頭往前接到播放頭，一次復原 |
-| 無 | 無 | 字幕文字框：游標後面的文字拆成下一句 | Ctrl+Enter | Ctrl+Enter | 只在右側「字幕文字」框裡有效，時間切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
+| 無 | 無 | 字幕文字框：游標後面的文字拆成下一句 | Alt+Enter | Alt+Enter | 只在右側「字幕文字」框裡有效，時間切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
+| 無 | 無 | 字幕文字框：游標後面的文字移到下一句開頭 | Alt+Shift+Enter | Alt+Shift+Enter | 只在右側「字幕文字」框裡有效，時間像 Shift+F3 切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
+| 無 | 無 | 字幕文字框：游標前面的文字移到上一句結尾 | Ctrl+Shift+Enter | Ctrl+Shift+Enter | 只在右側「字幕文字」框裡有效，時間像 Shift+F1 切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
+| 無 | 無 | 字幕文字框：這句合併到上一句結尾 | Ctrl+Enter | Ctrl+Enter | 只在右側「字幕文字」框裡有效，上一句延長到這句結尾，一次復原；Final Cut Pro 沒有對應指令 |
 | Add Marker | M | 在播放頭新增標記 | M | M | |
 | Add Marker and Modify | Option-M | 切換播放頭處標記的顏色 | Alt+M | 無 | Final Cut Pro 是新增並開編輯視窗；Video Console 沒有標記編輯視窗，顏色與刪除在標記的右鍵選單 |
 | Next Marker | Control-' | 跳到下一個標記 | F8 | 無 | Control 鍵的指令不設鍵，見文件開頭 |
