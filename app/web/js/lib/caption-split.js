@@ -4,6 +4,34 @@
 import { round } from "./format.js";
 
 const MIN_LEN = 0.1; // the shortest caption a cut leaves, as vc/edits.py MIN_ITEM
+const latin = /[A-Za-z0-9]/;
+const space = /[ 　]/;
+
+// 國字之間不留空白: the words a key moves lose the spaces between Chinese characters; a space next to a Latin letter
+// or digit stays as one. words: trimmed. Returns {text, drop}: drop holds the code-point indices of the spaces taken out, so the KTV marks
+// lose the same entries (a dropped space's mark goes, and the character before it runs on through the pause).
+function squeeze(words) {
+  const cs = [...words];
+  const drop = new Set();
+  let text = "";
+  for (let i = 0; i < cs.length; i++) {
+    if (!space.test(cs[i])) {
+      text += cs[i];
+      continue;
+    }
+    let j = i;
+    while (j < cs.length && space.test(cs[j])) j++;
+    const keep = i > 0 && j < cs.length && (latin.test(cs[i - 1]) || latin.test(cs[j]));
+    if (keep) text += " ";
+    for (let x = keep ? i + 1 : i; x < j; x++) drop.add(x);
+    i = j - 1;
+  }
+  return { text, drop };
+}
+
+const keepMarks = (marks, drop) => marks.filter((_, i) => !drop.has(i));
+// the space where two lines' words join: one next to a Latin letter or digit, none between Chinese characters
+const seam = (a, b) => (a.trim() && b && (latin.test(a.slice(-1)) || latin.test(b.slice(0, 1))) ? " " : "");
 
 // The KTV wipe marks (vc/ktv.py) of the words from index cut of text on, moved by shift seconds to the new caption's
 // start. Only when the box holds the saved text and the marks fit it; the new caption otherwise has no wipe. The
@@ -30,7 +58,9 @@ export function splitTextTarget(cap, text, from, to, t, id) {
   const at = round(t, 3);
   const { kt: _kt, ...fields } = cap;
   const marks = tailMarks(cap, text, to + after.length - tail.length, at - start);
-  const item = { ...fields, id, start: at, text: tail, shot: null, ...(marks ? { kt: marks } : {}) };
+  const words = squeeze(tail.trim());
+  const item = { ...fields, id, start: at, text: words.text, shot: null,
+    ...(marks ? { kt: keepMarks(marks, words.drop) } : {}) };
   return {
     id,
     ops: [{ op: "caption.update", id: cap.id, patch: { text: head, end: at } }, { op: "caption.add", item }],
@@ -52,12 +82,13 @@ const fits = (c, t) => {
 };
 
 // The merged line's marks; undefined leaves the previous caption's as they are (no wipe, or no words added).
-function mergedMarks(prev, cap, text, shift) {
+function mergedMarks(prev, cap, text, shift, gap, drop) {
   if (!fits(prev, prev.text) || !text.trim()) return undefined;
   if (text !== cap.text || !fits(cap, text)) return null;
   const head = prev.kt.map(Number);
-  // the joining space starts where the previous line's wipe ends; this line's marks move by shift seconds
-  return [...head, ...cap.kt.map((m) => round(Number(m) + shift, 3))];
+  // a joining space starts where the previous line's wipe ends; without one the previous line's last character
+  // runs on to this line's first. This line's marks move by shift seconds.
+  return [...(gap ? head : head.slice(0, -1)), ...keepMarks(cap.kt, drop).map((m) => round(Number(m) + shift, 3))];
 }
 
 // project: the project; cap: the caption; text: what its box holds (maybe not saved yet). Returns {ops, id} (id:
@@ -71,10 +102,11 @@ export function mergeTextTarget(project, cap, text) {
     .reduce((a, c) => (!a || Number(c.start) > Number(a.start) ? c : a), null);
   if (!prev) return { error: "這句前面沒有字幕可以合併" };
   const head = (prev.text || "").trimEnd();
-  const tail = text.trim();
-  const joined = head.trim() && tail ? `${head} ${tail}` : head + tail;
+  const tail = squeeze(text.trim());
+  const gap = seam(head, tail.text);
+  const joined = head + gap + tail.text;
   const end = round(Math.max(Number(prev.end), Number(cap.end)), 3);
-  const marks = mergedMarks(prev, cap, text, start - Number(prev.start));
+  const marks = mergedMarks(prev, cap, text, start - Number(prev.start), gap, tail.drop);
   const patch = { text: joined, end, ...(marks !== undefined ? { kt: marks } : {}) };
   return {
     id: prev.id,
@@ -86,15 +118,13 @@ export function mergeTextTarget(project, cap, text) {
 // after the text cursor go on the front of the next caption on the same row, and the time cut is the playhead, as
 // Shift+F3: this caption ends there and the next one starts there. The KTV wipe carries over when both lines' marks
 // fit their text; the next line's wipe is dropped when it cannot cover the words it gains.
-const latin = /[A-Za-z0-9]/;
-
-function movedMarks(cap, next, text, k, t, gap) {
+function movedMarks(cap, next, text, k, t, gap, drop) {
   if (!fits(next, next.text)) return undefined;
   if (text !== cap.text || !fits(cap, text)) return null;
   const s0 = Number(cap.start);
   const s1 = Number(next.start);
   const n = cap.kt.length - 1;
-  const moved = cap.kt.slice(k, n).map((m) => round(Math.max(0, Number(m) + s0 - t), 3));
+  const moved = keepMarks(cap.kt.slice(k, n), drop).map((m) => round(Math.max(0, Number(m) + s0 - t), 3));
   const rest = next.kt.map((m) => round(Number(m) + s1 - t, 3));
   return [...moved, ...(gap ? [rest[0]] : []), ...rest]; // a joining space starts with the next line's first word
 }
@@ -118,12 +148,12 @@ export function moveTailTarget(project, cap, text, from, to, t) {
   if (Number(next.end) - t < MIN_LEN) return { error: "下一句在播放頭之前就結束了，無法接到播放頭" };
   const at = round(t, 3);
   const body = (next.text || "").trimStart();
-  const words = tail.trimEnd();
-  const gap = latin.test(words.slice(-1)) && latin.test(body.slice(0, 1)) ? " " : "";
+  const words = squeeze(tail.trimEnd());
+  const gap = seam(words.text, body);
   const lead = text.length - text.trimStart().length;
   const k = [...text.slice(lead, to + after.length - tail.length)].length;
-  const marks = movedMarks(cap, next, text, k, at, gap);
-  const patch = { text: words + gap + body, start: at, ...(marks !== undefined ? { kt: marks } : {}) };
+  const marks = movedMarks(cap, next, text, k, at, gap, words.drop);
+  const patch = { text: words.text + gap + body, start: at, ...(marks !== undefined ? { kt: marks } : {}) };
   return {
     id: next.id,
     ops: [{ op: "caption.update", id: cap.id, patch: { text: head, end: at } },
@@ -135,11 +165,11 @@ export function moveTailTarget(project, cap, text, from, to, t) {
 // cursor go on the end of the previous caption on the same row, and the time cut is the playhead, as Shift+F1: this
 // caption starts there and the previous one ends there. The KTV wipe carries over when both lines' marks fit their
 // text; the previous line's wipe is dropped when it cannot cover the words it gains.
-function headMarks(prev, cap, text, m, gap) {
+function headMarks(prev, cap, text, m, gap, drop) {
   if (!fits(prev, prev.text)) return undefined;
   if (text !== cap.text || !fits(cap, text)) return null;
   const n = prev.kt.length - 1;
-  const moved = cap.kt.slice(0, m + 1).map((x) => round(Number(x) + Number(cap.start) - Number(prev.start), 3));
+  const moved = keepMarks(cap.kt.slice(0, m + 1), drop).map((x) => round(Number(x) + Number(cap.start) - Number(prev.start), 3));
   return [...prev.kt.slice(0, gap ? n + 1 : n).map(Number), ...moved]; // the old end mark starts a joining space
 }
 
@@ -160,9 +190,10 @@ export function moveHeadTarget(project, cap, text, from, to, t) {
   if (t - start < MIN_LEN || Number(cap.end) - t < MIN_LEN) return { error: "播放頭太靠近這句字幕的開頭或結尾" };
   const at = round(t, 3);
   const body = (prev.text || "").trimEnd();
-  const gap = latin.test(body.slice(-1)) && latin.test(words.slice(0, 1)) ? " " : "";
-  const marks = headMarks(prev, cap, text, [...words].length, gap);
-  const patch = { text: body + gap + words, end: at, ...(marks !== undefined ? { kt: marks } : {}) };
+  const moved = squeeze(words);
+  const gap = seam(body, moved.text);
+  const marks = headMarks(prev, cap, text, [...words].length, gap, moved.drop);
+  const patch = { text: body + gap + moved.text, end: at, ...(marks !== undefined ? { kt: marks } : {}) };
   const lead = text.length - text.trimStart().length;
   const k = [...text.slice(lead, to + after.length - rest.length)].length;
   const own = text === cap.text && fits(cap, text)
