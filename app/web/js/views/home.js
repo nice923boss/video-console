@@ -120,8 +120,8 @@ function projectMenu(e, p, currentPid) {
   const r = e.type === "contextmenu" ? null : e.currentTarget.getBoundingClientRect();
   const at = r ? { x: r.left, y: r.bottom + 4 } : { x: e.clientX, y: e.clientY };
   openMenu(e, [
-    { label: "開啟", icon: "folder-open", onClick: () => openProject(p.id) },
     { label: "開啟剪輯頁", icon: "scissors", onClick: () => openProject(p.id, "edit") },
+    { label: "開啟分鏡頁", icon: "grid", onClick: () => openProject(p.id, "board") },
     { divider: true },
     { label: "重新命名…", icon: "pencil", onClick: () => renameProject(p, currentPid) },
     { label: "建立副本…", icon: "copy", onClick: () => duplicateProject(p.id) },
@@ -168,7 +168,7 @@ function Hero({ projects, jobs, comfy, lastProject }) {
         <${Button} kind="primary" icon="plus" onClick=${() => openNewProject()}>新增專案<//>
         <${Button} icon="file" onClick=${startFromScript}>從劇本開始<//>
         <${Button} icon="upload" onClick=${pickProjectZip} title="打開另一台電腦「匯出專案」產生的 ZIP，接著剪輯；也可以直接把 ZIP 拖進視窗">匯入專案<//>
-        ${lastProject && html`<${Button} kind="ghost" icon="arrow-right" onClick=${() => openProject(lastProject.id)}
+        ${lastProject && html`<${Button} kind="ghost" icon="arrow-right" onClick=${() => openProject(lastProject.id, "edit")}
           title=${lastProject.name}>繼續「${lastProject.name}」<//>`}
       </div>
     </div>
@@ -190,9 +190,9 @@ function ProjectCard({ p, current }) {
   const ready = (p.videos || 0) + (p.stills || 0);
   return html`<article class=${`proj-card ${current ? "is-current" : ""}`} tabindex="0" aria-label=${p.name} draggable="true"
       onDragStart=${(e) => { e.dataTransfer.setData(DRAG_TYPE, p.id); e.dataTransfer.effectAllowed = "move"; }}
-      onClick=${() => openProject(p.id)} onContextMenu=${(e) => projectMenu(e, p, current ? p.id : null)}
+      onClick=${() => openProject(p.id, "edit")} onContextMenu=${(e) => projectMenu(e, p, current ? p.id : null)}
       onKeyDown=${(e) => {
-        if (e.key === "Enter") openProject(p.id);
+        if (e.key === "Enter") openProject(p.id, "edit");
         else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) projectMenu(e, p, current ? p.id : null);
       }}>
     <${Thumb} pid=${p.id} path=${p.thumb || ""} ratio="16/9" fit="cover" icon="clapper" class="proj-thumb">
@@ -276,7 +276,7 @@ function TrashList({ projects }) {
   const restore = async (t) => {
     try {
       await api.post(`/api/trash/${enc(t.folder)}/restore`);
-      toast(`已還原「${t.name}」`, { level: "success", action: { label: "開啟", fn: () => openProject(t.id) } });
+      toast(`已還原「${t.name}」`, { level: "success", action: { label: "開啟", fn: () => openProject(t.id, "edit") } });
       load();
     } catch (err) {
       toastError(err, "無法還原專案");

@@ -95,7 +95,7 @@ function projectCommands(s) {
     .sort((a, b) => (b.updated || 0) - (a.updated || 0))
     .map((p) => ({
       id: `open:${p.id}`, group: "專案", label: `開啟專案：${p.name}`, icon: "folder", detail: `${p.shots} 個鏡頭`,
-      run: () => openProject(p.id),
+      run: () => openProject(p.id, "edit"),
     }));
   return [...list, ...others];
 }

@@ -102,7 +102,7 @@ function projectMenu(e, { project, projects, commands }) {
     recent.length && { header: "最近的專案" },
     ...recent.map((p) => ({
       label: p.name, checked: project ? p.id === project.id : false,
-      hint: `${p.shots} 鏡`, onClick: () => (project && p.id === project.id ? null : openProject(p.id)),
+      hint: `${p.shots} 鏡`, onClick: () => (project && p.id === project.id ? null : openProject(p.id, "edit")),
     })),
     recent.length && { divider: true },
     project && { label: "重新命名專案…", icon: "pencil", onClick: rename },

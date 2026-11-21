@@ -213,7 +213,7 @@ async function restoreDeleted(pid) {
     const hit = trash.filter((t) => t.id === pid).sort((a, b) => b.deleted - a.deleted)[0];
     if (!hit) throw new Error("垃圾桶裡找不到這個專案");
     await api.post(`/api/trash/${enc(hit.folder)}/restore`);
-    toast(`已還原「${hit.name}」`, { level: "success", action: { label: "開啟", fn: () => openProject(pid) } });
+    toast(`已還原「${hit.name}」`, { level: "success", action: { label: "開啟", fn: () => openProject(pid, "edit") } });
   } catch (err) {
     toastError(err, "無法還原專案");
   }
