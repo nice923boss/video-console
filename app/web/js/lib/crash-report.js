@@ -16,8 +16,14 @@ export function report(message, stack) {
   }).catch((err) => console.warn("無法回報畫面錯誤", err));
 }
 
+// The browser fires this when a ResizeObserver callback changes layout again within a frame; it delivers the rest
+// next frame, so nothing is lost, but it would log an ERROR on every edit page load and use up MAX_REPORTS.
+export const harmless = (message) => /^ResizeObserver loop/.test(String(message || ""));
+
 export function watchErrors() {
-  window.addEventListener("error", (e) => report(e.message, e.error && e.error.stack));
+  window.addEventListener("error", (e) => {
+    if (!harmless(e.message)) report(e.message, e.error && e.error.stack);
+  });
   window.addEventListener("unhandledrejection", (e) => {
     const r = e.reason;
     if (r instanceof ApiError) return; // the server logged its side already
