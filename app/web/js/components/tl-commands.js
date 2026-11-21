@@ -83,14 +83,16 @@ export async function extendCaption(project, clips, sel) {
   if (res && to.shortened) toast("這句和下一句重疊，已把結尾縮到下一句的開頭", { id: "tl-extend" });
 }
 
-// Every caption on one row runs on to where the next one starts, as one undo step: the row header button
+// Every caption on one row ends where the next one starts (gaps close, overlaps are cut back), as one undo step: the row header button
 // (components/tl-captions.js) names the row; the key takes the selected caption's row, else the main 字幕 row.
 export async function extendRow(project, track) {
   const list = extendAllTargets(project, track);
-  if (!list.length) return warn("這一列的字幕之間沒有空檔可以補");
+  if (!list.length) return warn("這一列的字幕之間沒有空檔或重疊要處理");
   const res = await ops(list.map(({ id, end }) => ({ op: "caption.update", id, patch: { end } })),
-    { label: `整列字幕延長到下一句（${list.length} 句）` });
-  if (res) toast(`已把 ${list.length} 句字幕延長到下一句的開頭，${undoKeyText()}一次還原`, { level: "success" });
+    { label: `整列字幕接到下一句（${list.length} 句）` });
+  const cut = list.filter((x) => x.shortened).length;
+  const what = [list.length - cut && `延長 ${list.length - cut} 句`, cut && `縮短 ${cut} 句重疊的`].filter(Boolean).join("、");
+  if (res) toast(`已把字幕結尾接到下一句的開頭（${what}），${undoKeyText()}一次還原`, { level: "success" });
 }
 
 export const extendSelRow = (project, clips, sel) =>

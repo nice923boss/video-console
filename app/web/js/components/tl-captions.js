@@ -48,7 +48,7 @@ function menuBtn(project, t) {
 
 // track: "main" or a caption track id.
 const extendBtn = (project, track) => html`<${IconButton} icon="skip-forward" size=${14}
-  title=${`整列字幕延長到下一句的開頭，補掉句子之間的空檔${keyHint("edit.extendAllCaptions")}`}
+  title=${`整列字幕的結尾接到下一句的開頭，補掉空檔、縮掉重疊${keyHint("edit.extendAllCaptions")}`}
   onClick=${() => extendRow(project, track)} />`;
 
 // row, label, lane, eyeBtn and setTrack are the timeline's own row helpers (components/timeline.js).

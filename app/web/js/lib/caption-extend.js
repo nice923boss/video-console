@@ -1,6 +1,6 @@
 // 延長到下一句: a caption's new end is the start of the next caption on its row (the main 字幕 row, or its caption
 // track), so the gap between the two lines closes, or an overlap goes. E does it for the selected caption
-// (extendTarget), the row header button closes the gaps on one row at once (extendAllTargets). Shift+F1 and Shift+F3 trim the caption
+// (extendTarget), the row header button does every caption on one row at once (extendAllTargets). Shift+F1 and Shift+F3 trim the caption
 // under the playhead and bring the neighbour on that side up to the cut (trimJoinTarget). Pure, so tests run it in node.
 import { round } from "./format.js";
 
@@ -67,16 +67,15 @@ export function trimJoinTarget(project, id, t, side) {
   return { ops, joined: true };
 }
 
-// Every caption on row track ("main" or a caption track id) that a gap parts from the next one, as [{id, end}]
-// with the end that closes the gap. Captions already touching or overlapping the next, and the last, stay out.
+// Every caption on row track ("main" or a caption track id) that E would change, in start order, as [{id, end}]
+// (shortened: true on one that overlapped the next). Captions already touching the next, and the last, stay out.
 export function extendAllTargets(project, track) {
   const row = rowOf(project);
-  const mine = (project.captions || []).filter((c) => row(c) === track)
-    .sort((a, b) => num(a.start) - num(b.start));
-  return mine.flatMap((c, i) => {
-    let j = i + 1;
-    while (j < mine.length && num(mine[j].start) <= num(c.start) + EPS) j += 1;
-    const next = j < mine.length ? num(mine[j].start) : -Infinity;
-    return next > num(c.end) + EPS ? [{ id: c.id, end: round(next, 3) }] : [];
-  });
+  return (project.captions || []).filter((c) => row(c) === track)
+    .sort((a, b) => num(a.start) - num(b.start))
+    .flatMap((c) => {
+      const to = extendTarget(project, c.id);
+      if (to.error) return [];
+      return [to.shortened ? { id: c.id, end: to.end, shortened: true } : { id: c.id, end: to.end }];
+    });
 }
