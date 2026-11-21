@@ -328,6 +328,41 @@ def _restore_ops(project: dict, clips: list[dict]) -> list[dict]:
     return ops
 
 
+def _close_caption_overlaps(before: dict, after: dict, ops: list[dict], skip: set[str]) -> None:
+    """A caption that now runs into the next one on its row, because one of the two followed its shot (a
+    shorter shot pulls the next line up under a caption that stays), ends where the next one starts, as E
+    does. Overlaps that were there before the edit, and ones that would leave the caption too short, stay."""
+    tracks = {t["id"] for t in after.get("captionTracks") or []}
+    row = lambda c: c.get("track") if c.get("track") in tracks else "main"  # noqa: E731
+    patches = {o["id"]: o["patch"] for o in ops if o["op"] == "caption.update"}
+    old = {c["id"]: (float(c.get("start") or 0.0), float(c.get("end") or 0.0)) for c in before.get("captions") or []}
+    now = {}
+    for cap in after.get("captions") or []:
+        if cap["id"] not in skip:
+            at = {**cap, **patches.get(cap["id"], {})}
+            now[cap["id"]] = (float(at.get("start") or 0.0), float(at.get("end") or 0.0))
+    rows: dict[str, list[dict]] = {}
+    for cap in after.get("captions") or []:
+        if cap["id"] in now:
+            rows.setdefault(row(cap), []).append(cap)
+    for caps in rows.values():
+        caps.sort(key=lambda c: now[c["id"]][0])
+        for a, b in zip(caps, caps[1:]):
+            (a_start, a_end), b_start = now[a["id"]], now[b["id"]][0]
+            if a_end <= b_start + EPS or (a["id"] not in patches and b["id"] not in patches):
+                continue
+            if a["id"] in old and b["id"] in old and old[a["id"]][1] > old[b["id"]][0] + EPS:
+                continue  # overlapped before the edit: left as it was
+            if b_start - a_start < MIN_ITEM - EPS:
+                continue
+            end = round(b_start, 3)
+            if a["id"] in patches:
+                patches[a["id"]]["end"] = end
+            else:
+                patches[a["id"]] = {"end": end}
+                ops.append({"op": "caption.update", "id": a["id"], "patch": patches[a["id"]]})
+
+
 def follow_ops(before: dict, after: dict, shift: bool = True) -> list[dict]:
     """Update ops that move the items of `after` to follow its shots, compared with `before`.
 
@@ -382,6 +417,7 @@ def follow_ops(before: dict, after: dict, shift: bool = True) -> list[dict]:
         if abs(new_start - start) <= EPS and abs(new_end - end) <= EPS:
             continue
         ops.append({"op": "caption.update", "id": cap["id"], "patch": {"start": new_start, "end": new_end}})
+    _close_caption_overlaps(before, after, ops, dropped | set(parked_caps))
 
     by_shot = {c["shot"]["id"]: c for c in old_clips}
     segs = _segments(old_clips, new_clips)
