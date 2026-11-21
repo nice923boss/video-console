@@ -1,5 +1,5 @@
-// The 聲道 / 降噪 / 去回音 part of an audio clip's properties (edit-props.js AudioPanel): which channel of its file
-// the clip plays, noise reduction learned from a stretch of noise in the clip, and the classic echo remover. The
+// The 聲道 / 降噪 / 去回音 part of an audio clip's properties (edit-props.js AudioPanel) and of a shot's own sound
+// (insp-edit.js, op "shot.update" on lib/voice-stems.js shotSound): which channel of its file the clip plays, noise reduction learned from a stretch of noise in the clip, and the classic echo remover. The
 // preview plays them from stems (lib/voice-stems.js) and the export renders the same (vc/voiceclean.py).
 import { html, useState, useEffect } from "../lib/h.js";
 import { getState, setState, useStore } from "../lib/store.js";
@@ -21,7 +21,7 @@ const MODES = [
 ];
 const pct = (v) => `${Math.round(v * 100)}%`;
 const db = (v) => `${v > 0 ? "+" : ""}${round(v, 1)} dB`;
-const update = (id, patch, label) => ops([{ op: "audio.update", id, patch }], { label });
+const update = (op, id, patch, label) => ops([{ op, id, patch }], { label });
 const levels = new Map(); // what voice-channels gave, by clip and span: the overview decodes the whole span
 
 // The stretch of the clip's source file (seconds) taken as noise: the I/O range marked on the timeline where it
@@ -60,7 +60,7 @@ function ChannelRow({ label, on, onPick, children }) {
 }
 
 // Every channel of the clip's file with its level over the clip; picking one plays only that channel.
-function ChannelSection({ pid, item, media }) {
+function ChannelSection({ pid, item, media, op }) {
   const key = JSON.stringify([pid, item.id, media.file, item.in ?? 0, item.out ?? null]);
   const [got, setGot] = useState({ key: "", streams: null, error: "" });
   useEffect(() => {
@@ -82,7 +82,7 @@ function ChannelSection({ pid, item, media }) {
   const error = got.key === key ? got.error : "";
   const pick = item.channel;
   const total = streams ? streams.reduce((n, s) => n + s.channels.length, 0) : 0;
-  const set = (channel, label) => update(item.id, { channel }, label);
+  const set = (channel, label) => update(op, item.id, { channel }, label);
 
   let body;
   if (error) body = html`<div class="insp-hint warn-text"><${Icon} name="alert" size=${14} />無法讀取聲道音量：${error}</div>`;
@@ -109,9 +109,9 @@ function ChannelSection({ pid, item, media }) {
   <//>`;
 }
 
-function DenoiseSection({ item, media }) {
+function DenoiseSection({ item, media, op }) {
   const dn = { ...DEFAULT_DENOISE, ...(item.denoise || {}), on: !!(item.denoise && item.denoise.on) };
-  const set = (patch, label) => update(item.id, { denoise: { ...dn, ...patch } }, label);
+  const set = (patch, label) => update(op, item.id, { denoise: { ...dn, ...patch } }, label);
   const take = () => {
     const sample = noiseSample(item, media, getState().editRange);
     if (!sample) return toast("先把播放頭移到這段音訊上只有雜音的地方，或用 I、O 標出一段雜音", { level: "warn" });
@@ -141,9 +141,9 @@ function DenoiseSection({ item, media }) {
   <//>`;
 }
 
-function EchoSection({ item }) {
+function EchoSection({ item, op }) {
   const dr = { ...DEFAULT_DEREVERB, ...(item.dereverb || {}), on: !!(item.dereverb && item.dereverb.on) };
-  const set = (patch, label) => update(item.id, { dereverb: { ...dr, ...patch } }, label);
+  const set = (patch, label) => update(op, item.id, { dereverb: { ...dr, ...patch } }, label);
   const off = !dr.on;
   const slider = (k, label, format, min = 0) => html`<${Field} key=${k} label=${label}>
     <${Slider} value=${dr[k]} min=${min} max=${1} step=${0.01} format=${format} disabled=${off}
@@ -162,16 +162,16 @@ function EchoSection({ item }) {
   <//>`;
 }
 
-export function VoicePanel({ project, item, media }) {
+export function VoicePanel({ project, item, media, op = "audio.update" }) {
   const entry = useStore((s) => (s.voiceStems || {})[item.id]);
   const mode = useStore((s) => (s.voiceMonitor && s.voiceMonitor.id === item.id ? s.voiceMonitor.mode : "fx"));
   useEffect(() => () => setState((s) => (s.voiceMonitor && s.voiceMonitor.id === item.id ? { voiceMonitor: null } : null)),
     [item.id]);
   const active = !!passParams(item);
   return html`
-    <${ChannelSection} pid=${project.id} item=${item} media=${media} />
-    <${DenoiseSection} item=${item} media=${media} />
-    <${EchoSection} item=${item} />
+    <${ChannelSection} pid=${project.id} item=${item} media=${media} op=${op} />
+    <${DenoiseSection} item=${item} media=${media} op=${op} />
+    <${EchoSection} item=${item} op=${op} />
     ${active && html`<${Field} label="預覽試聽" hint="原音是處理前的聲音，沒有補償音量差；只聽被移除的，用來檢查有沒有削到人聲">
       <${Segmented} size="sm" value=${mode} options=${MODES} onChange=${(m) => setState({ voiceMonitor: { id: item.id, mode: m } })} />
     <//>`}

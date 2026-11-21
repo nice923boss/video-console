@@ -109,9 +109,11 @@ def _tree(root: Path, prefix: str, limit: int | None = None) -> list[tuple[str, 
 
 
 def live_audio_clips(project: dict) -> set[str]:
-    """Ids of the audio clips on the timeline or parked on a shot: the ones whose voice-clean stems are used."""
-    parked = [a for s in project.get("shots") or [] for a in (s.get("parked") or {}).get("audio") or []]
-    return {a["id"] for a in [*(project.get("audio") or []), *parked] if isinstance(a, dict) and a.get("id")}
+    """Ids of the audio clips on the timeline or parked on a shot, and of the shots (for their own sound): the
+    ones whose voice-clean stems are used."""
+    shots = project.get("shots") or []
+    parked = [a for s in shots for a in (s.get("parked") or {}).get("audio") or []]
+    return {a["id"] for a in [*(project.get("audio") or []), *parked, *shots] if isinstance(a, dict) and a.get("id")}
 
 
 def backup_extras(project: dict, project_dir: Path, p5: bool = True) -> tuple[list[tuple[str, Path]], list[dict], list[str]]:

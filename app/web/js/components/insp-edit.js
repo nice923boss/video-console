@@ -24,6 +24,8 @@ import { StabilizeSettings } from "./stab-panel.js";
 import { ReviewSection } from "./review-list.js";
 import { fullGrade, isNeutral } from "../lib/grade.js";
 import { findLoud } from "./tl-wave.js";
+import { VoicePanel } from "./voice-panel.js";
+import { hasOwnSound, shotSound } from "../lib/voice-stems.js";
 
 const NONE = [];
 const MIN_LEN = 0.1;
@@ -127,8 +129,8 @@ async function declipShot(project, shot, clip) {
   toast(found.spans.length ? `已壓低 ${found.spans.length} 段爆音` : "目前的音量不會爆音，已移除先前的壓低");
 }
 
-// Speed, reverse, the shot's own sound volume and detached sound. The same commands sit on edit.speed, edit.reverseClip and
-// edit.detachAudio (tl-commands.js); edit.speed focuses the select here.
+// Speed, reverse, the shot's own sound volume and fades, and detached sound. The same commands sit on edit.speed,
+// edit.reverseClip and edit.detachAudio (tl-commands.js); edit.speed focuses the select here.
 function SpeedSection({ project, shot, vid, clips, busy }) {
   const speed = Number(shot.speed || 1);
   const detached = !!shot.audioDetached;
@@ -164,12 +166,22 @@ function SpeedSection({ project, shot, vid, clips, busy }) {
       ${(vid.volumeKeys || []).length > 0 && html`<${Button} size="sm" icon="x" title="移除自動壓低的音量關鍵幀，恢復原本的音量"
         onClick=${() => ops([{ op: "take.update", id: vid.id, patch: { volumeKeys: [] } }], { label: "移除壓低爆音" })}>移除壓低<//>`}
     </div>
-    ${clip && html`<${SourceKeys} project=${project} shot=${shot} clip=${clip} clips=${clips} />`}`}
+    ${clip && html`<${SourceKeys} project=${project} shot=${shot} clip=${clip} clips=${clips} />`}
+    <div class="row-2">
+      <${Field} label="原聲淡入">
+        <${NumberInput} value=${Number(shot.fadeIn || 0)} min=${0} max=${30} step=${0.1} digits=${2} suffix="秒"
+          onCommit=${(v) => updateShot(shot.id, { fadeIn: v }, { label: "原聲淡入" })} />
+      <//>
+      <${Field} label="原聲淡出">
+        <${NumberInput} value=${Number(shot.fadeOut || 0)} min=${0} max=${30} step=${0.1} digits=${2} suffix="秒"
+          onCommit=${(v) => updateShot(shot.id, { fadeOut: v }, { label: "原聲淡出" })} />
+      <//>
+    </div>`}
     ${vid.hasAudio && html`<${Button} icon="music"
-      title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、淡入淡出、加音量關鍵幀"}${keyHint("edit.detachAudio")}`}
+      title=${`${detached ? "刪除分離出的音訊，鏡頭改回播放自己的聲音" : "把原聲移到音訊軌，可以單獨修剪、移動、加音量關鍵幀；原聲的淡入淡出、聲道、降噪、去回音會一起帶過去"}${keyHint("edit.detachAudio")}`}
       onClick=${() => detachAudio(project, clips, sel)}>${detached ? "還原原聲" : "分離原聲"}<//>`}
-    ${vid.hasAudio && html`<${Button} icon="wand" title="降噪、去回音與選聲道都在分離出的音訊上調整；還沒分離就先分離原聲"
-      onClick=${() => voiceTools(project, shot, clips, sel)}>降噪／去回音<//>`}
+    ${vid.hasAudio && detached && html`<${Button} icon="wand" title="原聲已分離：聲道、降噪、去回音改在分離出的音訊上調整"
+      onClick=${() => voiceTools(project, shot)}>降噪／去回音<//>`}
     ${note && html`<${Hint}>${note}<//>`}
   <//>`;
 }
@@ -215,11 +227,10 @@ function StabilizeSection({ shot, vid, busy }) {
   <//>`;
 }
 
-// 降噪 / 去回音 / 聲道 belong to an audio clip (voice-panel.js): opens the shot's detached sound, detaching it first.
-function voiceTools(project, shot, clips, sel) {
-  const audio = shot.audioDetached && (project.audio || []).find((a) => a.shotId === shot.id);
+// While the shot's sound is detached its 降噪 / 去回音 / 聲道 are the audio clip's (voice-panel.js): selects that clip.
+function voiceTools(project, shot) {
+  const audio = (project.audio || []).find((a) => a.shotId === shot.id);
   if (audio) setState({ editSel: { type: "audio", id: audio.id } });
-  else detachAudio(project, clips, sel);
 }
 
 function StillSection({ shot, img }) {
@@ -337,6 +348,8 @@ export function EditTab({ project, shot, busy = NONE }) {
   const clip = pos >= 0 ? clips[pos] : null;
   const vid = videoTake(project, shot);
   const img = vid ? null : imageTake(project, shot);
+  // the shot's own sound takes 聲道 / 降噪 / 去回音 like an audio clip, until it is detached to one
+  const own = !!clip && hasOwnSound(clip);
 
   return html`
     <${SourceInfo} vid=${vid} img=${img} />
@@ -344,7 +357,9 @@ export function EditTab({ project, shot, busy = NONE }) {
     ${(vid || img) && html`<${GradeSection} shot=${shot} clip=${clip} />`}
     ${vid
       ? html`<${StabilizeSection} shot=${shot} vid=${vid} busy=${busy} />
-        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />`
+        <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />
+        ${own && html`<${VoicePanel} project=${project} item=${shotSound(clip)} media=${clip.take} op="shot.update" />`}
+        ${own && Number(shot.speed || 1) !== 1 && html`<${Hint}>變速的鏡頭，預覽播放的是還沒套用聲道、降噪、去回音的原聲；匯出會套用。<//>`}`
       : html`<${StillSection} shot=${shot} img=${img} />`}
     <${ReviewSection} id="insp-review" items=${shot.review}
       onChange=${(review) => updateShot(shot.id, { review }, { label: "刪除客戶意見" })} />

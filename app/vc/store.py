@@ -650,8 +650,8 @@ class ProjectStore:
                     unused += size
                     orphans.append(rel)
         parked = [a for s in project["shots"] for a in (s.get("parked") or {}).get("audio") or []]
-        live = {a["id"] for a in [*(project.get("audio") or []), *parked]}
-        for f in (root / CLEAN_DIR).glob("*"):  # stems of audio clips no longer in the project, half-written passes
+        live = {a["id"] for a in [*(project.get("audio") or []), *parked, *project["shots"]]}  # shots: their own sound
+        for f in (root / CLEAN_DIR).glob("*"):  # stems of clips no longer in the project, half-written passes
             st = f.stat()
             gone = f.suffix == ".part" or f.name.lstrip(".").split("-")[0] not in live
             if f.is_file() and gone and st.st_mtime <= fresh:

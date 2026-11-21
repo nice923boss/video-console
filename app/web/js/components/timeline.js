@@ -10,7 +10,7 @@ import { clock, setTime, onClock } from "../lib/clock.js";
 import { ops, undo, LINK_PREF } from "../lib/actions.js";
 import { setWatch, watchRefuses } from "../lib/watch.js";
 import { uploadFiles, importFiles } from "../lib/jobs-actions.js";
-import { copyItem, pasteItem } from "./tl-clipboard.js";
+import { copyItem, pasteItem, copyAttrs, pasteAttrs } from "./tl-clipboard.js";
 import { fmtTime, newId, round, clamp, kindOfName, ACCEPT_AUDIO } from "../lib/format.js";
 import { sequenceDuration, audioLength, audioMedia, audioTrack, VOICE_TRACK, SOURCE_TRACK, musicTracks, mergeTracks } from "../lib/sequence.js";
 import { generateMissing, generateVoices } from "../lib/voice.js";
@@ -19,6 +19,7 @@ import { decodeText, TEXT_ENCODINGS, encodingLabel, linesLabel } from "../lib/te
 import { openCastDialog } from "../dialogs/cast-dialog.js";
 import { openTitleDialog } from "../dialogs/title-dialog.js";
 import { openBilingualImport } from "../dialogs/bilingual-import.js";
+import { resetAttrs } from "../dialogs/reset-attrs.js";
 import { captionRows } from "./tl-captions.js";
 import { copyChapters } from "../lib/chapters.js";
 import { upload } from "../lib/api.js";
@@ -446,6 +447,9 @@ export function Timeline({ project, clips, hotkeys = true }) {
     "edit.deselect": () => (selRef.current ? setState({ editSel: null }) : false),
     "edit.copy": on(copyItem),
     "edit.paste": () => pasteItem(dataRef.current.project, dataRef.current.clips),
+    "edit.copyAttrs": on(copyAttrs),
+    "edit.pasteAttrs": on(pasteAttrs),
+    "edit.resetAttrs": on(resetAttrs),
     "edit.split": on(splitAtPlayhead),
     "edit.splitAll": on(splitAllAtPlayhead),
     "edit.trimStart": () => trimAtPlayhead(dataRef.current.project, dataRef.current.clips, selRef.current, "start"),

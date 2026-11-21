@@ -1,5 +1,6 @@
 // Copy and paste of timeline clips (edit.copy / edit.paste): shots, upper-track pictures, captions (with their
-// voice-overs), adjustment layers and soundtrack clips. The copy lands at the playhead.
+// voice-overs), adjustment layers and soundtrack clips. The copy lands at the playhead. And of a sound's settings
+// (edit.copyAttrs / edit.pasteAttrs), between audio clips and the shots' own sound.
 import { ops } from "../lib/actions.js";
 import { setState } from "../lib/store.js";
 import { clock } from "../lib/clock.js";
@@ -7,6 +8,8 @@ import { newId, round } from "../lib/format.js";
 import { clipIndexAt, audioMedia } from "../lib/sequence.js";
 import { keyHint } from "../lib/keymap.js";
 import { toast } from "./toast.js";
+import { hasOwnSound } from "../lib/voice-stems.js";
+import { current, together } from "./tl-commands.js";
 
 const LISTS = { audio: "audio", overlay: "overlays", caption: "captions", adjust: "adjustments" };
 const NAMES = { shot: "鏡頭", audio: "音訊片段", overlay: "上方畫面", caption: "字幕", adjust: "調整圖層" };
@@ -102,5 +105,67 @@ function pasteAudio(project, clips, t, { item }) {
     if ((captionId && !bind.captionId) || (shotId && !bind.shotId)) {
       toast(`原片段還在，複本不綁定${captionId ? "字幕" : "鏡頭"}`, { id: "tl-copy", duration: 2500 });
     }
+  });
+}
+
+// ---- a sound's settings: volume, fades, 聲道, 降噪 and 去回音
+
+let attrs = null; // { volume (null: the source's volume is keyed), fadeIn, fadeOut, channel, denoise, dereverb, file }
+
+const volumeKeyed = (item) => (item.keyframes || []).some((k) => k.volume != null);
+
+// Where a clip's sound settings are kept: {op, item, file, keyed} of an audio clip, or of a shot's own sound (of
+// its audio clip while detached). Null for a clip without sound.
+function soundOf(project, clips, type, item) {
+  if (type === "shot" && item.audioDetached) {
+    const audio = (project.audio || []).find((a) => a.shotId === item.id);
+    return audio ? soundOf(project, clips, "audio", audio) : null;
+  }
+  if (type === "audio") {
+    const media = audioMedia(project, item);
+    return media ? { op: "audio.update", item, file: media.file, keyed: volumeKeyed(item) } : null;
+  }
+  const clip = type === "shot" && clips.find((c) => c.shot.id === item.id);
+  return clip && hasOwnSound(clip) ? { op: "shot.update", item, file: clip.take.file, keyed: false } : null;
+}
+
+// The selected audio clip or shot, else the shot under the playhead. Keyframes stay with their clip, so a volume
+// set by keyframes is not copied.
+export function copyAttrs(project, clips, sel) {
+  const cur = current(project, clips, sel);
+  const src = cur && soundOf(project, clips, cur.type, cur.item);
+  if (!src) return warn("先選取音訊片段或有原聲的鏡頭，再複製聲音屬性");
+  const { item } = src;
+  attrs = clone({ volume: src.keyed ? null : Number(item.volume ?? 1), fadeIn: Number(item.fadeIn || 0),
+    fadeOut: Number(item.fadeOut || 0), channel: item.channel || null, denoise: item.denoise || null,
+    dereverb: item.dereverb || null, file: src.file });
+  toast(`已複製聲音屬性${src.keyed ? "（音量有關鍵幀，不含音量）" : ""}`, { id: "tl-copy", duration: 1500 });
+}
+
+// Onto every selected audio clip or shot, one undo step. The noise sample is a stretch of the source's file, so it
+// goes along only onto clips of that file; an effect the source lacks is switched off.
+export function pasteAttrs(project, clips, sel) {
+  if (!attrs) return warn(`還沒有複製聲音屬性，先選取音訊片段或鏡頭再按${keyHint("edit.copyAttrs")}`);
+  const cur = current(project, clips, sel);
+  const sounds = cur ? together(project, sel, cur.item).map((x) => soundOf(project, clips, cur.type, x)).filter(Boolean) : [];
+  if (!sounds.length) return warn("聲音屬性只能貼到音訊片段或有原聲的鏡頭");
+  const sampled = !!(attrs.denoise && attrs.denoise.sample);
+  const list = sounds.map((to) => {
+    const patch = { fadeIn: attrs.fadeIn, fadeOut: attrs.fadeOut, channel: attrs.channel };
+    if (attrs.volume != null && !to.keyed) patch.volume = attrs.volume;
+    if (attrs.denoise) patch.denoise = to.file === attrs.file ? attrs.denoise : { ...attrs.denoise, sample: null };
+    else if (to.item.denoise) patch.denoise = { ...to.item.denoise, on: false };
+    if (attrs.dereverb) patch.dereverb = attrs.dereverb;
+    else if (to.item.dereverb) patch.dereverb = { ...to.item.dereverb, on: false };
+    return { op: to.op, id: to.item.id, patch };
+  });
+  const other = sampled ? sounds.filter((to) => to.file !== attrs.file).length : 0;
+  const keyed = attrs.volume != null ? sounds.filter((to) => to.keyed).length : 0;
+  return ops(list, { label: "貼上聲音屬性" }).then((res) => {
+    if (!res) return res;
+    const notes = [other && `${other} 段的來源檔不同，降噪要重新取樣雜訊`, keyed && `${keyed} 段有音量關鍵幀，音量不變`].filter(Boolean);
+    toast(`已貼上聲音屬性${sounds.length > 1 ? `到 ${sounds.length} 個片段` : ""}${notes.length ? `；${notes.join("；")}` : ""}`,
+      { id: "tl-copy", level: other ? "warn" : undefined, duration: notes.length ? 5000 : 1500 });
+    return res;
   });
 }

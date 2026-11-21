@@ -6,13 +6,14 @@ import { getState, setState } from "../lib/store.js";
 import { clock } from "../lib/clock.js";
 import { keyLabel } from "../lib/keymap.js";
 import { rippleOps } from "../lib/ripple.js";
-import { copyItem, pasteItem } from "./tl-clipboard.js";
+import { copyItem, pasteItem, copyAttrs, pasteAttrs } from "./tl-clipboard.js";
 import { splitAtPlayhead } from "./tl-edit.js";
 import {
   current, OFF_FIELD, KEYABLE, toggleEnabled, together, rangeFromClip, freezeFrame, detachAudio, reverseClip, isReverse,
   focusSpeed, addKeyframe,
 } from "./tl-commands.js";
 import { openMenu } from "./overlay.js";
+import { resetAttrs } from "../dialogs/reset-attrs.js";
 import { multiAudio } from "./tl-audio-sel.js";
 import { multiClip } from "./tl-clip-sel.js";
 import { labelColors } from "./insp-content.js";
@@ -140,6 +141,11 @@ function clipItems(data, sel, cur) {
     { header: NAMES[sel.type] },
     { label: "複製", icon: "copy", hint: keyLabel("edit.copy"), onClick: run(copyItem) },
     { label: "在播放頭貼上", icon: "clipboard", hint: keyLabel("edit.paste"), onClick: () => pasteItem(data().project, data().clips) },
+    ...(sel.type === "shot" || sel.type === "audio" ? [
+      { label: "複製聲音屬性", icon: "copy", hint: keyLabel("edit.copyAttrs"), onClick: run(copyAttrs) },
+      { label: `貼上聲音屬性${count}`, icon: "clipboard", hint: keyLabel("edit.pasteAttrs"), onClick: run(pasteAttrs) },
+    ] : []),
+    { label: `重設屬性…${count}`, icon: "undo", hint: keyLabel("edit.resetAttrs"), onClick: run(resetAttrs) },
     { label: "在播放頭分割", icon: "scissors", hint: keyLabel("edit.split"), onClick: run(splitAtPlayhead),
       disabled: !inside, title: inside ? undefined : PLAYHEAD_OFF },
     ...(sel.type === "shot" ? shotItems(cur, run, at) : []),

@@ -204,6 +204,10 @@ def split_ops(g: dict, t: float, local: float, project: dict) -> list[dict]:
         tail = {"trimIn": at, "trimOut": item.get("trimOut")} if video else {"duration": round(clip["length"] - local, 2)}
         sid = new_id("s")
         copies, active = _tail_versions(project, item, sid)
+        if item.get("fadeOut"):  # the fades of its own sound stay at the two outer ends, as on an audio clip
+            head["fadeOut"] = 0
+        if item.get("fadeIn"):
+            tail["fadeIn"] = 0
         return [{"op": "shot.update", "id": item["id"], "patch": {**head, "transition": {**trans, "type": "cut"}}},
                 *copies, {"op": "shot.add", "shot": {**item, **tail, **active, "id": sid}, "index": clip["index"] + 1}]
     head_keys, tail_keys = split_keys(item, local)
@@ -393,7 +397,9 @@ def detach(project: dict, shot_id: str | None = None, t: float | None = None) ->
             "in": r3(clip["in"]), "out": r3(clip["out"]), "name": f"{shot.get('name') or '鏡頭'} 原聲",
             **({"speed": clip["speed"]} if clip["speed"] != 1 else {}),
             **({"volume": shot["volume"]} if level != 1 else {}),
-            **({"keyframes": [{**k, "volume": round(min(VOLUME_MAX, k["volume"] * level), 4)} for k in keys]} if keys else {})}
+            **({"keyframes": [{**k, "volume": round(min(VOLUME_MAX, k["volume"] * level), 4)} for k in keys]} if keys else {}),
+            # The fades, channel, 降噪 and 去回音 set on the shot's sound go with it (the shot keeps its own for 還原).
+            **{k: shot[k] for k in ("fadeIn", "fadeOut", "channel", "denoise", "dereverb") if shot.get(k)}}
     return {"ops": [{"op": "audio.add", "item": item}, {"op": "shot.update", "id": shot["id"], "patch": {"audioDetached": True}}],
             "label": "分離原聲", "id": aid}
 

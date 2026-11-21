@@ -365,10 +365,11 @@ export function Player({ project, clips, hotkeys = true, meters = false, onToggl
     engineRef.current.setSolo(solo);
   }, [solo]);
 
-  // The stems the audio clips' 降噪 / 去回音 / 聲道 play from, made again whenever their settings or trims change.
+  // The stems the 降噪 / 去回音 / 聲道 of the audio clips and of the shots' own sound play from, made again
+  // whenever their settings or trims change.
   useEffect(() => {
-    requestStems(project);
-  }, [project]);
+    requestStems(project, clips);
+  }, [project, clips]);
   useEffect(() => {
     engineRef.current.setVoice(voiceStems, voiceMonitor);
   }, [voiceStems, voiceMonitor]);

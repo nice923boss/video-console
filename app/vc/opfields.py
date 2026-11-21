@@ -346,6 +346,13 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "speed": _float(0.25, 4),  # playback speed of a video shot; its length on the timeline is (out - in) / speed
     "audioDetached": _bool,  # the shot's own sound plays from an audio clip instead (see AUDIO_FIELDS takeId)
     "volume": _float(0, 4),  # gain of the shot's own sound while not detached; 1 = as recorded
+    # The shot's own sound while not detached, as on an audio clip (AUDIO_FIELDS): fades in seconds of the timeline,
+    # the one channel it plays, 降噪 and 去回音. Detaching carries them to the audio clip.
+    "fadeIn": _float(0, 30),
+    "fadeOut": _float(0, 30),
+    "channel": clean_channel,
+    "denoise": clean_denoise,
+    "dereverb": clean_dereverb,
     "grade": clean_grade,  # colour grade of this shot's picture alone, under any adjustment layer (GR-01)
     "masks": _masks,  # blur or mosaic boxes over the shot's picture, to hide a face or a logo (GR-12)
     "transform": clean_transform,  # opacity, move, scale, rotate, trim and distort of its picture (ED-30)

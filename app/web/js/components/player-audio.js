@@ -15,7 +15,7 @@ import { report } from "../lib/crash-report.js";
 import { toFrame, speedKey, speedCopy, pieces, edgeValue, edgePoints, segKey, reverseGrain,
   bestShift } from "../lib/audio-sched.js";
 import { mixPlan, stemChannels } from "../lib/voice-mix.js";
-import { stemsParams } from "../lib/voice-stems.js";
+import { stemsParams, shotSound } from "../lib/voice-stems.js";
 import { release, seekTo, playSafe, voicePlay, trackElements, audioEntry, DRIFT_PLAYING, DRIFT_PAUSED, CUE_LEAD,
   MAX_RATE } from "./player-media.js";
 
@@ -50,9 +50,15 @@ export function clipFades(clips, i) {
     Math.max(0.03, Math.min(clips[i].transition.duration, len / 2))];
 }
 
-// The shot's volume times the version's volume and hand-set keys (t in file seconds), local seconds into the clip.
-export const clipLevel = (clip, local) => Number(clip.shot.volume ?? 1)
-  * Number(valueAt({ keyframes: takeKeys(clip.take) }, "volume", clip.in + local * (clip.speed || 1), 1));
+// The shot's volume and its own fade in / out (seconds of the timeline, as export.py) times the version's volume
+// and hand-set keys (t in file seconds), local seconds into the clip.
+export function clipLevel(clip, local) {
+  const fi = Math.min(Number(clip.shot.fadeIn || 0), clip.length / 2);
+  const fo = Math.min(Number(clip.shot.fadeOut || 0), clip.length / 2);
+  const fade = (fi > 0 ? Math.max(0, Math.min(1, local / fi)) : 1) * (fo > 0 ? Math.max(0, Math.min(1, (clip.length - local) / fo)) : 1);
+  return Number(clip.shot.volume ?? 1) * fade
+    * Number(valueAt({ keyframes: takeKeys(clip.take) }, "volume", clip.in + local * (clip.speed || 1), 1));
+}
 
 // view(): {project, clips, total, solo, stems, monitor} of the engine as they are now. hooks.setGain(media, gain,
 // track, voice) sets an element's gain; hooks.pictureReady() is true once the picture can move; hooks.fade(t) is
@@ -99,11 +105,24 @@ export function createSound(view, hooks) {
     const add = (seg) => seg.f1 > seg.f0 && segs.set(seg.id, { ...seg, key: segKey(seg) });
     if (!flags.videoMuted) {
       clips.forEach((clip, i) => {
-        const file = clip.take && speedCopy(clip.take, clip.speed);
-        if (!clipSounds(clip) || !file) return;
+        if (!clipSounds(clip)) return;
+        let file = speedCopy(clip.take, clip.speed);
+        let s0 = toFrame(clip.in / Number(speedKey(clip.speed)));
+        let fx = null;
+        const entry = stems[clip.shot.id]; // the shot's own 聲道 / 降噪 / 去回音, as an audio clip's below
+        const s = entry && entry.stems;
+        const sound = shotSound(clip);
+        if (s && entry.made === stemsParams(clip.take, sound)) {
+          // stems at another speed, or over part of it: the picture's element
+          if (speedKey(clip.speed) !== "1" || s.from > clip.in + 0.001 || s.to < clip.in + clip.length - 0.001) return;
+          file = s.file;
+          s0 = toFrame(clip.in - s.from);
+          fx = { channels: stemChannels(sound), plan: mixPlan(sound), monitor: monitor && monitor.id === clip.shot.id ? monitor.mode : "fx" };
+        }
+        if (!file) return;
         const [fi, fo] = clipFades(clips, i);
-        add({ id: `c:${clip.shot.id}`, url: fileUrl(project.id, file), s0: toFrame(clip.in / Number(speedKey(clip.speed))), f0: toFrame(clip.start),
-          f1: toFrame(clip.start + clip.length), fi: toFrame(fi), fo: toFrame(fo), track: SOURCE_TRACK,
+        add({ id: `c:${clip.shot.id}`, url: fileUrl(project.id, file), s0, f0: toFrame(clip.start),
+          f1: toFrame(clip.start + clip.length), fi: toFrame(fi), fo: toFrame(fo), track: SOURCE_TRACK, fx,
           level: (t) => clipLevel(clip, t - clip.start) * hooks.fade(t) });
       });
     }

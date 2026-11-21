@@ -34,7 +34,7 @@ from .media import ALPHA_DECODERS, AS_709, TAGS_709, TO_709, Media
 from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, overlay_speed, total_duration
 from .transform import transform_filter
 from .util import AppError, safe_filename
-from .voiceclean import ensure_stems, mix_lines, stems_for
+from .voiceclean import ensure_stems, mix_lines, shot_sound, stems_for
 
 log = logging.getLogger("vc.export")
 
@@ -526,9 +526,23 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             gain_filter = f"volume={gain:.4f}," if gain != 1.0 else ""
             keys = source_keys(take_keys(clip["take"]), clip["in"], clip.get("speed") or 1.0, length)
             key_filter = f"volume='{kf_expr({'keyframes': keys}, 'volume', 't', 0.0, 1.0)}':eval=frame," if keys else ""
+            # The shot's own 降噪 / 去回音 / one channel play its stems (voiceclean.py), as an audio clip's do.
+            sound = shot_sound(clip)
+            stems = stems_for(project, project_dir, sound)
+            head = f"[{video_index[i]}:a]{aformat},"
+            if stems:
+                inputs.append(["-i", stems["file"]])
+                graph.extend(mix_lines(sound, f"{len(inputs) - 1}:a", f"vs{i}"))
+                head = (f"[vs{i}]{aformat},atrim=start={clip['in'] - stems['from']:.3f}"
+                        f":duration={length * (clip.get('speed') or 1.0):.3f},asetpts=PTS-STARTPTS,")
+            # The fades set on the shot's sound, on top of the short ones every cut and transition gets.
+            own_in = min(float(clip["shot"].get("fadeIn") or 0.0), length / 2)
+            own_out = min(float(clip["shot"].get("fadeOut") or 0.0), length / 2)
+            own_fades = ((f"afade=t=in:st=0:d={own_in:.3f}," if own_in > 0 else "")
+                         + (f"afade=t=out:st={length - own_out:.3f}:d={own_out:.3f}," if own_out > 0 else ""))
             graph.append(
-                f"[{video_index[i]}:a]{aformat},{gain_filter}{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
-                f"asetpts=PTS-STARTPTS,{key_filter}"
+                f"{head}{gain_filter}{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
+                f"asetpts=PTS-STARTPTS,{key_filter}{own_fades}"
                 f"afade=t=in:st=0:d={fade_in:.3f},afade=t=out:st={length - fade_out:.3f}:d={fade_out:.3f},"
                 f"adelay=delays={ms}:all=1,{fix_pts}[ca{i}]"
             )
@@ -693,6 +707,10 @@ def render(
         if not item.get("muted") and src and (project_dir / src["file"]).is_file():
             ensure_stems(media, project, project_dir, item, cancelled)
     clips = prepare_clips(project, project_dir)
+    if opts["clipAudio"] and not (project.get("tracks") or {}).get("videoMuted"):
+        for clip in clips:  # the same for the shots' own sound
+            if _clip_sounds(clip):
+                ensure_stems(media, project, project_dir, shot_sound(clip), cancelled)
     ass = None if sound_only else build_ass(project, clips, opts, int(project["settings"]["width"]),
                                             int(project["settings"]["height"]))
     if ass:

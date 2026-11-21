@@ -4,7 +4,7 @@ Video Console 的「設定 › 快捷鍵」有兩組預設：「Video Console」
 
 來源：
 
-- Apple 支援，Keyboard shortcuts in Final Cut Pro for Mac（2026-10-18 查閱，2026-10-23 再核對標記、音量、區域、定格、分離、變速、複合片段各列）：https://support.apple.com/guide/final-cut-pro/keyboard-shortcuts-ver90ba5929/mac
+- Apple 支援，Keyboard shortcuts in Final Cut Pro for Mac（2026-10-18 查閱，2026-10-23 再核對標記、音量、區域、定格、分離、變速、複合片段各列；2026-11-21 核對 Paste Attributes、Remove Attributes 兩列）：https://support.apple.com/guide/final-cut-pro/keyboard-shortcuts-ver90ba5929/mac
 - 台灣區網址（內容同為英文）：https://support.apple.com/zh-tw/guide/final-cut-pro/ver90ba5929/mac
 - Option-K 添加關鍵幀不在上面的總表，出自 Apple 支援 Add video effect keyframes（2026-10-23 查閱）：https://support.apple.com/guide/final-cut-pro/add-video-effect-keyframes-ver8e3f20ea/mac
 
@@ -54,6 +54,8 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 | 無 | 無 | 字幕文字框：游標後面的文字移到下一句開頭 | Alt+Shift+Enter | Alt+Shift+Enter | 只在右側「字幕文字」框裡有效，時間像 Shift+F3 切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
 | 無 | 無 | 字幕文字框：游標前面的文字移到上一句結尾 | Ctrl+Shift+Enter | Ctrl+Shift+Enter | 只在右側「字幕文字」框裡有效，時間像 Shift+F1 切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
 | 無 | 無 | 字幕文字框：這句合併到上一句結尾 | Ctrl+Enter | Ctrl+Enter | 只在右側「字幕文字」框裡有效，上一句延長到這句結尾，一次復原；Final Cut Pro 沒有對應指令 |
+| Paste Attributes | Shift-Command-V | 貼上聲音屬性 | Ctrl+Alt+V | Ctrl+Alt+V | Final Cut Pro 用 Command-C 複製片段後選要貼的屬性；Video Console 用 Ctrl+Alt+C 複製、只貼聲音屬性（音量、淡入淡出、聲道、降噪、去回音），兩組鍵位相同，沒有照 Final Cut Pro 排 |
+| Remove Attributes | Shift-Command-X | 重設屬性 | Ctrl+Alt+X | Ctrl+Shift+X | 列出選取片段調整過的屬性，開啟時全部勾選，勾選的恢復成預設值；沒有調整過的屬性時只跳提示 |
 | Add Marker | M | 在播放頭新增標記 | M | M | |
 | Add Marker and Modify | Option-M | 切換播放頭處標記的顏色 | Alt+M | 無 | Final Cut Pro 是新增並開編輯視窗；Video Console 沒有標記編輯視窗，顏色與刪除在標記的右鍵選單 |
 | Next Marker | Control-' | 跳到下一個標記 | F8 | 無 | Control 鍵的指令不設鍵，見文件開頭 |
