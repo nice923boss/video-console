@@ -1,10 +1,11 @@
 // 延長到下一句: a caption's new end is the start of the next caption on its row (the main 字幕 row, or its caption
-// track), so the gap between the two lines closes. E does it for the selected caption (extendTarget), the row
-// header button for every caption on one row at once (extendAllTargets). Shift+F1 and Shift+F3 trim the caption
+// track), so the gap between the two lines closes, or an overlap goes. E does it for the selected caption
+// (extendTarget), the row header button closes the gaps on one row at once (extendAllTargets). Shift+F1 and Shift+F3 trim the caption
 // under the playhead and bring the neighbour on that side up to the cut (trimJoinTarget). Pure, so tests run it in node.
 import { round } from "./format.js";
 
 const EPS = 1e-3;
+const MIN_LEN = 0.1; // the shortest caption a trim leaves, as F1 and F3 (vc/edits.py MIN_ITEM)
 const num = (v) => Number(v || 0);
 
 // The row each caption shows on: its caption track, or "main" (no track, or a track that no longer exists).
@@ -30,12 +31,14 @@ export function extendTarget(project, id) {
     .filter((c) => c.id !== id && row(c) === row(cap) && num(c.start) > start + EPS)
     .map((c) => num(c.start)));
   if (next === Infinity) return { error: "這句後面沒有字幕可以對齊" };
-  if (next < end - EPS) return { error: "這句和下一句已經重疊" };
-  if (next <= end + EPS) return { error: "這句已經接到下一句" };
+  if (Math.abs(next - end) <= EPS) return { error: "這句已經接到下一句" };
+  // Overlapping the next caption: the end comes back to where the next one starts (shortened is true).
+  if (next < end) {
+    if (next - start < MIN_LEN) return { error: "下一句幾乎和這句同時開始，縮短後這句會太短" };
+    return { end: round(next, 3), shortened: true };
+  }
   return { end: round(next, 3) };
 }
-
-const MIN_LEN = 0.1; // the shortest caption a trim leaves, as F1 and F3 (vc/edits.py MIN_ITEM)
 
 // 裁剪並接上鄰句: F1 or F3 on the caption under the playhead t, then its neighbour on the row meets the cut, as one
 // list of caption.update ops. side "start" trims the part before t and the previous caption ends at t; "end"

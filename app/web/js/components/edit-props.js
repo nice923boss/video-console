@@ -529,7 +529,7 @@ function CaptionPanel({ project, cap }) {
             updateCaption(cap.id, { start, end: round(start + len, 3) }, "移動字幕");
           }}>移到播放頭<//>
         <${Button} size="sm" icon="skip-forward" disabled=${!!extend.error}
-          title=${extend.error || `結尾延長到同一列下一句的開頭${keyHint("edit.extendCaption")}`}
+          title=${extend.error || `結尾${extend.shortened ? "縮到" : "延長到"}同一列下一句的開頭${keyHint("edit.extendCaption")}`}
           onClick=${() => extendCaption(project, null, { type: "caption", id: cap.id })}>延長到下一句<//>
       </div>
     </div>

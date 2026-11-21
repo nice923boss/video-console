@@ -74,11 +74,13 @@ export function toggleEnabled(project, clips, sel) {
     { label: `${off ? "停用" : "啟用"}${what}` });
 }
 
-// The selected caption runs on to where the next caption on its row starts.
-export function extendCaption(project, clips, sel) {
+// The selected caption runs on to where the next caption on its row starts; one that overlaps it is cut back there.
+export async function extendCaption(project, clips, sel) {
   const to = extendTarget(project, sel && sel.type === "caption" ? sel.id : null);
   if (to.error) return warn(to.error);
-  ops([{ op: "caption.update", id: sel.id, patch: { end: to.end } }], { label: "延長字幕到下一句" });
+  const res = await ops([{ op: "caption.update", id: sel.id, patch: { end: to.end } }],
+    { label: to.shortened ? "字幕結尾縮到下一句" : "延長字幕到下一句" });
+  if (res && to.shortened) toast("這句和下一句重疊，已把結尾縮到下一句的開頭", { id: "tl-extend" });
 }
 
 // Every caption on one row runs on to where the next one starts, as one undo step: the row header button

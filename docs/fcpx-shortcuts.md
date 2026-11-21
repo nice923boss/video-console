@@ -47,7 +47,7 @@ Mac 對 Windows：Command 對應 Ctrl，Option 對應 Alt。Video Console 在 Ma
 |---|---|---|---|---|---|
 | Enable/Disable | V | 啟用或停用選取的片段 | V | V | 停用的鏡頭保留位置，預覽與輸出是黑畫面加靜音 |
 | Add Caption | Option-C | 在播放頭新增字幕 | Alt+C | Alt+C | 新增一句 2 秒的字幕 |
-| 無 | 無 | 選取的字幕延長到下一句的開頭 | E | E | 結尾接到同一列下一句的開頭。Final Cut Pro 的 E 是 Append to Storyline，Video Console 沒有這個指令 |
+| 無 | 無 | 選取的字幕延長到下一句的開頭 | E | E | 結尾接到同一列下一句的開頭（重疊時縮到下一句的開頭）。Final Cut Pro 的 E 是 Append to Storyline，Video Console 沒有這個指令 |
 | 無 | 無 | 字幕向左裁剪，前一句結尾接到播放頭 | Shift+F1 | Shift+F1 | 播放頭所在的字幕（選取字幕所在的列，沒選取時是字幕列）開頭移到播放頭，同一列前一句的結尾也移到播放頭，等於 F1 加前一句按 E，一次復原。Final Cut Pro 沒有對應指令 |
 | 無 | 無 | 字幕向右裁剪，後一句開頭接到播放頭 | Shift+F3 | Shift+F3 | 同上反方向：這句結尾移到播放頭，同一列後一句的開頭往前接到播放頭，一次復原 |
 | 無 | 無 | 字幕文字框：游標後面的文字拆成下一句 | Ctrl+Enter | Ctrl+Enter | 只在右側「字幕文字」框裡有效，時間切在播放頭，一次復原；Final Cut Pro 沒有對應指令 |
