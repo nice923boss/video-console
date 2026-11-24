@@ -55,7 +55,7 @@ export function liftOps(project, clip, target, start) {
 }
 
 // Fields of an upper clip a shot keeps in "pip" (ED-16) for a lift back to restore.
-const PIP_KEYS = ["x", "y", "w", "opacity", "volume", "chroma", "keyframes"];
+const PIP_KEYS = ["x", "y", "w", "opacity", "volume", "chroma", "crop", "rotation", "keyframes"];
 
 // Drop (upper track to picture lane): the clip becomes a shot at `index` with the same piece of the file, and
 // the shots after it move back by its length. The picture lane plays shots full frame, so the clip's place,

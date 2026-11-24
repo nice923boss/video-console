@@ -9,7 +9,7 @@ import { hasKeys, valueAt, withKey } from "../lib/keyframes.js";
 import { keyHint, keyLabel } from "../lib/keymap.js";
 import { Button, IconButton } from "./ui.js";
 
-const FIELD_NAMES = { x: "水平", y: "垂直", w: "大小", opacity: "不透明度", volume: "音量", grade: "調色" };
+const FIELD_NAMES = { x: "水平", y: "垂直", w: "大小", opacity: "不透明度", rotation: "旋轉", volume: "音量", grade: "調色" };
 
 const fieldsOf = (k) => Object.keys(k).filter((f) => f !== "t");
 

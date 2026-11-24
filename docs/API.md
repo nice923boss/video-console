@@ -59,7 +59,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | `captionTracks` | 主字幕軌以外的字幕軌 `{id, name, hidden}`。陣列順序是時間軸上由上到下的順序，主字幕軌永遠在最上面。同時出現在畫面下方的字幕，越下面的軌道越靠近畫面底邊（雙語匯入的英文軌在中文軌下面，所以英文在最下一行、中文在上一行）；畫面上方與中間的字幕相反，越上面的軌道越靠近邊緣。`hidden: true` 的軌道預覽與輸出都不顯示；主字幕軌的開關是 `tracks.captionsHidden` |
 | `cast` | 人物陣列 `{id, name, voice, speed, volume, engine, style, model, look, lookRef}`。`look`（最多 1000 字）是外觀描述：生圖、生影片時，鏡頭描述寫到這個名字（`name` 出現在描述中），就在描述後面加一行「名字：外觀」；鏡頭自己的生圖提示詞照原樣送出。`lookRef` 是外觀參考圖的版本或素材 id，只在介面上供一鍵套用成鏡頭參考圖，被刪除時清成 `null`（可復原） |
 | `audio` | 音樂、音效、配音。`track` 是所在音軌的代號：同代號的片段排在同一條音軌，沒有 `track` 的片段自成一條；`track` 為 `voice` 或帶 `captionId` 的片段在配音軌。介面拖曳與上傳會避開同軌重疊，`audio.update` 直接改 `track` 不檢查。`fixed: true` 時連動不移動它；`speed`（0.25~4）只出現在變速鏡頭分離出的原聲，時間軸長度是 `(out - in) / speed`。`denoise` 是降噪 `{on, strength, low, mid, high, sample}`：數值 0~1（預設 0.6、1、1、1），`sample` 是原始檔裡只有雜音的一段 `{from, to}`（秒，至少 0.25 秒，超過 10 秒只取前 10 秒），`null` 時還沒取樣、不降噪。`dereverb` 是去回音 `{on, strength, release, dryness, bass, body, tone}`：`body`、`tone` 是 -1~1，其餘 0~1（預設強度 0.6、release 0.3、dryness 0.5，其餘 0）。`channel` 是只播原始檔的哪一個聲道 `{stream, index}`（第幾條音訊串流、其中第幾個聲道，0~63），`null` 時播第一條音訊串流混成的立體聲。`on: false` 保留設定但不處理；有取樣的降噪、去回音或指定聲道時，預覽與輸出播 `media/clean/` 裡處理好的檔（`voice-clean`） |
-| `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背。影片的 `speed`（0.25~4，沒有時是 1）是每秒時間軸播幾秒素材：`length` 仍是時間軸秒數，用到素材的 `in` 到 `in + length * speed`，聲音用 atempo 同速播放；改速度要保留同一段畫面時，`length` 同時改成 `length * 舊速度 / 新速度`。圖片的 `speed` 不生效 |
+| `overlays`、`layers` | 上層畫面與軌道。上層畫面的 `x`、`y`（-4~4）是左上角佔畫面寬、高的比例，`w`（0.05~4）是寬度佔畫面寬的比例，高度照素材比例；超出畫面的部分被裁掉（填滿就是 `w` 大於 1）。`chroma` 是去背設定 `{on, color, similarity, blend}`：`color` 是 `#rrggbb`，`similarity` 0.01~1、`blend` 0~1（預設 `#00ff00`、0.15、0.1），`on: false` 時保留設定但不去背。影片的 `speed`（0.25~4，沒有時是 1）是每秒時間軸播幾秒素材：`length` 仍是時間軸秒數，用到素材的 `in` 到 `in + length * speed`，聲音用 atempo 同速播放；改速度要保留同一段畫面時，`length` 同時改成 `length * 舊速度 / 新速度`。圖片的 `speed` 不生效。`crop` 是裁剪 `{l, r, t, b}`：從片段自己的畫面左、右、上、下切掉的比例（0~0.98，`l + r` 與 `t + b` 最多 0.98，超過時縮小 `r`、`b`），切掉的部分透明、透出下層；`x`、`y`、`w` 仍是裁剪前整張的位置與大小，所以留下的部分停在原位；四邊都是 0 時存成 `null`，不能加關鍵幀。`rotation`（-3600~3600，預設 0）是逆時針旋轉的角度，方向同鏡頭的 `transform.rotation`，繞裁剪後那塊的中心轉，可加關鍵幀。旋轉或裁剪過、有旋轉關鍵幀的片段不算蓋滿畫面；定格帶著 `t` 當下的 `rotation` 與 `crop`，分割後兩段都保留 |
 | `adjustments` | 調整圖層陣列 `{id, name, start, length, hidden, grade}`，時間是序列上的秒數；格式見下方 |
 | `tracks` | 軌道開關，例如 `adjustHidden: true` 隱藏整條調整圖層軌（預覽與輸出都不套用）；`musicOrder` 是音樂軌由上到下的代號（片段的 `track`，沒有 `track` 的用片段 id），沒列到的排在後面，只影響顯示 |
 | `markers` | 時間軸標記陣列 `{id, start, color, name}`，`start` 是序列秒數；color 可用 `blue`、`red`、`orange`、`yellow`、`green`、`purple` |
@@ -143,7 +143,7 @@ python app/main.py --stop              # 關閉正在執行的 VC
 | 片段 | 可加關鍵幀的欄位 |
 |---|---|
 | 音訊 `audio` | `volume`（0~4，1 是原音量） |
-| 上方畫面 `overlays` | `x`、`y`、`w`、`opacity`、`volume`（圖片沒有 `volume`） |
+| 上方畫面 `overlays` | `x`、`y`、`w`、`opacity`、`rotation`、`volume`（圖片沒有 `volume`；`crop` 不能加） |
 | 調整圖層 `adjustments` | `grade`（整組調色，格式同上表） |
 
 鏡頭與字幕不能加關鍵幀：要動的畫面放上方軌；鏡頭可以有自己的 `grade`，但要漸變的調色用調整圖層。
@@ -271,7 +271,7 @@ POST /api/projects/{pid}/edit
 | `split` | `t`，可選 `type`、`id` | 在 `t` 切開片段；關鍵幀分到兩段，切點補一個關鍵幀保持值不變 | 後段 |
 | `splitAll` | `t` | 把 `t` 經過的每一軌一起切開 | |
 | `trim` | `t`、`side`（`start` 或 `end`），可選 `type`、`id` | `start` 刪掉 `t` 之前的部分，`end` 刪掉之後的部分；畫面軌後面的鏡頭往前補 | |
-| `freeze` | `t`，可選 `type`（`shot` 或 `overlay`）、`id`、`length` | 在 `t` 切開影片鏡頭，中間插靜止畫面（預設 5 秒，`length` 指定秒數，0.2 到 600），並送出 `lastframe` 工作擷取那一格（回傳的 `job`）；`t` 在鏡頭頭尾時定格加在前面或後面。`type` 為 `overlay`（上方影片片段）時專案先不變，只送出 `lastframe` 工作；工作擷取那一格後，圖片加入素材庫、片段在 `t` 切開、後段往後移 5 秒、中間插入定格，算一個復原步驟（固定 5 秒，不接受 `length`）。定格取 `t` 當下的位置、大小、透明度，不帶關鍵幀 | 定格鏡頭（`overlay` 時沒有） |
+| `freeze` | `t`，可選 `type`（`shot` 或 `overlay`）、`id`、`length` | 在 `t` 切開影片鏡頭，中間插靜止畫面（預設 5 秒，`length` 指定秒數，0.2 到 600），並送出 `lastframe` 工作擷取那一格（回傳的 `job`）；`t` 在鏡頭頭尾時定格加在前面或後面。`type` 為 `overlay`（上方影片片段）時專案先不變，只送出 `lastframe` 工作；工作擷取那一格後，圖片加入素材庫、片段在 `t` 切開、後段往後移 5 秒、中間插入定格，算一個復原步驟（固定 5 秒，不接受 `length`）。定格取 `t` 當下的位置、大小、透明度與 `rotation`，`crop` 照舊，不帶關鍵幀 | 定格鏡頭（`overlay` 時沒有） |
 | `detach` | `id` 或 `t` | 把鏡頭原聲拆成音訊片段，鏡頭改成無聲 | 新的音訊片段 |
 | `restore` | `id`（鏡頭或它的原聲片段） | 刪掉原聲片段，鏡頭恢復有聲 | |
 | `reverse` | `id` 或 `t` | 第一次送出 `reverse` 工作產生倒放影片（不改專案，回傳 `job`）；已有倒放版本時在正放、倒放之間切換，修剪範圍跟著鏡像 | |

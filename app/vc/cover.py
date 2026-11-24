@@ -22,7 +22,9 @@ def _hides_frame(item: dict, media: dict | None, frame_aspect: float) -> bool:
         return False
     if (item.get("chroma") or {}).get("on") or float(item.get("opacity", 1.0)) < 1:
         return False
-    if any(k in kf for kf in item.get("keyframes") or [] for k in ("x", "y", "w", "opacity")):
+    if any(k in kf for kf in item.get("keyframes") or [] for k in ("x", "y", "w", "opacity", "rotation")):
+        return False
+    if item.get("crop") or float(item.get("rotation") or 0.0):  # a trimmed or turned clip leaves corners open
         return False
     mw, mh = float(media.get("width") or 0), float(media.get("height") or 0)
     if mw <= 0 or mh <= 0:

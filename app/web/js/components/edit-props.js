@@ -9,6 +9,7 @@ import { audioLength, audioMedia, audioSpeed, audioTrack, VOICE_TRACK, overlayHe
 import { overlaySpeedPatch, speedOptions } from "../lib/overlay-speed.js";
 import { rowRole, roleOp, duckDb, ROLE_LABELS, DUCK_LEVELS } from "../lib/duck.js";
 import { hasKeys, valueAt } from "../lib/keyframes.js";
+import { CROP_MAX, SIDES } from "../lib/transform.js";
 import { withDips } from "../lib/declip.js";
 import { VOICE_STATES, voiceState, voiceClip, voiceEnd, generateVoices } from "../lib/voice.js";
 import { openCastDialog } from "../dialogs/cast-dialog.js";
@@ -288,6 +289,7 @@ function OverlayPanel({ project, item }) {
         <${Slider} value=${at("opacity", 1)} min=${0} max=${1} step=${0.01} format=${pct}
           onCommit=${(v) => set({ opacity: round(v, 2) }, "片段不透明度")} />
       <//>
+      <${ShapeFields} crop=${item.crop} deg=${at("rotation", 0)} set=${set} update=${update} />
       <${ChromaField} chroma=${item.chroma} update=${update} />
       ${video && html`<${StabilizeField} item=${item} media=${media} />`}
       ${video && (media.alphaCodec || media.p5) && html`<${P5TextField} key=${media.id} media=${media} />`}
@@ -327,6 +329,34 @@ function StabilizeField({ item, media }) {
     <${StabilizeSettings} current=${isStabilized(media) ? media.source.settings || {} : null} disabled=${rendering}
       onApply=${(settings) => stabilizeClip(item.id, "overlay", settings)} />
   <//>`;
+}
+
+// Rotation (keyframable, through set) and crop (one value for the whole clip, percent of its own picture) of an
+// upper-track clip, as app/vc/overlayshape.py renders them.
+function ShapeFields({ crop, deg, set, update }) {
+  const c = { l: 0, r: 0, t: 0, b: 0, ...(crop || {}) };
+  const other = { l: "r", r: "l", t: "b", b: "t" };
+  const most = (k) => round((CROP_MAX - c[other[k]]) * 100, 1);
+  const setSide = (k, v) => {
+    const next = { ...c, [k]: round(clamp(v, 0, most(k)) / 100, 4) };
+    update({ crop: SIDES.some((s) => next[s]) ? next : null }, "裁剪片段");
+  };
+  const side = (k, label) => html`<span class="tf-label">${label}</span>
+    <${NumberInput} class="tf-num" value=${round(c[k] * 100, 1)} min=${0} max=${most(k)} digits=${1} suffix="%"
+      onCommit=${(v) => setSide(k, v)} />`;
+  const turn = (v) => set({ rotation: round(v, 1) }, "片段旋轉");
+  return html`
+    <${Field} label="旋轉" hint="逆時針為正，繞著裁剪後畫面的中心轉">
+      <div class="ov-rot">
+        <${Slider} value=${deg} min=${Math.min(-180, deg)} max=${Math.max(180, deg)} step=${0.5}
+          format=${(v) => `${round(v, 1)}°`} onCommit=${turn} />
+        <${NumberInput} class="tf-num" value=${round(deg, 1)} min=${-3600} max=${3600} step=${0.5} digits=${1} suffix="°"
+          onCommit=${turn} />
+      </div>
+    <//>
+    <${Field} label="裁剪" hint="從片段自己的畫面四邊切掉的比例，切掉的部分變透明、看得到下層；位置與大小仍以裁剪前的整張計算">
+      <div class="ov-crop">${side("l", "左")}${side("r", "右")}${side("t", "上")}${side("b", "下")}</div>
+    <//>`;
 }
 
 // Colour key (GR-09): pixels near the chosen colour turn transparent, for a clip shot on a green or blue screen.

@@ -28,7 +28,7 @@ function fitted(media, box) {
   return { x: box.x + (box.w - mw * s) / 2, y: box.y + (box.h - mh * s) / 2, w: mw * s, h: mh * s };
 }
 
-// A box cut by its clip-path inset() (the wipe transition).
+// A box cut by its clip-path inset() (the wipe transition, an overlay's crop).
 function inset(el, box) {
   const m = /^inset\(([^)]*)\)/.exec(el.style.clipPath || "");
   if (!m) return box;
@@ -37,11 +37,33 @@ function inset(el, box) {
   return { x: box.x + (box.w * l) / 100, y: box.y + (box.h * t) / 100, w: box.w * (1 - (l + r) / 100), h: box.h * (1 - (t + b) / 100) };
 }
 
-function drawMedia(ctx, media, clip, origin, k, stop) {
+// An overlay's box before its turn, from its left, top, width and height (percent of its track); the bounding
+// rectangle of a turned one is bigger.
+function pipBox(el, origin, k) {
+  const p = boxOf(el.parentElement, origin, k);
+  const f = (v) => (parseFloat(v) || 0) / 100;
+  const st = el.style;
+  return { x: p.x + p.w * f(st.left), y: p.y + p.h * f(st.top), w: p.w * f(st.width), h: p.h * f(st.height) };
+}
+
+// Turns ctx as an overlay's CSS rotate turns it, about its transform-origin (percent of its box).
+function turn(ctx, el, box) {
+  const m = /rotate\(([-\d.e]+)deg\)/.exec(el.style.transform || "");
+  if (!m) return;
+  const [ox, oy] = (el.style.transformOrigin || "50% 50%").split(/\s+/).map(parseFloat);
+  const cx = box.x + (box.w * ox) / 100;
+  const cy = box.y + (box.h * oy) / 100;
+  ctx.translate(cx, cy);
+  ctx.rotate((parseFloat(m[1]) * Math.PI) / 180);
+  ctx.translate(-cx, -cy);
+}
+
+function drawMedia(ctx, media, clip, origin, k, stop, box = boxOf(media, origin, k), turned = false) {
   const alpha = opacityOf(media, stop);
   if (!shown(media) || !ready(media) || alpha <= 0) return;
-  const r = fitted(media, boxOf(media, origin, k));
+  const r = fitted(media, box);
   ctx.save();
+  if (turned) turn(ctx, media, box);
   ctx.beginPath();
   ctx.rect(clip.x, clip.y, clip.w, clip.h);
   ctx.clip();
@@ -79,7 +101,8 @@ function compose(graded, canvas, width) {
     ctx.globalAlpha = 1;
   }
   for (const item of [...graded.querySelectorAll(".pl-pip-item")].sort(byZ)) {
-    drawMedia(ctx, item, boxOf(item, origin, k), origin, k, graded);
+    const box = pipBox(item, origin, k);
+    drawMedia(ctx, item, inset(item, box), origin, k, graded, box, true); // trimmed by its crop, then turned
   }
   return true;
 }

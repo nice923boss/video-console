@@ -207,3 +207,17 @@ export function overlayHeight(overlay, media, frameW, frameH) {
   const aspect = media && media.width && media.height ? media.width / media.height : 16 / 9;
   return (overlay.w * frameW) / frameH / aspect;
 }
+
+// The CSS that trims an overlay's picture and turns it deg degrees counterclockwise, as app/vc/overlayshape.py
+// renders it: the trimmed sides cut away, the part left turned about its own center. x, y and w still describe
+// the uncropped box.
+export function overlayShape(overlay, deg) {
+  const c = overlay.crop || {};
+  const [l, r, t, b] = ["l", "r", "t", "b"].map((k) => Number(c[k]) || 0);
+  const pct = (v) => `${(v * 100).toFixed(3)}%`;
+  return {
+    clipPath: l || r || t || b ? `inset(${pct(t)} ${pct(r)} ${pct(b)} ${pct(l)})` : "",
+    transformOrigin: deg ? `${pct(l + (1 - l - r) / 2)} ${pct(t + (1 - t - b) / 2)}` : "",
+    transform: deg ? `rotate(${-deg}deg)` : "",
+  };
+}

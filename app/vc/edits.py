@@ -339,8 +339,9 @@ def freeze_overlay(project: dict, t: float, item_id: str | None = None, still_id
     else:
         head, tail = split_ops(g, t, local, project)
         ops, place = [head, {**tail, "item": {**tail["item"], "start": r3(t + FREEZE_LEN)}}], t
-    # The still holds the clip's place and look at that moment; keyframes don't move a frozen frame.
-    keyed = {f: r3(value_at(item, f, local)) for f in ("x", "y", "w", "opacity") if any(f in k for k in item.get("keyframes") or [])}
+    # The still holds the clip's place and look at that moment (its crop is static and copied as is); keyframes
+    # don't move a frozen frame.
+    keyed = {f: r3(value_at(item, f, local)) for f in ("x", "y", "w", "opacity", "rotation") if any(f in k for k in item.get("keyframes") or [])}
     frozen = {**{k: v for k, v in item.items() if k not in ("keyframes", "speed")}, **keyed, "id": new_id("o"), "mediaId": still_id,
               "name": f"{item.get('name') or '影片'}（定格）"[:120], "start": r3(place), "in": 0.0, "length": FREEZE_LEN}
     return {"ops": [*ops, {"op": "overlay.add", "item": frozen}], "label": "定格", "id": frozen["id"]}
@@ -639,7 +640,8 @@ def volume(project: dict, kind: str, item_id: str, db: float, t_in: float | None
             "label": "調高音量" if db > 0 else "調低音量", "level": level, "partial": partial}
 
 
-KEY_FIELDS = {"audio": {"volume": 1.0}, "overlay": {"x": 0.0, "y": 0.0, "w": 0.35, "opacity": 1.0, "volume": 1.0},
+KEY_FIELDS = {"audio": {"volume": 1.0},
+              "overlay": {"x": 0.0, "y": 0.0, "w": 0.35, "opacity": 1.0, "rotation": 0.0, "volume": 1.0},
               "adjust": {"grade": None}}
 
 

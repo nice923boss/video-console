@@ -64,20 +64,25 @@ function shotRows(shot, clip) {
   ].filter(Boolean);
 }
 
-// A new upper clip fills the frame (fitFrame) at full opacity and volume, without 去背.
+// A new upper clip fills the frame (fitFrame) at full opacity and volume, unturned and uncropped, without 去背.
 function overlayRows(project, item) {
   const media = (project.media || {})[item.mediaId];
   const fit = media ? fitFrame(media, Number(project.settings.width), Number(project.settings.height)) : null;
   const placeKeys = keyCount(item, ["x", "y", "w"]);
   const opacityKeys = keyCount(item, ["opacity"]);
   const volumeKeys = keyCount(item, ["volume"]);
+  const turnKeys = keyCount(item, ["rotation"]);
   const opacity = Number(item.opacity ?? 1);
+  const turn = Number(item.rotation || 0);
   const volume = Number(item.volume ?? 1);
   return [
     fit && (placeKeys > 0 || Object.keys(fit).some((k) => Math.abs(Number(item[k]) - fit[k]) > EPS)) && {
       key: "place", label: "位置與大小", detail: placeKeys ? keyed(placeKeys) : "恢復成滿版", patch: fit, dropKeys: ["x", "y", "w"] },
     (opacity !== 1 || opacityKeys > 0) && { key: "opacity", label: "不透明度", detail: opacityKeys ? keyed(opacityKeys) : pct(opacity),
       patch: { opacity: 1 }, dropKeys: ["opacity"] },
+    (turn !== 0 || turnKeys > 0) && { key: "rotation", label: "旋轉", detail: turnKeys ? keyed(turnKeys) : `${turn}°`,
+      patch: { rotation: 0 }, dropKeys: ["rotation"] },
+    item.crop && SIDES.some((k) => item.crop[k]) && { key: "crop", label: "裁剪", detail: "", patch: { crop: null } },
     (volume !== 1 || volumeKeys > 0) && { key: "volume", label: "音量", detail: volumeKeys ? keyed(volumeKeys) : pct(volume),
       patch: { volume: 1 }, dropKeys: ["volume"] },
     item.chroma && { key: "chroma", label: "去背", detail: onOff(item.chroma), unset: ["chroma"] },

@@ -896,6 +896,9 @@
 .src-info > svg.icon { color: var(--muted); }
 .src-info > .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .src-info > .mono { font-size: calc(11.5px * var(--text-scale)); }
+/* An upper-track clip's rotation (slider and exact field) and its four crop sides. */
+.ov-rot { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 8px; align-items: center; }
+.ov-crop { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px 8px; align-items: center; }
 
 /* Content tab (insp-content.js) */
 

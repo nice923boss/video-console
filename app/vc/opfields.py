@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable
 
 from .grade import clean_grade
-from .transform import clean_transform
+from .transform import CROP_MAX, SIDES, clean_transform
 from .util import AppError
 from .voiceclean import clean_channel, clean_denoise, clean_dereverb
 
@@ -173,6 +173,20 @@ def _kt(v: Any) -> list[float] | None:
 CHROMA_DEFAULT = {"on": False, "color": "#00ff00", "similarity": 0.15, "blend": 0.1}
 
 
+def _overlay_crop(v: Any) -> dict | None:
+    """What an upper-track clip trims off its own picture: a fraction of it per side (l, r, t, b), the cut part
+    transparent. x, y and w still describe the uncropped box, so the part left shows where it was. None when
+    nothing is cut."""
+    if v is None:
+        return None
+    if not isinstance(v, dict) or set(v) - set(SIDES):
+        raise AppError("裁剪設定格式不正確")
+    left, top = _float(0, CROP_MAX)(v.get("l", 0)), _float(0, CROP_MAX)(v.get("t", 0))
+    out = {"l": left, "r": _float(0, CROP_MAX - left)(v.get("r", 0)),
+           "t": top, "b": _float(0, CROP_MAX - top)(v.get("b", 0))}
+    return out if any(out.values()) else None
+
+
 def _chroma(v: Any) -> dict:
     """Colour key of a picture-in-picture clip (GR-09), ffmpeg chromakey's settings. Missing keys take their
     defaults; switching it off keeps the colour and tolerances for the next time."""
@@ -250,7 +264,7 @@ MAX_OPS = 2000  # ops per batch level; longer lists are nested (apply_ops)
 MAX_PARKED = 500
 
 
-PIP_KEYS = ("x", "y", "w", "opacity", "volume", "chroma", "keyframes")
+PIP_KEYS = ("x", "y", "w", "opacity", "volume", "chroma", "crop", "rotation", "keyframes")
 
 
 def _pip(v: Any) -> dict | None:
@@ -493,8 +507,10 @@ OVERLAY_FIELDS = {
     "volume": _float(0, 4),
     "disabled": _bool,
     "chroma": _chroma,
+    "crop": _overlay_crop,  # trimmed off its own picture; the cut part is transparent
+    "rotation": _float(-3600, 3600),  # degrees, counterclockwise, about the center of the part left after crop
     "keyframes": _keyframes({"x": _float(-4, 4), "y": _float(-4, 4), "w": _float(0.05, 4), "opacity": _float(0, 1),
-                             "volume": _float(0, 4)}),
+                             "volume": _float(0, 4), "rotation": _float(-3600, 3600)}),
 }
 # Adjustment layers: a span of the timeline whose grade applies to every picture underneath it.
 ADJUST_FIELDS = {

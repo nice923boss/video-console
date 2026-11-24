@@ -5,7 +5,7 @@
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
 // clock; nothing here re-renders through Preact. The sound is played by player-audio.js.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, clipSpeed, SOURCE_TRACK, sequenceDuration, overlayHeight } from "../lib/sequence.js";
+import { clipIndexAt, clipSpeed, SOURCE_TRACK, sequenceDuration, overlayHeight, overlayShape } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged, shownCaptions } from "../lib/caption-style.js";
 import { litCount, fillCaption, ktvMarks, fillKtv, paintKtv } from "../lib/karaoke.js";
@@ -572,6 +572,7 @@ export function createEngine(host, hooks = {}) {
     st.width = pct(w);
     st.height = pct(overlayHeight({ w }, media, width, height));
     st.opacity = String(clamp01(Number(valueAt(item, "opacity", local, 1))));
+    Object.assign(st, overlayShape(item, Number(valueAt(item, "rotation", local, 0)) || 0));
   }
 
   // An SVG filter kept under id, rebuilt from markup(filter id) under a new filter id whenever key changes.

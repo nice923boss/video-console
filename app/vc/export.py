@@ -31,6 +31,7 @@ from .keyframes import expr as kf_expr
 from .keyframes import source_keys, take_keys
 from .keyframes import steps as kf_steps
 from .media import ALPHA_DECODERS, AS_709, TAGS_709, TO_709, Media
+from .overlayshape import shape_overlay
 from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, overlay_speed, total_duration
 from .transform import transform_filter
 from .util import AppError, safe_filename
@@ -262,7 +263,7 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
                    picture: bool = True) -> tuple[str, list[tuple[int, float, float, str, float]]]:
     """Lay the picture-in-picture clips over the picture, bottom track first (a higher track covers a lower
     one). Returns the new picture label and (input, start, length, volume expression, speed) for each clip whose
-    sound plays. A video at speed s reads length * s seconds of its file from "in". Keyframed position, size and opacity follow the timeline time t (T in geq).
+    sound plays. A video at speed s reads length * s seconds of its file from "in". Keyframed position, size, opacity and rotation follow the timeline time t (T in geq).
     With picture False only the clips whose sound plays are opened and nothing is laid over."""
     w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), float(project["settings"]["fps"])
     all_media = project.get("media") or {}
@@ -311,7 +312,10 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
                 # geq keeps the frame size it first saw, so it runs before a changing scale.
                 op = kf_expr(item, "opacity", "T", start, 1.0)
                 chain += ["format=rgba", f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({op})'"]
-            if "w" in keyed:
+            shape = shape_overlay(item, media, w, h, start, keyed)
+            if shape:
+                chain += shape[0]
+            elif "w" in keyed:
                 chain += [f"scale=w='max(2,2*trunc({w}*({kf_expr(item, 'w', 't', start, 0.35)})/2))':h=-2:"
                           "eval=frame:flags=lanczos", "setsar=1"]
             else:
@@ -321,7 +325,9 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             if opacity < 1 and "opacity" not in keyed:
                 chain.append(f"colorchannelmixer=aa={opacity:.3f}")
             chain.append("scale=out_color_matrix=bt709:out_range=tv,format=yuva420p")  # as TO_709, keeping alpha
-            if keyed & {"x", "y"}:
+            if shape:
+                x, y = shape[1], shape[2]
+            elif keyed & {"x", "y"}:
                 x = f"'{w}*({kf_expr(item, 'x', 't', start)})'"
                 y = f"'{h}*({kf_expr(item, 'y', 't', start)})'"
             else:
