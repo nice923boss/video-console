@@ -3,7 +3,7 @@
 import { html, useState, useEffect } from "../lib/h.js";
 import { useStore } from "../lib/store.js";
 import { api } from "../lib/api.js";
-import { revealInFolder, revealSystemFolder } from "../lib/actions.js";
+import { revealInFolder, revealSystemFolder, saveCaptionsSrt } from "../lib/actions.js";
 import { fileUrl, fmtBytes, fmtRelTime, fmtDateTime } from "../lib/format.js";
 import { Button, IconButton, Empty, Spinner, Section } from "../components/ui.js";
 import { Icon } from "../components/icons.js";
@@ -17,15 +17,15 @@ import { pickReviewFile } from "../lib/review.js";
 import { openRevisions } from "../dialogs/revisions-dialog.js";
 
 const enc = encodeURIComponent;
-const KIND_ICON = { video: "film", image: "image", audio: "music", package: "package", file: "file" };
-const KIND_NAME = { video: "影片", image: "圖片", audio: "音訊", package: "打包檔", file: "檔案" };
+const KIND_ICON = { video: "film", image: "image", audio: "music", package: "package", captions: "captions", file: "file" };
+const KIND_NAME = { video: "影片", image: "圖片", audio: "音訊", package: "打包檔", captions: "字幕", file: "檔案" };
 const PLAYABLE = new Set(["video", "image", "audio"]);
 const isExportJob = (j, pid) => j.pid === pid && (j.kind === "export" || j.kind === "package");
 const isActive = (j) => j.status === "queued" || j.status === "running";
 
 const asEntry = (f) => ({ id: f.name, kind: f.kind, file: f.path, name: f.name, created: f.modified });
 
-function DocLinks({ project }) {
+function DocLinks({ project, onSaved }) {
   const base = `/api/projects/${enc(project.id)}`;
   const captions = (project.captions || []).length;
   return html`<div class="exp-docs">
@@ -35,10 +35,11 @@ function DocLinks({ project }) {
       <${Icon} name="external" size=${14} class="dim" />
     </a>
     ${captions
-      ? html`<a class="exp-doc" href=${`${base}/captions.srt`} download title="SubRip 字幕檔，可匯入其他剪輯軟體">
+      ? html`<a class="exp-doc" href="#" role="button" title="SubRip 字幕檔，可匯入其他剪輯軟體；存到匯出資料夾"
+            onClick=${async (e) => { e.preventDefault(); if (await saveCaptionsSrt(project.id)) onSaved(); }}>
           <${Icon} name="captions" size=${18} />
-          <span><b>字幕檔 SRT</b><small>${captions} 則字幕</small></span>
-          <${Icon} name="download" size=${14} class="dim" />
+          <span><b>字幕檔 SRT</b><small>${captions} 則字幕，存到匯出資料夾</small></span>
+          <${Icon} name="save" size=${14} class="dim" />
         </a>`
       : html`<div class="exp-doc is-disabled" title="先在剪輯頁加上字幕">
           <${Icon} name="captions" size=${18} />
@@ -171,7 +172,7 @@ export function ExportsPane({ project }) {
         <div class="exp-list">${rows(packages)}</div>
       <//>`}
       <${Section} title="文件" icon="file" class="exp-section">
-        <${DocLinks} project=${project} />
+        <${DocLinks} project=${project} onSaved=${load} />
       <//>
     </div>
   </div>`;

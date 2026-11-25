@@ -113,7 +113,7 @@ export function OutputSection() {
       <//>
     </div>
     <${Toggle} checked=${draft.burnCaptions} onChange=${(burnCaptions) => set({ burnCaptions })} label="預設把字幕燒進畫面"
-      hint="關閉時影片不含字幕，SRT 字幕檔可在輸出對話框另外下載" />
+      hint="關閉時影片不含字幕，SRT 字幕檔可在輸出對話框另外輸出" />
     <${Field} label="匯出資料夾" error=${folderError}
         hint=${`所有專案輸出的影片、音訊與 ZIP 都存到這裡，留白使用預設位置 ${defaultFolder}。改了只影響之後的輸出，舊檔案留在原處，仍列在各專案的輸出成品`}
         after=${html`<${Button} size="sm" kind="ghost" icon="folder" busy=${picking}

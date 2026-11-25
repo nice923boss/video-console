@@ -3,7 +3,7 @@
 // package (the MP4 in a folder of its own beside 審稿.html, vc/review_pack.py), or zip the project for hand-off. Quality and caption choices can be kept as the app defaults.
 import { html, useState, useMemo } from "../lib/h.js";
 import { getState } from "../lib/store.js";
-import { saveSettings, updateProject, navigate } from "../lib/actions.js";
+import { saveSettings, updateProject, navigate, saveCaptionsSrt } from "../lib/actions.js";
 import { submitJob } from "../lib/jobs-actions.js";
 import { buildSequence, sequenceDuration } from "../lib/sequence.js";
 import { fmtDuration, round } from "../lib/format.js";
@@ -69,13 +69,6 @@ function queued(job) {
   });
 }
 
-// The server answers with an attachment, so the app window stays on this page.
-function downloadSrt(pid) {
-  const a = document.createElement("a");
-  a.href = `/api/projects/${encodeURIComponent(pid)}/captions.srt`;
-  a.click();
-}
-
 function Summary({ project, clips, size }) {
   const s = project.settings;
   return html`<div class="exp-summary">
@@ -108,6 +101,7 @@ function useVideoForm(project, clips, close) {
   const [fit, setFit] = useState(project.settings.fit || "contain");
   const [keep, setKeep] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [savingSrt, setSavingSrt] = useState(false);
   // Same rule as the SRT endpoint, which answers 409 when every caption is blank.
   const hasCaptions = (project.captions || []).some((c) => (c.text || "").trim());
   const noClips = "序列裡沒有任何鏡頭，請確認鏡頭有勾選「放入序列」";
@@ -126,22 +120,23 @@ function useVideoForm(project, clips, close) {
     const job = await submitJob("export", null, {
       options: { quality, encoder, burnCaptions: burn, fadeIn, fadeOut, clipAudio, fit,
         size: out.size, maxrate: out.maxrate, loudness: loudnessValue(loudness) },
+      ...(!burn && srt && hasCaptions ? { srt: true } : {}),
     }, { quiet: true });
     setBusy(false);
     if (!job) return;
-    if (!burn && srt && hasCaptions) downloadSrt(project.id);
     queued(job);
     close(job);
   };
-  const srtOnly = () => {
-    downloadSrt(project.id);
-    toast("已下載 SRT 字幕檔");
+  const srtOnly = async () => {
+    setSavingSrt(true);
+    await saveCaptionsSrt(project.id);
+    setSavingSrt(false);
   };
 
   const footer = html`
     <${ExportFolderNote} class="modal-foot-note" />
-    <${Button} icon="captions" disabled=${!hasCaptions}
-      title=${hasCaptions ? "不輸出影片，直接下載目前的字幕" : "這個專案還沒有字幕"} onClick=${srtOnly}>只下載 SRT<//>
+    <${Button} icon="captions" disabled=${!hasCaptions} busy=${savingSrt}
+      title=${hasCaptions ? "不輸出影片，直接把目前的字幕存成 SRT 檔到匯出資料夾" : "這個專案還沒有字幕"} onClick=${srtOnly}>只輸出 SRT<//>
     <${Button} onClick=${() => close(null)}>取消<//>
     <${Button} kind="primary" icon="film" busy=${busy} disabled=${!!blocked} title=${blocked || undefined}
       onClick=${submit}>開始輸出<//>`;
@@ -189,9 +184,9 @@ function useVideoForm(project, clips, close) {
     <//>
     <${FadeFields} settings=${project.settings} fadeIn=${fadeIn} fadeOut=${fadeOut} setFadeIn=${setFadeIn} setFadeOut=${setFadeOut} />
     <${Toggle} checked=${burn} onChange=${setBurn} label="把字幕燒進畫面"
-      hint=${hasCaptions ? "字型、大小與位置照預覽畫面；關掉時影片不含字幕，可以另外下載 SRT 字幕檔" : "這個專案還沒有字幕，打開也不會有作用"} />
-    ${!burn && hasCaptions && html`<${Toggle} checked=${srt} onChange=${setSrt} label="同時下載 SRT 字幕檔"
-      hint="按「開始輸出」時一併下載到「下載」資料夾" />`}
+      hint=${hasCaptions ? "字型、大小與位置照預覽畫面；關掉時影片不含字幕，可以另外輸出 SRT 字幕檔" : "這個專案還沒有字幕，打開也不會有作用"} />
+    ${!burn && hasCaptions && html`<${Toggle} checked=${srt} onChange=${setSrt} label="同時輸出 SRT 字幕檔"
+      hint="影片輸出完成時，在匯出資料夾的影片旁邊存一個同名的 .srt，播放器會自動載入" />`}
     <${Toggle} checked=${clipAudio} onChange=${setClipAudio} label="保留影片片段本身的聲音"
       hint="關掉時只會有音軌上的音樂與旁白" />
     <${LoudnessField} value=${loudness} onChange=${setLoudness} />

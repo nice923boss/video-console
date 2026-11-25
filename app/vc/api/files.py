@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from .. import explorer, folderpick
 from ..export import captions_srt, export_filename, shots_csv
-from ..exportdir import file_ref, find_export, forget_export, project_exports
+from ..exportdir import (ensure_root, export_root, file_ref, find_export, forget_export, project_exports,
+                         record_export, unique_path)
 from ..review import render_review, review_ops
 from ..server import FileResponse, Request, Response, Router
 from ..storyboard import picture_data, render_storyboard
@@ -45,14 +46,15 @@ AUDIO_TYPES = [("聲音", _spec(AUDIO_EXTS)), ("所有檔案", "*.*")]
 
 
 def export_entries(project_dir: Path) -> list[dict[str, Any]]:
-    """The project's finished videos and packages, newest first (in-progress *.part files are skipped)."""
+    """The project's finished videos, packages and subtitle files, newest first (in-progress *.part files are skipped)."""
     items = []
     for f in project_exports(project_dir):
         try:
             st = f.stat()
         except OSError:
             continue  # removed while listing
-        kind = "package" if f.suffix.lower() == ".zip" else (kind_of(f.name) or "file")
+        ext = f.suffix.lower()
+        kind = "package" if ext == ".zip" else "captions" if ext == ".srt" else (kind_of(f.name) or "file")
         items.append({"name": f.name, "path": file_ref(f, project_dir), "size": st.st_size,
                       "modified": st.st_mtime, "kind": kind})
     items.sort(key=lambda e: e["modified"], reverse=True)
@@ -176,17 +178,37 @@ def register(router: Router, app: App) -> None:
 
         return Response(render_storyboard(project, picture_url), content_type="text/html; charset=utf-8")
 
-    @router.route("GET", "/api/projects/{pid}/captions.srt")
-    def captions(req: Request) -> Response:
-        project = store.get(req.params["pid"])
-        track = req.query.get("track") or ""
+    def srt_of(project: dict, track: str) -> str:
         if track and track != "main" and not any(t["id"] == track for t in project.get("captionTracks") or []):
             raise AppError("字幕軌道不存在", 404)
         text = captions_srt(project, track)
         if not text:
             raise AppError("這個專案還沒有字幕可以匯出", 409)
-        return Response(BOM + text, content_type="application/x-subrip; charset=utf-8",
+        return BOM + text
+
+    @router.route("GET", "/api/projects/{pid}/captions.srt")
+    def captions(req: Request) -> Response:
+        project = store.get(req.params["pid"])
+        return Response(srt_of(project, req.query.get("track") or ""),
+                        content_type="application/x-subrip; charset=utf-8",
                         download_name=download_stem(project) + ".srt")
+
+    @router.route("POST", "/api/projects/{pid}/save-srt")
+    def captions_save(req: Request) -> dict:
+        """The captions as an .srt in the export folder, listed with the project's exports (never overwrites)."""
+        pid = req.params["pid"]
+        project = store.get(pid)
+        text = srt_of(project, str(req.json_object().get("track") or ""))
+        folder = str(app.settings.section("export").get("folder") or "")
+        path = unique_path(ensure_root(export_root(folder, app.paths.data)), download_stem(project) + ".srt")
+        try:
+            path.write_bytes(text.encode("utf-8"))
+        except OSError as exc:
+            raise AppError(f"無法寫入字幕檔 {path}（{exc.strerror or exc}）", 500) from exc
+        pdir = store.project_dir(pid)
+        record_export(pdir, path)
+        log.info("Saved captions %s", path)
+        return {"name": path.name, "path": file_ref(path, pdir), "folder": str(path.parent)}
 
     @router.route("POST", "/api/projects/{pid}/captions.srt")
     def captions_import(req: Request) -> dict:

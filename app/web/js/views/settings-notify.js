@@ -56,7 +56,10 @@ function DeviceNotices({ notify }) {
       <${Toggle} checked=${notify.sound} onChange=${(sound) => saveSettings({ notify: { sound } })} label="提示音"
         hint="完成時播放兩聲高音，失敗時播放兩聲低音" />
       <${Button} size="sm" kind="ghost" icon="bell" onClick=${() => { chime(true); setTimeout(() => chime(false), 700); }}>試聽<//>
-    </div>`;
+    </div>
+    <${Toggle} checked=${notify.exportSound !== false} disabled=${notify.sound === false}
+      onChange=${(exportSound) => saveSettings({ notify: { exportSound } })} label="輸出影片成功時播放提示音"
+      hint=${notify.sound === false ? "提示音已關閉" : "關掉後影片輸出完成只跳通知、不出聲；輸出失敗仍會播放低音"} />`;
 }
 
 function NtfyForm({ saved }) {

@@ -92,6 +92,8 @@ DEFAULTS: dict[str, Any] = {
     "notify": {
         "desktop": True,
         "sound": True,
+        # exportSound: False keeps the chime (and a desktop notice's own sound) off for finished video exports
+        "exportSound": True,
         # when: "all" pushes every batch summary, "failed" only batches with a failure
         "ntfy": {"enabled": False, "server": "https://ntfy.sh", "topic": "", "when": "all"},
     },

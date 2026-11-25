@@ -53,10 +53,10 @@ export async function requestDesktopPermission() {
   }
 }
 
-function desktopNotice(title, body, jobId) {
+function desktopNotice(title, body, jobId, silent = false) {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   try {
-    const n = new Notification(title, { body, tag: jobId || "vc", icon: "/icon.svg" });
+    const n = new Notification(title, { body, tag: jobId || "vc", icon: "/icon.svg", silent });
     n.onclick = () => {
       window.focus();
       if (jobId) revealJob(jobId);
@@ -66,6 +66,10 @@ function desktopNotice(title, body, jobId) {
     // Some shells (or a revoked permission) refuse notifications; the toast already covers it.
   }
 }
+
+// Settings › 通知 can silence finished video exports only: a group with anything else, or a failure, still sounds.
+const quietExports = (items, prefs) => prefs.exportSound === false
+  && items.every((n) => n.kind === "export" && n.level !== "error");
 
 function flush() {
   flushTimer = null;
@@ -96,10 +100,11 @@ function flush() {
     });
   }
 
-  if (prefs.sound !== false) chime(!failed.length);
+  const quiet = quietExports(items, prefs);
+  if (prefs.sound !== false && !quiet) chime(!failed.length);
   if (prefs.desktop !== false && document.hidden) {
-    if (items.length === 1) desktopNotice(items[0].title, items[0].message, items[0].jobId);
-    else desktopNotice("Video Console", `${ok} 個工作完成${failed.length ? `，${failed.length} 個失敗` : ""}`, items[0].jobId);
+    if (items.length === 1) desktopNotice(items[0].title, items[0].message, items[0].jobId, quiet);
+    else desktopNotice("Video Console", `${ok} 個工作完成${failed.length ? `，${failed.length} 個失敗` : ""}`, items[0].jobId, quiet);
   }
 }
 

@@ -15,6 +15,7 @@ import { openNewProject } from "../dialogs/new-project.js";
 import { openScriptImport } from "../dialogs/script-import.js";
 import { openProjectExport } from "../dialogs/project-export.js";
 import { openBatchExport } from "../dialogs/batch-export.js";
+import { openExportDialog } from "../dialogs/export-dialog.js";
 
 const enc = encodeURIComponent;
 const SORTS = [
@@ -113,6 +114,12 @@ function folderMenu(e, f, count) {
   ]);
 }
 
+// The export dialog works on the open project: open this one first (staying on this page) when it isn't.
+async function exportVideo(pid) {
+  if (pid !== getState().pid && !(await openProject(pid, "home"))) return;
+  openExportDialog("video");
+}
+
 function projectMenu(e, p, currentPid) {
   e.preventDefault();
   e.stopPropagation();
@@ -127,6 +134,8 @@ function projectMenu(e, p, currentPid) {
     { label: "建立副本…", icon: "copy", onClick: () => duplicateProject(p.id) },
     { label: "移到資料夾…", icon: "folder", onClick: () => folderPicker(at, p, currentPid) },
     { label: "匯出專案…", icon: "download", onClick: () => openProjectExport(p.id) },
+    { label: "輸出影片…", icon: "film", disabled: !p.clips, title: p.clips ? undefined : "序列裡沒有任何鏡頭",
+      onClick: () => exportVideo(p.id) },
     { divider: true },
     { label: "移到垃圾桶", icon: "trash", danger: true, onClick: () => deleteProject(p.id, p.name) },
   ]);

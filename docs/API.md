@@ -522,6 +522,7 @@ vc.wait(job["id"])
 - 引擎是另一個專案 Speech-to-subtitle（faster-whisper large-v3，選用 MFA 精準對齊）。設定在 `settings.stt`：`{"folder": "", "python": ""}`。留白時找 VC 同一層的 `Speech-to-subtitle` 資料夾，Python 用它 `pyvenv.cfg` 指向的直譯器。
 - 自我檢查：`POST /api/stt/check`（最多 180 秒），回 `{"ok", "cuda", "model", "ffmpeg", "mfa", "opencc", "folder", "python"}`，`ok` 需要 CUDA 與模型都就緒。
 - 取得 SRT：`GET /api/projects/{pid}/captions.srt`（UTF-8 含 BOM；不含標題字卡與停用的字幕；沒有字幕時 409）。不加參數時，全部字幕依時間排成一份。加 `?track=main` 只取主字幕軌，加 `?track=<字幕軌 id>` 只取那一軌（例如雙語匯入後分別取中文、英文 SRT）；軌道不存在時 404。
+- 存到匯出資料夾：`POST /api/projects/{pid}/save-srt`，本文 `{"track": ""}`（可省略，規則同上）。內容和 `GET` 相同，存成匯出資料夾裡的 `<專案>_<日期時間>.srt`（同名時加 `-2`、`-3`，不覆蓋），記進專案的輸出成品（`GET /exports` 的 `kind` 是 `captions`）；回 `{"name", "path", "folder"}`，`path` 可直接給 `/reveal`。APP 的「只輸出 SRT」與「輸出成品 › 字幕檔 SRT」用這個。
 - 匯入 SRT：`POST /api/projects/{pid}/captions.srt`，body 是 .srt 檔原始內容（最多 10 MB），回 `{"rev", "added", "voiced"}`。字幕放在檔案記載的時間（序列秒數）加上 `?offset=` 秒數（預設 0），位置 `bottom`、不綁鏡頭；`<...>` 與 `{\...}` 標記會拿掉，多行文字保留換行（每行去頭尾空白、略過空行），超過 500 字截斷。編碼依序判斷：有 BOM 的 UTF-16、UTF-8（BOM 可有可無）、其餘當 Big5。加 `?replace=1` 先刪掉專案現有字幕（標題字卡保留），這時 `?voices=` 決定綁在舊字幕上的配音：`delete`（預設，刪掉）、`keep`（留在配音軌當一般片段）、`regen`（刪掉，新字幕沿用時間重疊最多的舊字幕的說話者，方便重新配音）；`voiced` 是有說話者的新字幕 id。整批是一個 undo 步驟（標籤「匯入 SRT」）。檔案裡沒有可用字幕時回 400 且不動現有字幕。
 
 ### 6.1 匯入中英對照文字（雙語字幕）
@@ -614,6 +615,8 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 | `maxrate` | 影片位元率上限（kbps，0 為不限）。x264 與 NVENC 在上限內維持畫質目標；AMF 與 Quick Sync 改用這個位元率的 VBR |
 | `loudness` | 響度標準化目標 `-14` 或 `-16`（LUFS），`null`（預設）不調整。先量整段混音，再用單一增益調整，峰值不超過 -1 dBTP；其他值回 400 |
 
+payload 加 `"srt": true`（和 `options` 同層，`format` 只能是 `mp4`，其他回 400）時，影片完成後在旁邊寫入同名的 `<影片名>.srt`（全部字幕，內容同 `GET captions.srt`，用輸出當下的專案內容），一起列在輸出成品，`notes` 寫出檔名；專案沒有字幕或寫入失敗只在 `notes` 註明，影片照樣完成。
+
 輸出視窗的平台預設組（YouTube、Shorts、Reels、LINE）就是換算成 `size` 與 `maxrate`，選擇記在設定 `export.preset`（`""`、`youtube`、`shorts`、`reels`、`line`）。沒選平台時的「輸出尺寸」記在 `export.resolution`：`""`（專案尺寸）、`1080`、`2160`（短邊像素，和專案同比例）。
 
 客戶審稿包：payload 加 `"review": true`（`format` 只能是 `mp4`，其他回 400）。影片輸出到匯出資料夾裡的新資料夾 `<專案>_審稿_<日期時間>`，旁邊寫入審稿網頁 `審稿.html`（vc/review_pack.py，頁面本身在 `app/vc/review_kit/`），輸出當下的鏡頭表存在專案的 `reviews/<id>.json`，回傳的修改意見靠它對回鏡頭。專案有背景音樂（`review_pack.music_clips`：有標背景音樂的軌只算那幾軌，沒標就算旁白、說話軌與分離原聲以外的音訊）時，另外輸出拿掉這些片段的 `<影片名>_無配樂.mp3`（不做響度標準化），審稿頁試聽客戶的新配樂時播它；這一步失敗只在 `notes` 註明，審稿包照樣完成。完成時 `result` 多一個 `review: {"id", "folder", "page"}`。
@@ -658,7 +661,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/system/pick-folder` | 開啟 Windows 選擇資料夾視窗，回 `{"path"}`（按取消時 `null`）；已有一個開著時 409，非 Windows 501 |
 | POST | `/api/shutdown` | 關閉 VC |
 | POST | `/api/tray` | 顯示系統托盤圖示，回傳 `{"tray": bool}`（從桌面啟動時由啟動程式呼叫） |
-| GET／PUT | `/api/settings` | 設定。`notify.ntfy.when`：`all`（全部完成都通知）或 `failed`（只通知失敗）；`history.keep`：每個專案保留幾份版本紀錄（5~500，預設 50）；`glossary`：字幕用語表（最多 20000 字），一行一個正確寫法，可接「=錯字,錯字」，用在輸出前檢查（`glossary`）與 `glossaryFix` 指令，不影響輸出 |
+| GET／PUT | `/api/settings` | 設定。`notify.ntfy.when`：`all`（全部完成都通知）或 `failed`（只通知失敗）；`notify.exportSound`：`false` 時輸出（`export` 工作）成功不播放提示音、系統通知也不出聲，失敗照常（預設 `true`，`notify.sound` 關閉時不論這項都不出聲）；`history.keep`：每個專案保留幾份版本紀錄（5~500，預設 50）；`glossary`：字幕用語表（最多 20000 字），一行一個正確寫法，可接「=錯字,錯字」，用在輸出前檢查（`glossary`）與 `glossaryFix` 指令，不影響輸出 |
 | POST | `/api/settings/default-updates` | 回答「預設值已更新」提示：`{"apply": [項目, ...]}` 列出的換成新預設，其餘保留，回 `{"settings", "providers"}` |
 | GET／PUT | `/api/secrets` | API 金鑰（只回是否已設定與遮罩後的值） |
 | GET／POST | `/api/projects` | 專案列表／新增 `{"name", "settings", "starter"}` |
@@ -688,6 +691,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | DELETE | `/api/projects/{pid}/exports/{name}` | 刪除輸出檔（`name` 是檔名，只能刪這個專案輸出的檔） |
 | GET | `/api/projects/{pid}/export-check` | 輸出前檢查（第 7 節） |
 | GET | `/api/projects/{pid}/captions.srt` | 字幕 SRT |
+| POST | `/api/projects/{pid}/save-srt` | 字幕 SRT 存到匯出資料夾 |
 | POST | `/api/projects/{pid}/captions.srt` | 匯入 SRT 字幕（第 6 節） |
 | POST | `/api/projects/{pid}/captions/bilingual` | 匯入中英對照文字成兩軌字幕（6.1 節） |
 | POST | `/api/projects/{pid}/captions/align` | 語音對齊一條字幕軌（6.2 節） |

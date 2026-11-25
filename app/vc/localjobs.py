@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from . import gyro, p5src
 from .edits import freeze_overlay, track_busy
-from .export import AUDIO_CODECS, export_options, render
+from .export import AUDIO_CODECS, captions_srt, export_options, render
 from .exportdir import ensure_root, export_root, record_export, unique_path
 from .jobs import JobControl
 from .media import ALPHA_DECODERS, KENBURNS, KENBURNS_LABELS, Media, clean_stab
@@ -503,12 +503,15 @@ class LocalJobs:
         review = bool(payload.get("review"))
         if review and (overrides.get("format") or "mp4") != "mp4":
             raise AppError("審稿包只能輸出 MP4 影片")
+        srt = bool(payload.get("srt"))
+        if srt and (overrides.get("format") or "mp4") != "mp4":
+            raise AppError("SRT 字幕檔只能和影片一起輸出")
         opts = export_options(project, self._settings.section("export"), overrides)
         if not build_sequence(project):
             raise AppError("序列裡沒有任何鏡頭可以輸出（請確認鏡頭有勾選「放入序列」）")
         what = "審稿包" if review else "音訊" if opts["format"] in AUDIO_CODECS else "影片"
         return {"title": f"輸出{what}：{project['name']}", "lane": "local:export", "shotId": None,
-                "payload": {"options": opts, **({"review": True} if review else {})}}
+                "payload": {"options": opts, **({"review": True} if review else {}), **({"srt": True} if srt else {})}}
 
     def _run_export(self, ctl: JobControl, work: Path) -> dict:
         media = self._media()
@@ -544,6 +547,8 @@ class LocalJobs:
                     out_dir.rmdir()
             raise
         record_export(pdir, pdir / result["file"])
+        if ctl.payload.get("srt"):
+            self._export_srt(ctl, pdir, project, pdir / result["file"])
         review = None
         if ctl.payload.get("review"):
             snap = write_pack(project, pdir, out_dir, pdir / result["file"], result["duration"], new_id("r"), stem)
@@ -562,6 +567,23 @@ class LocalJobs:
             return {"file": result["file"], "export": result, "review": review,
                     "message": f"審稿包完成：{Path(review['folder']).name}"}
         return {"file": result["file"], "export": result, "message": f"輸出完成：{result['name']}"}
+
+    def _export_srt(self, ctl: JobControl, pdir: Path, project: dict, video: Path) -> None:
+        """The captions as <video>.srt beside the video (players load it on their own), from the same snapshot.
+        A failure only adds a note: the video itself is done."""
+        text = captions_srt(project)
+        if not text:
+            ctl.note("專案沒有字幕，沒有輸出 SRT 字幕檔")
+            return
+        path = video.with_suffix(".srt")
+        try:
+            path.write_bytes(("\ufeff" + text).encode("utf-8"))  # BOM, same as the SRT download
+        except OSError as exc:
+            log.warning("Writing %s failed: %s", path, exc)
+            ctl.note(f"沒能寫入 SRT 字幕檔（{exc.strerror or exc}）")
+            return
+        record_export(pdir, path)
+        ctl.note(f"已同時輸出字幕檔：{path.name}")
 
     def _review_stem(self, ctl: JobControl, media: Media, project: dict, pdir: Path, opts: dict, pref: str,
                      out_dir: Path, music: set[str], video_stem: str) -> str | None:

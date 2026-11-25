@@ -536,6 +536,19 @@ export async function revealInFolder(path = "") {
   }
 }
 
+// The captions as an .srt in the export folder (listed under 輸出成品); resolves to the saved file, or null.
+export async function saveCaptionsSrt(pid) {
+  try {
+    const file = await api.post(`/api/projects/${enc(pid)}/save-srt`, {});
+    toast(`已存到匯出資料夾：${file.name}`, { level: "success", title: "SRT 字幕檔",
+      action: { label: "在檔案總管中顯示", fn: () => revealInFolder(file.path) } });
+    return file;
+  } catch (err) {
+    toastError(err, "無法儲存 SRT 字幕檔");
+    return null;
+  }
+}
+
 // The Windows select-folder dialog, opened by the server; resolves to the folder picked, or null when canceled.
 export async function pickSystemFolder(start, title) {
   try {
