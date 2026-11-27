@@ -87,8 +87,9 @@ DEFAULTS: dict[str, Any] = {
     "providers": {},
     "ffmpeg": {"path": "", "encoder": "auto"},
     # folder: where every project's videos and ZIP files go; empty means <data>/exports
+    # segmented: 分段平行輸出, on by default (segments.py)
     "export": {"quality": "high", "burnCaptions": True, "captionSize": 52, "fadeIn": 0.0, "fadeOut": 0.0,
-               "folder": "", "preset": "", "resolution": ""},
+               "folder": "", "preset": "", "resolution": "", "segmented": True},
     "notify": {
         "desktop": True,
         "sound": True,
@@ -227,6 +228,7 @@ def _validate(cfg: dict) -> None:
     export["folder"] = out_folder
     export["preset"] = export.get("preset") if export.get("preset") in EXPORT_PRESETS else ""
     export["resolution"] = export.get("resolution") if export.get("resolution") in EXPORT_RESOLUTIONS else ""
+    export["segmented"] = bool(export.get("segmented", True))
     upscale = cfg["video2x"]
     upscale.update(enabled=bool(upscale.get("enabled")),
                    method=upscale.get("method") if upscale.get("method") in video2x.METHODS else "anime4k")

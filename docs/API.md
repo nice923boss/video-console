@@ -616,6 +616,7 @@ path = vc.export(pid, quality="high", burnCaptions=False)
 | `size` | 輸出尺寸 `[寬, 高]`（16~7680，自動取偶數）。和專案比例差 1% 以內時整段直接用這個尺寸合成（放大過的素材不會先縮回專案尺寸）；比例不同時合成完再縮放，依 `fit` 加黑邊或裁切。省略或 `null` 用專案尺寸 |
 | `maxrate` | 影片位元率上限（kbps，0 為不限）。x264 與 NVENC 在上限內維持畫質目標；AMF 與 Quick Sync 改用這個位元率的 VBR |
 | `loudness` | 響度標準化目標 `-14` 或 `-16`（LUFS），`null`（預設）不調整。先量整段混音，再用單一增益調整，峰值不超過 -1 dBTP；其他值回 400 |
+| `segmented` | 分段平行輸出（沒給時用設定 `export.segmented`，預設 `true`）。`mp4` 且序列 120 秒以上時，在片段起點切成每段至少 30 秒的幾段（最多 2 × 同時處理數，同時處理數 = CPU 邏輯核心數 ÷ 4，限 2~4），每段各用一個 ffmpeg 只開啟該段用到的素材、輸出 MPEG-TS，聲音另外混成一個 WAV，最後 concat `-c:v copy` 接起來、聲音編成 AAC；畫面和整支一次輸出逐格相同（vc/segments.py）。找不到切點時整支一次輸出；接合失敗時自動改成整支一次輸出 |
 
 payload 加 `"srt": true`（和 `options` 同層，`format` 只能是 `mp4`，其他回 400）時，影片完成後在旁邊寫入同名的 `<影片名>.srt`（全部字幕，內容同 `GET captions.srt`，用輸出當下的專案內容），一起列在輸出成品，`notes` 寫出檔名；專案沒有字幕或寫入失敗只在 `notes` 註明，影片照樣完成。
 
@@ -626,6 +627,8 @@ payload 加 `"srt": true`（和 `options` 同層，`format` 只能是 `mp4`，�
 首頁的「批次輸出」就是對每個勾選的專案各送一個 `export` 工作（`POST /api/jobs/batch`），輸出通道一次跑一個。
 
 輸出前可先 `GET /api/projects/{pid}/export-check`，回傳 `{"duration", "empty", "missing", "disabled", "missingAudio", "missingOverlays", "audioPastEnd", "captionsPastEnd", "videoHidden", "glossary"}`：`empty`、`missing`、`disabled` 是鏡頭清單的編號（沒有畫面、檔案不見、停用；隱藏畫面或整段被滿版上層片段蓋住的鏡頭看不到文字卡，不列入 `empty`、`missing`），`missingAudio`、`missingOverlays` 是不見的檔名，`...PastEnd` 是超出影片結尾、會被切掉的數量。`glossary` 是字幕疑似錯字 `[{caption, term, fix}]`（顯示中的字幕，依設定的字幕用語表；沒有詞庫時是空陣列）。只列出問題，不會擋下輸出。
+
+分段快取：分段輸出的每一段存在專案的 `media/cache/segments/<key>.ts`。`key` 是 `vc.BUILD`、ffmpeg 版本、該段的影格範圍、濾鏡圖（這次輸出的字幕檔與 LUT 檔名換成內容的 SHA-1）、編碼參數、每個輸入檔的路徑、大小與修改時間的 SHA-1 前 24 碼；同一個 key 已有檔案就直接沿用（更新修改時間），不重新輸出。每段燒的字幕只含該段前後 1 秒內的事件，所以改一句字幕只影響顯示它的段。混好的聲音存成同一資料夾的 `<key>.wav`（pcm_f32le、48 kHz 雙聲道，每分鐘約 23 MB；有響度時是套完第二階段的結果），響度量測報告存成同名 `.json`（沒有響度時是 `null`）；這個 `key` 用同樣的算法，但濾鏡圖換成純聲音的 `plan_audio_export`（影格範圍為 `null`），編碼參數換成 `["sound", 響度設定, 序列秒數]`，所以只要聲音片段、音量、響度、聲音素材檔都沒變就不重新混音。輸出結束時保留這次用到的段與聲音，其他 `.ts`、`.wav` 依修改時間從新到舊保留到總大小等於這次用到的，其餘刪除（刪 `.wav` 時一併刪同名 `.json`）。`GET /api/projects/{pid}/usage` 與 `POST .../purge` 不含這個資料夾。app.log 記「分段快取：N 段沿用上次輸出、M 段重新輸出」與「混音快取：沿用上次輸出」或「混音快取：重新混音」。
 
 有指定 `loudness` 時，工作的 `notes` 會寫出調整前後的響度（例如「響度從 -20.3 調整到 -14 LUFS」），峰值太高、loudnorm 改用壓縮時另外註明；混音幾乎無聲（低於 -70 LUFS）時不調整。
 
@@ -663,7 +666,7 @@ type：`system`、`deps`、`comfy`、`workflows`、`queue`、`job`、`jobs`、`n
 | POST | `/api/system/pick-folder` | 開啟 Windows 選擇資料夾視窗，回 `{"path"}`（按取消時 `null`）；已有一個開著時 409，非 Windows 501 |
 | POST | `/api/shutdown` | 關閉 VC |
 | POST | `/api/tray` | 顯示系統托盤圖示，回傳 `{"tray": bool}`（從桌面啟動時由啟動程式呼叫） |
-| GET／PUT | `/api/settings` | 設定。`notify.ntfy.when`：`all`（全部完成都通知）或 `failed`（只通知失敗）；`notify.exportSound`：`false` 時輸出（`export` 工作）成功不播放提示音、系統通知也不出聲，失敗照常（預設 `true`，`notify.sound` 關閉時不論這項都不出聲）；`history.keep`：每個專案保留幾份版本紀錄（5~500，預設 50）；`glossary`：字幕用語表（最多 20000 字），一行一個正確寫法，可接「=錯字,錯字」，用在輸出前檢查（`glossary`）與 `glossaryFix` 指令，不影響輸出 |
+| GET／PUT | `/api/settings` | 設定。`notify.ntfy.when`：`all`（全部完成都通知）或 `failed`（只通知失敗）；`notify.exportSound`：`false` 時輸出（`export` 工作）成功不播放提示音、系統通知也不出聲，失敗照常（預設 `true`，`notify.sound` 關閉時不論這項都不出聲）；`history.keep`：每個專案保留幾份版本紀錄（5~500，預設 50）；`export.segmented`：分段平行輸出（預設 `true`，見輸出選項 `segmented`）；`glossary`：字幕用語表（最多 20000 字），一行一個正確寫法，可接「=錯字,錯字」，用在輸出前檢查（`glossary`）與 `glossaryFix` 指令，不影響輸出 |
 | POST | `/api/settings/default-updates` | 回答「預設值已更新」提示：`{"apply": [項目, ...]}` 列出的換成新預設，其餘保留，回 `{"settings", "providers"}` |
 | GET／PUT | `/api/secrets` | API 金鑰（只回是否已設定與遮罩後的值） |
 | GET／POST | `/api/projects` | 專案列表／新增 `{"name", "settings", "starter"}` |

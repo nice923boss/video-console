@@ -72,10 +72,11 @@ export function OutputSection() {
   const ffmpeg = useStore((s) => (s.system && s.system.ffmpeg) || { available: false, path: "", version: "" });
   const defaultFolder = useStore((s) => defaultExportFolder(s.system && s.system.dataDir));
   const saved = { path: ffmpegCfg.path || "", encoder: ffmpegCfg.encoder || "auto", quality: exportCfg.quality,
-    burnCaptions: !!exportCfg.burnCaptions, captionSize: exportCfg.captionSize, folder: exportCfg.folder || "" };
+    burnCaptions: !!exportCfg.burnCaptions, captionSize: exportCfg.captionSize, folder: exportCfg.folder || "",
+    segmented: exportCfg.segmented !== false };
   const form = useSectionDraft(saved, (d) => ({
     ffmpeg: { path: d.path.trim().replace(/^"(.*)"$/, "$1"), encoder: d.encoder },
-    export: { quality: d.quality, burnCaptions: d.burnCaptions, captionSize: d.captionSize,
+    export: { quality: d.quality, burnCaptions: d.burnCaptions, captionSize: d.captionSize, segmented: d.segmented,
       folder: d.folder.trim().replace(/^"(.*)"$/, "$1") },
   }), "已儲存影片輸出設定");
   const { draft, set } = form;
@@ -114,6 +115,8 @@ export function OutputSection() {
     </div>
     <${Toggle} checked=${draft.burnCaptions} onChange=${(burnCaptions) => set({ burnCaptions })} label="預設把字幕燒進畫面"
       hint="關閉時影片不含字幕，SRT 字幕檔可在輸出對話框另外輸出" />
+    <${Toggle} checked=${draft.segmented} onChange=${(segmented) => set({ segmented })} label="分段平行輸出"
+      hint="兩分鐘以上的影片切成幾段同時輸出，接起來時畫面不再壓縮一次；關閉時整支一次輸出" />
     <${Field} label="匯出資料夾" error=${folderError}
         hint=${`所有專案輸出的影片、音訊與 ZIP 都存到這裡，留白使用預設位置 ${defaultFolder}。改了只影響之後的輸出，舊檔案留在原處，仍列在各專案的輸出成品`}
         after=${html`<${Button} size="sm" kind="ghost" icon="folder" busy=${picking}

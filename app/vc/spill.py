@@ -43,7 +43,7 @@ def _rank(inp: list[str], types: set[str]) -> int | None:
     opts = _options(inp)
     if opts is None:
         return None
-    keys = set(opts)
+    keys = set(opts) - {"-threads"}  # a decoder thread cap moves with the input (movie=...:dec_threads=)
     if opts.get("-f") == "lavfi" and keys <= {"-f", "-t", "-i"}:
         return 1
     if keys == {"-i"}:
@@ -85,19 +85,23 @@ def _source(k: int, inp: list[str], uses: dict[str, int], rotation: Callable[[st
                 + _tail(f"spill{k}v", "v", uses["v"])]
     ss, dur = opts.get("-ss"), opts.get("-t")
     seek = f":sp={ss}" if ss and float(ss) > 0 else ""
+    threads = f":dec_threads={opts['-threads']}" if "-threads" in opts else ""
     cut = ":".join(x for x in (f"start={ss}" if seek else "", f"duration={dur}" if dur else "") if x)
     # movie= ends a video at its last frame's timestamp where -i ends it a frame later, so a later fps= dropped
     # that frame; a one-frame clone moves the end to where -i puts it (a trim past the file's end lets the clone
     # through, the same picture as the frame an overlay's eof_action=repeat holds).
-    post = {"v": f"tpad=stop=1:stop_mode=clone,{f'trim={cut},' if cut else ''}setpts=PTS-STARTPTS",
+    # A still image is one frame from either, with no end to move.
+    still = src.lower().endswith(IMAGE_EXT) and not cut
+    post = {"v": ("setpts=PTS-STARTPTS" if still
+                  else f"tpad=stop=1:stop_mode=clone,{f'trim={cut},' if cut else ''}setpts=PTS-STARTPTS"),
             "a": f"{f'atrim={cut},' if cut else ''}asetpts=PTS-STARTPTS"}
     if "v" in uses:
         post["v"] += _rotate(rotation(src))
     if types == ["a"]:
-        return [f"amovie={escape_path(src)}{seek},{post['a']}" + _tail(f"spill{k}a", "a", uses["a"])]
+        return [f"amovie={escape_path(src)}{seek}{threads},{post['a']}" + _tail(f"spill{k}a", "a", uses["a"])]
     if types == ["v"]:
-        return [f"movie={escape_path(src)}{seek},{post['v']}" + _tail(f"spill{k}v", "v", uses["v"])]
-    return [f"movie={escape_path(src)}{seek}:s=dv+da[spill{k}mv][spill{k}ma]",
+        return [f"movie={escape_path(src)}{seek}{threads},{post['v']}" + _tail(f"spill{k}v", "v", uses["v"])]
+    return [f"movie={escape_path(src)}{seek}{threads}:s=dv+da[spill{k}mv][spill{k}ma]",
             f"[spill{k}mv]{post['v']}" + _tail(f"spill{k}v", "v", uses["v"]),
             f"[spill{k}ma]{post['a']}" + _tail(f"spill{k}a", "a", uses["a"])]
 

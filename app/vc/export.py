@@ -16,6 +16,7 @@ import math
 import re
 import shutil
 import time
+from fractions import Fraction
 from pathlib import Path
 from typing import Callable
 
@@ -26,7 +27,7 @@ from .compressor import dyn_job, ensure_dyn
 from .cover import covered_spans, uncovered
 from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
-from .framegrid import clip_frames, frame_bounds, frame_rate, frames_per_second
+from .framegrid import clip_frames, frame_at, frame_bounds, frame_rate, frames_per_second
 from .grade import build_cube, clean_grade, is_neutral
 from .keyframes import expr as kf_expr
 from .keyframes import source_keys, take_keys
@@ -37,6 +38,13 @@ from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_
 from .transform import transform_filter
 from .util import AppError, safe_filename
 from .voiceclean import ensure_stems, mix_lines, shot_sound, stems_for
+
+# Decoder threads per video input. ffmpeg opens every input when it starts and each decoder took a thread and a
+# frame buffer per core: a hundred clips held tens of GB at once and the export ran paging. On a 539-input project
+# (60 s of it) 2 threads cut the peak from 33 to 17 GB and the time from 220 to 196 s; 4 were no faster.
+DECODE_THREADS = ["-threads", "2"]
+# Seconds of an overlay clip a segment keeps before its first frame: its latest frame at or before that frame shows.
+SKIP_MARGIN = 2.0
 
 log = logging.getLogger("vc.export")
 
@@ -72,6 +80,8 @@ def export_options(project: dict, settings_export: dict, overrides: dict | None)
         "maxrate": 0,
         # One of LOUDNESS_TARGETS to normalise the mix to; None (the default) leaves its level as mixed.
         "loudness": None,
+        # 分段平行輸出 (segments.py): a timeline of two minutes or more renders as segments side by side.
+        "segmented": bool(settings_export.get("segmented", True)),
     }
     for key, value in (overrides or {}).items():
         if key in opts and value is not None:
@@ -266,12 +276,13 @@ def prepare_clips(project: dict, project_dir: Path) -> list[dict]:
 
 
 def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, opts: dict,
-                   inputs: list[list[str]], graph: list[str],
-                   picture: bool = True) -> tuple[str, list[tuple[int, float, float, str, float]]]:
+                   inputs: list[list[str]], graph: list[str], picture: bool = True,
+                   window: tuple[int, int] | None = None) -> tuple[str, list[tuple[int, float, float, str, float]]]:
     """Lay the picture-in-picture clips over the picture, bottom track first (a higher track covers a lower
     one). Returns the new picture label and (input, start, length, volume expression, speed) for each clip whose
     sound plays. A video at speed s reads length * s seconds of its file from "in". Keyframed position, size, opacity and rotation follow the timeline time t (T in geq).
-    With picture False only the clips whose sound plays are opened and nothing is laid over."""
+    With picture False only the clips whose sound plays are opened and nothing is laid over. With a window (first,
+    end) output frame only the clips covering one of those frames are laid, and no sound is opened."""
     w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), float(project["settings"]["fps"])
     all_media = project.get("media") or {}
     sounds: list[tuple[int, float, float, str, float]] = []
@@ -289,17 +300,23 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             speed = overlay_speed(project, item)
             # Hiding a track only hides its picture and muting only silences it, as in the preview.
             loud = (opts["clipAudio"] and media["kind"] == "video" and bool(media.get("hasAudio"))
-                    and not layer.get("muted") and (volume > 0 or "volume" in keyed))
+                    and not layer.get("muted") and (volume > 0 or "volume" in keyed)) and not window
             if length <= 0.05 or (layer.get("hidden") and not loud) or not (project_dir / media["file"]).is_file():
                 continue
             if not picture and not loud:
                 continue
-            if media["kind"] == "video":
-                decoder = ALPHA_DECODERS.get(media.get("alphaCodec") or "")
-                inputs.append(["-ss", f"{float(item.get('in') or 0.0):.3f}", "-t", f"{length * speed:.3f}",
-                               *(["-c:v", decoder] if decoder else []), "-i", media["file"]])
+            if window and not (frame_at(start, fps) < window[1] and window[0] < frame_at(start + length, fps)):
+                continue  # covers no frame of the segment
+            still = media["kind"] == "image"
+            if still:
+                # One frame, decoded once; loop() below repeats it (an image read with -loop 1 was decoded anew,
+                # and every filter ran again, for each frame it covers).
+                inputs.append(["-threads", "1", "-i", media["file"]])
             else:
-                inputs.append(["-loop", "1", "-framerate", frame_rate(fps), "-t", f"{length:.3f}", "-i", media["file"]])
+                decoder = ALPHA_DECODERS.get(media.get("alphaCodec") or "")
+                inputs.append([*DECODE_THREADS, "-ss", f"{float(item.get('in') or 0.0):.3f}",
+                               "-t", f"{length * speed:.3f}", *(["-c:v", decoder] if decoder else []),
+                               "-i", media["file"]])
             idx = len(inputs) - 1
             if loud:
                 sounds.append((idx, start, length, kf_expr(item, "volume", "t", 0.0, 1.0), speed))
@@ -309,29 +326,51 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             # on; before and after them the overlay passes the picture through unchanged. Its first frame sits half
             # a frame before the first frame it covers: laid even a hair late, that frame would show the shot below.
             on, off = frame_bounds(start, start + length, fps)
+            # A segment starting well inside the clip drops its earlier frames before the filters that cost per
+            # frame, keeping a margin for the latest frame at or before the segment's first (overlay shows that).
+            # It still decodes them: an -ss nearer the segment would no longer land on the same frames.
+            seg_start = window[0] / frames_per_second(fps) if window else 0.0
+            skip = seg_start - SKIP_MARGIN > on
             pts = "PTS-STARTPTS" if speed == 1 else f"(PTS-STARTPTS)/{speed:.4f}"
-            chain = [f"setpts={pts}+{on:.3f}/TB"] + ([AS_709] if media["kind"] == "video" else [])
             chroma = item.get("chroma") or {}
-            if chroma.get("on"):
-                # Keyed on the clip's own pixels, before scaling blurs the edge of the colour.
-                chain.append(chroma_key(chroma))
+            # Keyed on the clip's own pixels, before scaling blurs the edge of the colour.
+            key = [chroma_key(chroma)] if chroma.get("on") else []
+            moving = bool(keyed & {"w", "rotation"})  # a size or a turn that changes from frame to frame
+            fade_first, fade_last = [], []
             if "opacity" in keyed:
-                # geq keeps the frame size it first saw, so it runs before a changing scale.
                 op = kf_expr(item, "opacity", "T", start, 1.0)
-                chain += ["format=rgba", f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({op})'"]
+                if moving:
+                    # geq keeps the frame size it first saw, so it runs before a changing scale.
+                    fade_first = ["format=rgba", f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({op})'"]
+                else:
+                    # A fixed size: the fade runs on the sized picture, often a fraction of the file's pixels.
+                    fade_last = [f"geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='alpha(X,Y)*({op})'"]
             shape = shape_overlay(item, media, w, h, start, keyed)
             if shape:
-                chain += shape[0]
+                size = shape[0]
             elif "w" in keyed:
-                chain += [f"scale=w='max(2,2*trunc({w}*({kf_expr(item, 'w', 't', start, 0.35)})/2))':h=-2:"
-                          "eval=frame:flags=lanczos", "setsar=1"]
+                size = [f"scale=w='max(2,2*trunc({w}*({kf_expr(item, 'w', 't', start, 0.35)})/2))':h=-2:"
+                        "eval=frame:flags=lanczos", "setsar=1"]
             else:
-                chain.append(f"scale={max(2, round(w * float(item.get('w') or 0.35) / 2) * 2)}:-2:flags=lanczos")
-            chain.append("format=rgba")
+                size = [f"scale={max(2, round(w * float(item.get('w') or 0.35) / 2) * 2)}:-2:flags=lanczos"]
             opacity = float(item.get("opacity", 1.0))
-            if opacity < 1 and "opacity" not in keyed:
-                chain.append(f"colorchannelmixer=aa={opacity:.3f}")
-            chain.append("scale=out_color_matrix=bt709:out_range=tv,format=yuva420p")  # as TO_709, keeping alpha
+            look = ["format=rgba", *([f"colorchannelmixer=aa={opacity:.3f}"] if opacity < 1 and "opacity" not in keyed
+                                     else []),
+                    "scale=out_color_matrix=bt709:out_range=tv", "format=yuva420p"]  # as TO_709, keeping alpha
+            if still:
+                # The filters that give every frame the same picture run once, before loop() repeats it, as many
+                # frames as -loop 1 -t length gave; what changes over time runs on each frame after it.
+                rate = Fraction(frame_rate(fps))
+                frames = max(1, math.ceil(float(f"{length:.3f}") * rate - 1e-6))
+                timing = [f"loop=loop={frames - 1}:size=1:start=0", f"settb={1 / rate}", f"setpts=N+{on:.3f}/TB",
+                          *([f"trim=start_pts={window[0] - 2}"] if skip else [])]
+                once, each = (key, [*fade_first, *size, *look]) if moving else ([*key, *size, *look], fade_last)
+                # A scale keeps a pool of a thread per core to the end of the export; for one frame it only waits.
+                once = [f"{f}:threads=1" if f.startswith("scale=") else f for f in once]
+                chain = [*once, *timing, *each]
+            else:
+                chain = [f"setpts={pts}+{on:.3f}/TB", *([f"trim=start={seg_start - SKIP_MARGIN:.3f}"] if skip else []),
+                         AS_709, *key, *fade_first, *size, *look, *fade_last]
             if shape:
                 x, y = shape[1], shape[2]
             elif keyed & {"x", "y"}:
@@ -400,14 +439,29 @@ def _dyn_file(project: dict, project_dir: Path, item: dict, speed: float) -> str
     return job["file"] if job and (project_dir / job["file"]).is_file() else None
 
 
+def _burn_captions(ass_rel: str, fps: float) -> str:
+    """The ass filter on frames from the frame clock. It reads a frame's millisecond as (long long)(pts * tb * 1000), and
+    on the 1/fps clock that product falls a hair short on some whole milliseconds (frame 111 at 30 fps reads 3699): a
+    caption ending at 3.70 s stayed a frame longer. A clock of half the frames' smallest millisecond step, one tick late,
+    reads every frame's floor exactly (checked to 10 hours at 24 to 60 fps); settb then rounds back to the frame clock."""
+    rate = Fraction(frame_rate(fps))
+    tick = 2000 * (Fraction(1000) / rate).denominator
+    return f"settb=1/{tick},setpts=PTS+1,ass=filename={ass_rel},settb={1 / rate}"
+
+
 def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict, ass_rel: str | None = None,
-                luts: list[tuple[float, float, str]] | None = None, shot_luts: dict[int, str] | None = None) -> dict:
+                luts: list[tuple[float, float, str]] | None = None, shot_luts: dict[int, str] | None = None,
+                window: tuple[int, int] | None = None) -> dict:
     """Build ffmpeg inputs and the filtergraph text for already prepared clips.
 
     luts holds (start, end, cube file) per adjustment layer; each grades the picture with its upper
     tracks during its span, before captions are burnt in (after, when the project's gradeCaptions is on).
     shot_luts maps a clip index to the cube file of its shot's own grade, applied to that clip's source
-    before it is fitted to the frame, so letterbox bars stay black."""
+    before it is fitted to the frame, so letterbox bars stay black.
+
+    window (first, end) plans only those output frames, picture only, for one segment of a segmented export
+    (segments.py): both ends fall where a run of clips joined by transitions starts (or the timeline ends), so the
+    segment's clips are planned as in the whole graph and its frames come out the same."""
     total = total_duration(clips)
     w, h, fps = int(project["settings"]["width"]), int(project["settings"]["height"]), float(project["settings"]["fps"])
     inputs: list[list[str]] = []
@@ -415,8 +469,15 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     video_index: dict[int, int] = {}
     frames, rate = clip_frames(clips, total, fps), frames_per_second(fps)
     all_media = project.get("media") or {}
+    # Runs of clips joined by transitions become xfade chains; runs are then concatenated.
+    runs = clip_runs(clips)
+    if window:
+        runs = [run for run in runs if window[0] <= frames[run[0]][0] < window[1]]
+    shown = {i for run in runs for i in run}
 
     for i, clip in enumerate(clips):
+        if i not in shown:
+            continue
         length = clip["length"]
         speed = float(clip.get("speed") or 1.0)
         disabled = bool(clip["shot"].get("disabled"))
@@ -426,7 +487,8 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             # A disabled shot keeps its place on the timeline as black and silence.
             inputs.append(["-f", "lavfi", "-t", f"{length:.3f}", "-i", f"color=c=black:s={w}x{h}:r={frame_rate(fps)}"])
         elif clip["source"] == "video":
-            inputs.append(["-ss", f"{clip['in']:.3f}", "-t", f"{length * speed:.3f}", "-i", clip["take"]["file"]])
+            inputs.append([*DECODE_THREADS, "-ss", f"{clip['in']:.3f}", "-t", f"{length * speed:.3f}",
+                           "-i", clip["take"]["file"]])
         elif clip["source"] == "image":
             inputs.append(["-loop", "1", "-framerate", frame_rate(fps), "-t", f"{length:.3f}", "-i", clip["take"]["file"]])
         else:
@@ -474,13 +536,6 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         if tf and masks:
             graph.append(f"[{main}]{tf}[v{i}]")
 
-    # Runs of clips joined by transitions become xfade chains; runs are then concatenated.
-    runs: list[list[int]] = [[0]]
-    for i in range(1, len(clips)):
-        if clips[i - 1]["transition"]["type"] == "cut":
-            runs.append([i])
-        else:
-            runs[-1].append(i)
     run_labels: list[str] = []
     for r, run in enumerate(runs):
         label = f"v{run[0]}"
@@ -498,23 +553,31 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     else:
         graph.append("".join(f"[{lb}]" for lb in run_labels) + f"concat=n={len(run_labels)}:v=1:a=0[vjoin]")
         joined = "vjoin"
+    # The frames on the timeline's clock, frame N at exactly N / fps (a segment counts from its first frame), so
+    # overlays, captions, grades and fades meet them there. concat hands on microseconds and sums its runs' rounded
+    # lengths: a frame on a tenth of a second could read a millisecond early, and libass showed a caption ending
+    # there a frame too long, and one starting there a frame late.
+    graph.append(f"[{joined}]settb={1 / Fraction(frame_rate(fps))},setpts=N+{window[0] if window else 0}[vclock]")
+    joined = "vclock"
     tracks = project.get("tracks") or {}
     if tracks.get("videoHidden"):
         graph.append(f"[{joined}]drawbox=c=black:t=fill[vhide]")
         joined = "vhide"
-    joined, pip_sounds = _plan_overlays(project, project_dir, joined, total, opts, inputs, graph)
+    joined, pip_sounds = _plan_overlays(project, project_dir, joined, total, opts, inputs, graph, window=window)
     graded_caps = bool(ass_rel and project["settings"].get("gradeCaptions"))
     if graded_caps:
-        graph.append(f"[{joined}]ass=filename={ass_rel}[caps]")
+        graph.append(f"[{joined}]{_burn_captions(ass_rel, fps)}[caps]")
         joined = "caps"
     for i, (start, end, rel) in enumerate(luts or []):
         on, off = frame_bounds(start, end, fps)
+        if window and not (frame_at(start, fps) < window[1] and window[0] < frame_at(end, fps)):
+            continue
         graph.append(f"[{joined}]lut3d=file={rel}:interp=tetrahedral:enable='gte(t,{on:.3f})*lt(t,{off:.3f})'[adj{i}]")
         joined = f"adj{i}"
 
     post: list[str] = []
     if ass_rel and not graded_caps:
-        post.append(f"ass=filename={ass_rel}")
+        post.append(_burn_captions(ass_rel, fps))
     if opts["fadeIn"] > 0:
         post.append(f"fade=t=in:st=0:d={opts['fadeIn']:.3f}")
     if opts["fadeOut"] > 0:
@@ -523,9 +586,12 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     if (out_w, out_h) != (w, h):
         post.append(f"{_fit_filter(opts['fit'], out_w, out_h)},setsar=1")
     post.append(TO_709)
+    if window:
+        post.append("setpts=PTS-STARTPTS")  # each segment file starts at 0; joined they line up again
     graph.append(f"[{joined}]{','.join(post)}[vout]")
 
-    _plan_audio(project, project_dir, clips, opts, total, inputs, graph, video_index, pip_sounds)
+    if not window:
+        _plan_audio(project, project_dir, clips, opts, total, inputs, graph, video_index, pip_sounds)
 
     return {
         "clips": clips,
@@ -535,9 +601,21 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         "width": out_w,
         "height": out_h,
         "fps": fps,
+        "window": window,
         "missing": sum(1 for c in clips if c["source"] == "missing"),
         "empty": sum(1 for c in clips if c["source"] == "empty"),
     }
+
+
+def clip_runs(clips: list[dict]) -> list[list[int]]:
+    """The clip indices of each run of clips joined by transitions; a cut starts the next run."""
+    runs: list[list[int]] = [[0]]
+    for i in range(1, len(clips)):
+        if clips[i - 1]["transition"]["type"] == "cut":
+            runs.append([i])
+        else:
+            runs[-1].append(i)
+    return runs
 
 
 def _clip_sounds(clip: dict) -> bool:
@@ -738,6 +816,18 @@ def export_filename(project: dict, ext: str = "mp4") -> str:
     return f"{stem}_{time.strftime('%Y%m%d-%H%M%S')}.{ext}"
 
 
+def video_codec_args(media: Media, project: dict, opts: dict, encoder: str) -> list[str]:
+    """The picture's encoder options: the quality's rate, BT.709 tags, and the keyframe spacing review videos ask for."""
+    args = [*media.encoder_args(encoder, opts["quality"], opts.get("maxrate") or 0), *TAGS_709]
+    if opts.get("keyint"):  # seconds between keyframes (review videos)
+        args += ["-g", str(max(1, round(float(project["settings"]["fps"]) * opts["keyint"])))]
+    return args
+
+
+def audio_bitrate(opts: dict) -> str:
+    return "160k" if opts["quality"] == "compact" else "192k"
+
+
 def render(
     media: Media,
     project: dict,
@@ -799,9 +889,11 @@ def render(
         lut_paths.append(cache / f"{stamp}-shot{i}.cube")
         lut_paths[-1].write_text(build_cube(grade), encoding="utf-8")
         shot_luts[i] = f"media/cache/{lut_paths[-1].name}"
+    ass_rel = f"media/cache/{ass_path.name}" if ass else None
     plan = (plan_audio_export(project, project_dir, clips, opts) if sound_only
-            else plan_export(project, project_dir, clips, opts, f"media/cache/{ass_path.name}" if ass else None, luts,
-                             shot_luts))
+            else plan_export(project, project_dir, clips, opts, ass_rel, luts, shot_luts))
+    from .segments import JoinFailed, plan_segments, render_segments  # segments imports this module
+    segs = None if sound_only else plan_segments(project, project_dir, clips, opts, ass_rel, luts, shot_luts)
     loud_path = cache / f"{stamp}.loudness.txt"
     report: dict | None = None  # loudnorm's first-pass report when the mix is normalised (EX-01)
 
@@ -812,12 +904,10 @@ def render(
         if sound_only:
             return args + ["-map", a_out, "-t", f"{plan['total']:.3f}", *AUDIO_CODECS[fmt], "-ar", "48000",
                            str(work_path)]
-        args += ["-map", "[vout]", "-map", a_out, "-t", f"{plan['total']:.3f}"]
-        args += [*media.encoder_args(encoder, opts["quality"], opts.get("maxrate") or 0), *TAGS_709]
-        if opts.get("keyint"):  # seconds between keyframes (review videos)
-            args += ["-g", str(max(1, round(float(project["settings"]["fps"]) * opts["keyint"])))]
-        abr = "160k" if opts["quality"] == "compact" else "192k"
-        args += ["-c:a", "aac", "-b:a", abr, "-ar", "48000", "-movflags", "+faststart", str(work_path)]
+        args += ["-map", "[vout]", "-map", a_out, "-t", f"{plan['total']:.3f}",
+                 *video_codec_args(media, project, opts, encoder)]
+        args += ["-c:a", "aac", "-b:a", audio_bitrate(opts), "-ar", "48000", "-movflags", "+faststart",
+                 str(work_path)]
         return args
 
     def args_for(encoder: str) -> list[str]:
@@ -827,27 +917,37 @@ def render(
     started = time.time()
     target = opts.get("loudness")
     progress = on_progress
+    joined = False
     try:
-        graph = plan["graph"]
-        if target is not None:
-            # Measuring takes the first 30% of the progress bar, the render the rest.
-            report = measure_loudness(media, plan if sound_only else plan_audio_export(project, project_dir, clips, opts),
-                                      project_dir, loud_path, target,
-                                      on_progress and (lambda f: on_progress(f * 0.3)), cancelled)
-            progress = on_progress and (lambda f: on_progress(0.3 + f * 0.7))
-        if report:
-            graph += f";\n[aout]{loudnorm_filter(target, report)},aresample=48000[aloud]"
-        # libx264's options, which a failed hardware encoder retries with, are no longer than a hardware one's.
-        input_args, graph = media.fit_inputs(plan["inputs"], graph, tail_for(encoder), project_dir)
-        graph_path.write_text(graph, encoding="utf-8")
-        try:
-            media.run_progress(args_for(encoder), plan["total"], progress, cancelled, cwd=project_dir)
-        except AppError as exc:
-            if exc.status == 499 or encoder == "libx264" or sound_only:
-                raise
-            log.warning("Export with %s failed (%s); retrying with libx264", encoder, exc.message)
-            encoder = "libx264"
-            media.run_progress(args_for(encoder), plan["total"], progress, cancelled, cwd=project_dir)
+        if segs:
+            try:
+                encoder, report = render_segments(media, project, project_dir, clips, opts, segs, encoder, work_path,
+                                                  on_progress, cancelled, ass)
+                joined = True
+            except JoinFailed as exc:
+                log.warning("Joining the segments failed (%s); exporting as one graph", exc)
+        if not joined:
+            graph = plan["graph"]
+            if target is not None:
+                # Measuring takes the first 30% of the progress bar, the render the rest.
+                report = measure_loudness(media, plan if sound_only else plan_audio_export(project, project_dir, clips,
+                                                                                          opts),
+                                          project_dir, loud_path, target,
+                                          on_progress and (lambda f: on_progress(f * 0.3)), cancelled)
+                progress = on_progress and (lambda f: on_progress(0.3 + f * 0.7))
+            if report:
+                graph += f";\n[aout]{loudnorm_filter(target, report)},aresample=48000[aloud]"
+            # libx264's options, which a failed hardware encoder retries with, are no longer than a hardware one's.
+            input_args, graph = media.fit_inputs(plan["inputs"], graph, tail_for(encoder), project_dir)
+            graph_path.write_text(graph, encoding="utf-8")
+            try:
+                media.run_progress(args_for(encoder), plan["total"], progress, cancelled, cwd=project_dir)
+            except AppError as exc:
+                if exc.status == 499 or encoder == "libx264" or sound_only:
+                    raise
+                log.warning("Export with %s failed (%s); retrying with libx264", encoder, exc.message)
+                encoder = "libx264"
+                media.run_progress(args_for(encoder), plan["total"], progress, cancelled, cwd=project_dir)
         shutil.move(work_path, part)  # out_dir may be on another drive, where a plain rename fails
         part.replace(out_path)
     finally:
