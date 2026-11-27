@@ -587,6 +587,8 @@ a.exp-doc:hover { border-color: var(--border-strong); background: var(--surface-
 .rv-detail { display: flex; flex-direction: column; gap: 12px; min-width: 0; overflow-y: auto; padding-right: 4px; }
 .rv-detail-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .rv-frame-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.rv-frame-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.rv-frame-acts:empty { display: none; }
 .rv-frame { position: relative; width: 100%; max-height: 38vh; overflow: hidden; border-radius: var(--r-input); background: #000; }
 .rv-frame > video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .rv-ink { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }

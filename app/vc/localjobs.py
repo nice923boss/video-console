@@ -507,6 +507,8 @@ class LocalJobs:
         if srt and (overrides.get("format") or "mp4") != "mp4":
             raise AppError("SRT 字幕檔只能和影片一起輸出")
         opts = export_options(project, self._settings.section("export"), overrides)
+        if review:
+            opts["keyint"] = 1.0  # a keyframe every second, so the review page seeks fast when dragged
         if not build_sequence(project):
             raise AppError("序列裡沒有任何鏡頭可以輸出（請確認鏡頭有勾選「放入序列」）")
         what = "審稿包" if review else "音訊" if opts["format"] in AUDIO_CODECS else "影片"

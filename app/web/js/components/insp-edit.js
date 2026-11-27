@@ -15,11 +15,12 @@ import { ColorSwatches } from "./insp-content.js";
 import { toast } from "./toast.js";
 import { keyHint, keyLabel } from "../lib/keymap.js";
 import { reverseClip, detachAudio, isReverse, stabilizeClip, isStabilized, addKeyframe } from "./tl-commands.js";
-import { KeyList, useClipTime } from "./key-panel.js";
-import { valueAt, withKey } from "../lib/keyframes.js";
+import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
+import { valueAt } from "../lib/keyframes.js";
 import { GradeEditor } from "./grade-panel.js";
 import { MaskEditor } from "./mask-panel.js";
 import { TransformSections } from "./transform-panel.js";
+import { ChromaField } from "./edit-props.js";
 import { StabilizeSettings } from "./stab-panel.js";
 import { ReviewSection } from "./review-list.js";
 import { fullGrade, isNeutral } from "../lib/grade.js";
@@ -205,10 +206,10 @@ function SourceKeys({ project, shot, clip, clips }) {
     return ops(list, { label });
   };
   return html`${gain.length > 0 && base > 0 && html`<${Field} label="播放頭位置的音量"
-      hint="原聲有關鍵幀：這裡改寫播放頭位置的關鍵幀；上面的原聲音量整段一起放大縮小">
+      hint="原聲有關鍵幀：這裡改寫播放頭位置的關鍵幀（開啟整組平移則全部一起移動）；上面的原聲音量整段一起放大縮小">
       <${Slider} value=${base * valueAt(item, "volume", local, 1)} min=${0} max=${Math.min(4, base * 4)} step=${0.05}
         format=${(v) => `${Math.round(v * 100)}%`}
-        onCommit=${(v) => update({ keyframes: withKey(item, local, { volume: round(v / base, 4) }) }, "原聲關鍵幀音量")} />
+        onCommit=${(v) => update(keyedPatch(item, local, { volume: round(v / base, 4) }), "原聲關鍵幀音量")} />
     <//>`}
     <${KeyList} item=${item} start=${clip.start} length=${clip.length} local=${local} update=${update}
       onAdd=${() => addKeyframe(project, clips, { type: "shot", id: shot.id })} />`;
@@ -323,6 +324,24 @@ function MaskSection({ shot }) {
   <//>`;
 }
 
+// Green-screen key of the shot's own picture: the keyed parts show a backdrop picture (or black), which stays
+// put while the transform moves the keyed person (export.py lays the keyed clip over it).
+function KeySection({ project, shot }) {
+  const on = !!(shot.chroma && shot.chroma.on);
+  const pictures = Object.values(project.media || {}).filter((m) => m.kind === "image");
+  const options = [{ value: null, label: "黑色" }, ...pictures.map((m) => ({ value: m.id, label: m.name || m.file }))];
+  const update = (patch, label) => updateShot(shot.id, patch, { label: `鏡頭${label}` });
+  return html`<${Section} title="綠幕去背" icon="layers" collapsible defaultOpen=${false} id="shot-key"
+      actions=${on && html`<${Badge} tone="blue">已開啟<//>`}>
+    <${ChromaField} chroma=${shot.chroma} update=${update} />
+    ${on && html`<${Field} label="背景圖片" hint="去掉的部分露出這張圖（填滿畫面）；從媒體庫匯入圖片後可以選">
+      <${Select} value=${shot.backdrop || null} options=${options} title="去背後的背景"
+        onChange=${(backdrop) => update({ backdrop }, "去背背景")} />
+    <//>`}
+    <${Hint}>位置、縮放等變換只移動去背後的人物，背景圖片固定不動。<//>
+  <//>`;
+}
+
 // Speech-to-subtitle turns the clip's own sound into captions at the clip's place on the timeline.
 function TranscribeSection({ project, shot, vid, clip, busy }) {
   if (!vid || !vid.hasAudio) return null;
@@ -355,6 +374,7 @@ export function EditTab({ project, shot, busy = NONE }) {
     <${SourceInfo} vid=${vid} img=${img} />
     ${(vid || img) && html`<${TransformSections} shot=${shot} project=${project} />`}
     ${(vid || img) && html`<${GradeSection} shot=${shot} clip=${clip} />`}
+    ${(vid || img) && html`<${KeySection} project=${project} shot=${shot} />`}
     ${vid
       ? html`<${StabilizeSection} shot=${shot} vid=${vid} busy=${busy} />
         <${SpeedSection} project=${project} shot=${shot} vid=${vid} clips=${clips} busy=${busy} />

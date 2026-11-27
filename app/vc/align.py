@@ -175,11 +175,11 @@ def mix_wav(media: Media, project: dict, project_dir: Path, out: Path,
     clips = prepare_clips(project, project_dir)
     plan = plan_audio_export(project, project_dir, clips, export_options(project, {}, {"fadeIn": 0, "fadeOut": 0}))
     graph = out.with_suffix(".graph.txt")
-    graph.write_text(plan["graph"], encoding="utf-8")
-    args = [arg for inp in plan["inputs"] for arg in inp]
-    args += media.filter_script_args(graph.relative_to(project_dir))
-    args += ["-map", "[aout]", "-t", f"{plan['total']:.3f}", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out)]
-    media.run_progress(args, plan["total"], on_progress, cancelled, cwd=project_dir)
+    tail = [*media.filter_script_args(graph.relative_to(project_dir)),
+            "-map", "[aout]", "-t", f"{plan['total']:.3f}", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out)]
+    args, text = media.fit_inputs(plan["inputs"], plan["graph"], tail, project_dir)
+    graph.write_text(text, encoding="utf-8")
+    media.run_progress(args + tail, plan["total"], on_progress, cancelled, cwd=project_dir)
     return float(plan["total"])
 
 

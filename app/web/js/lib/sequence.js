@@ -183,6 +183,19 @@ export function fitFrame(media, frameW, frameH) {
   return { x: round4((1 - w) / 2), y: round4((1 - h) / 2), w: round4(w) };
 }
 
+// The clip as it plays (mirror of framed in app/vc/overlayshape.py): with its full-frame switch on, the whole
+// picture fitted to the frame, centered, uncropped and upright; its own place, size, crop, rotation and their
+// keyframes stay stored for when the switch is off. Opacity, volume and keying stay.
+const PLACE_KEYS = ["x", "y", "w", "rotation"];
+export function framed(item, media, frameW, frameH) {
+  if (!item || !item.full || !media) return item;
+  const { crop, keyframes, ...rest } = item;
+  const kfs = (keyframes || [])
+    .map((k) => Object.fromEntries(Object.entries(k).filter(([f]) => !PLACE_KEYS.includes(f))))
+    .filter((k) => Object.keys(k).some((f) => f !== "t"));
+  return { ...rest, ...fitFrame(media, frameW, frameH), rotation: 0, ...(kfs.length ? { keyframes: kfs } : {}) };
+}
+
 // The smallest size that covers the whole frame, centered; what lies past the frame is cropped.
 export function fillFrame(media, frameW, frameH) {
   const full = overlayHeight({ w: 1 }, media, frameW, frameH);

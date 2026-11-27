@@ -112,19 +112,22 @@ def _even(v: float) -> int:
     return int(round(v / 2)) * 2
 
 
-def transform_filter(t: dict | None, w: int, h: int) -> str:
+def transform_filter(t: dict | None, w: int, h: int, alpha: bool = False) -> str:
     """ffmpeg filters for a cleaned transform on a w x h yuv420p (tv range) clip; "" when it changes nothing.
 
     The picture is trimmed to black, shrunk with lanczos first when it ends up smaller (perspective samples
     bilinearly), padded with black so its edges blend into black, placed with perspective and cut back to the
-    frame. Opacity scales luma and chroma toward black, the same as the preview's element over black."""
+    frame. Opacity scales luma and chroma toward black, the same as the preview's element over black.
+    With alpha (a keyed yuva420p clip over its backdrop) the uncovered parts turn transparent instead and
+    opacity scales the alpha, so the backdrop shows through."""
     if is_identity(t):
         return ""
+    fill = "black@0" if alpha else "black"
     parts = []
     c = t["crop"]
     left, right, top, bottom = (_even(c["l"] * w), _even(c["r"] * w), _even(c["t"] * h), _even(c["b"] * h))
     if left or right or top or bottom:
-        parts.append(f"crop={w - left - right}:{h - top - bottom}:{left}:{top},pad={w}:{h}:{left}:{top}:color=black")
+        parts.append(f"crop={w - left - right}:{h - top - bottom}:{left}:{top},pad={w}:{h}:{left}:{top}:color={fill}")
     quad = frame_quad(t, w, h)
     base = [(0, 0), (w, 0), (w, h), (0, h)]
     if any(abs(q[0] - b[0]) > 1e-3 or abs(q[1] - b[1]) > 1e-3 for q, b in zip(quad, base)):
@@ -133,7 +136,7 @@ def transform_filter(t: dict | None, w: int, h: int) -> str:
         sw, sh = max(2, _even(w * fx)), max(2, _even(h * fy))
         if (sw, sh) != (w, h):
             parts.append(f"scale={sw}:{sh}:flags=lanczos")
-        parts.append(f"pad={w + 2 * PAD}:{h + 2 * PAD}:{PAD}:{PAD}:color=black")
+        parts.append(f"pad={w + 2 * PAD}:{h + 2 * PAD}:{PAD}:{PAD}:color={fill}")
         m = homography(quad)
         # perspective's corners are the padded input's tl, tr, bl, br, in units of the (shrunk) picture
         lo_u, hi_u, lo_v, hi_v = -PAD / sw, (w + PAD) / sw, -PAD / sh, (h + PAD) / sh
@@ -141,6 +144,8 @@ def transform_filter(t: dict | None, w: int, h: int) -> str:
         coords = ":".join(f"x{i}={x + PAD:.3f}:y{i}={y + PAD:.3f}" for i, (x, y) in enumerate(pts))
         parts.append(f"perspective={coords}:sense=destination,crop={w}:{h}:{PAD}:{PAD}")
     o = t["opacity"]
-    if o < 1:
+    if o < 1 and alpha:
+        parts.append(f"lutyuv=a=val*{o:.4f}")
+    elif o < 1:
         parts.append(f"lutyuv=y=16+(val-16)*{o:.4f}:u=128+(val-128)*{o:.4f}:v=128+(val-128)*{o:.4f}")
     return ",".join(parts)

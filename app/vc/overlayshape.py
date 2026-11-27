@@ -6,6 +6,25 @@ import math
 
 from .keyframes import expr, points
 
+PLACE_KEYS = ("x", "y", "w", "rotation")  # what the full-frame switch takes over
+
+
+def framed(item: dict, media: dict | None, w: float, h: float) -> dict:
+    """The clip as it plays: with its full-frame switch on ("full"), the whole picture fitted to the frame,
+    centered, uncropped and upright, whatever place, size, crop, rotation and keyframes of those it keeps for
+    when the switch is off; opacity, volume and keying stay. Mirrors framed in app/web/js/lib/sequence.js."""
+    if not item.get("full") or not media:
+        return item
+    aspect = media["width"] / media["height"] if media.get("width") and media.get("height") else 16 / 9
+    full = w / h / aspect
+    fw = 1 / full if full > 1 else 1.0
+    fh = min(1.0, full)
+    kfs = [k for k in ({f: v for f, v in kf.items() if f not in PLACE_KEYS} for kf in item.get("keyframes") or [])
+           if set(k) - {"t"}]
+    out = {k: v for k, v in item.items() if k not in ("crop", "keyframes")}
+    return {**out, "x": round((1 - fw) / 2, 4), "y": round((1 - fh) / 2, 4), "w": round(fw, 4), "rotation": 0.0,
+            **({"keyframes": kfs} if kfs else {})}
+
 
 def shape_overlay(item: dict, media: dict, w: int, h: int, start: float,
                   keyed: set[str]) -> tuple[list[str], str | int, str | int] | None:

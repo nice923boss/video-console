@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from . import spill
 from .util import AppError
 
 log = logging.getLogger("vc.media")
@@ -42,8 +43,9 @@ QUALITY = {
 
 # Colour (QA-04): browsers and players read HD video without colour tags as BT.709, so the app does too.
 # Video read into pictures is taken as BT.709 (AS_709); pictures written as video use the BT.709 matrix
-# (TO_709) and are tagged to match (TAGS_709).
-AS_709 = "setparams=colorspace=bt709"
+# (TO_709) and are tagged to match (TAGS_709). AS_709's scale converts to RGB itself when a later filter needs it
+# (lut3d): ffmpeg may put its own conversion before setparams, reading an untagged file as BT.601.
+AS_709 = "setparams=colorspace=bt709,scale=in_color_matrix=bt709"
 TO_709 = "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"
 TAGS_709 = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
 
@@ -273,6 +275,7 @@ def parse_probe(text: str) -> dict:
                 ma = re.search(r"Audio: ([^\s,]+)", line)
                 info["acodec"] = ma.group(1) if ma else None
     rot = re.search(r"rotation of (-?\d+(?:\.\d+)?) degrees", text)
+    info["rotation"] = float(rot.group(1)) if rot else 0.0  # what ffmpeg prints; spill.py turns movie= by it
     if rot and info["width"] and abs(round(float(rot.group(1)))) % 180 == 90:
         info["width"], info["height"] = info["height"], info["width"]
     # A WebM tags a VP8/VP9 stream that carries a transparency plane with alpha_mode 1.
@@ -352,14 +355,21 @@ class Media:
         """
         cmd = self._base(loglevel) + ["-progress", "pipe:1", "-nostats"] + args
         log.debug("ffmpeg %s", " ".join(args))
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            cwd=cwd,
-            creationflags=NO_WINDOW,
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                cwd=cwd,
+                creationflags=NO_WINDOW,
+            )
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != 206:
+                raise
+            log.error("ffmpeg command line too long: %d chars, %d inputs",
+                      len(subprocess.list2cmdline(cmd)), args.count("-i"))
+            raise AppError("ffmpeg 指令超過 Windows 的長度上限：時間軸上的片段太多，請合併或刪減部分片段後再試", 500) from None
         tail: collections.deque[str] = collections.deque(maxlen=40)
 
         def pump_stderr() -> None:
@@ -442,6 +452,13 @@ class Media:
     def major_version(self) -> int:
         m = re.match(r"n?(\d+)", self.version())
         return int(m.group(1)) if m else 0
+
+    def fit_inputs(self, inputs: list[list[str]], graph: str, tail: list[str], cwd: Path,
+                   loglevel: str = "error") -> tuple[list[str], str]:
+        """The input args and filtergraph for run_progress(inputs + tail): when so many inputs would make the
+        command line too long for Windows, some move into the graph (spill.py). cwd is where ffmpeg runs."""
+        fixed = self._base(loglevel) + ["-progress", "pipe:1", "-nostats"] + tail
+        return spill.fit_inputs(inputs, graph, fixed, lambda f: self.probe(Path(cwd) / f).get("rotation", 0.0))
 
     def filter_script_args(self, script: Path) -> list[str]:
         """Pass a long filtergraph through a file (keeps the command line short)."""

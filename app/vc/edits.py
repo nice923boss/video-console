@@ -399,8 +399,8 @@ def detach(project: dict, shot_id: str | None = None, t: float | None = None) ->
             **({"speed": clip["speed"]} if clip["speed"] != 1 else {}),
             **({"volume": shot["volume"]} if level != 1 else {}),
             **({"keyframes": [{**k, "volume": round(min(VOLUME_MAX, k["volume"] * level), 4)} for k in keys]} if keys else {}),
-            # The fades, channel, 降噪 and 去回音 set on the shot's sound go with it (the shot keeps its own for 還原).
-            **{k: shot[k] for k in ("fadeIn", "fadeOut", "channel", "denoise", "dereverb") if shot.get(k)}}
+            # The fades, channel, 降噪, 去回音 and 壓縮器 set on the shot's sound go with it (the shot keeps its own for 還原).
+            **{k: shot[k] for k in ("fadeIn", "fadeOut", "channel", "denoise", "dereverb", "comp") if shot.get(k)}}
     return {"ops": [{"op": "audio.add", "item": item}, {"op": "shot.update", "id": shot["id"], "patch": {"audioDetached": True}}],
             "label": "分離原聲", "id": aid}
 

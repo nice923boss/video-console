@@ -75,6 +75,30 @@ function drawMedia(ctx, media, clip, origin, k, stop, box = boxOf(media, origin,
 
 const byZ = (a, b) => (Number(a.style.zIndex) || 0) - (Number(b.style.zIndex) || 0);
 
+// A keyed shot's backdrop is the slot's CSS background (placeSlot in components/player-engine.js), covering the
+// slot; the picture is loaded once here, so the first grab after it changes can miss it.
+const backdrops = new Map();
+function drawBackdrop(ctx, slot, clip) {
+  const m = /url\("?([^")]+)"?\)/.exec(slot.style.backgroundImage || "");
+  if (!m) return;
+  let img = backdrops.get(m[1]);
+  if (!img) {
+    img = new Image();
+    img.src = m[1];
+    backdrops.set(m[1], img);
+  }
+  if (!img.complete || !img.naturalWidth) return;
+  const s = Math.max(clip.w / img.naturalWidth, clip.h / img.naturalHeight);
+  const [w, h] = [img.naturalWidth * s, img.naturalHeight * s];
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(clip.x, clip.y, clip.w, clip.h);
+  ctx.clip();
+  ctx.globalAlpha = opacityOf(slot, slot.parentElement);
+  ctx.drawImage(img, clip.x + (clip.w - w) / 2, clip.y + (clip.h - h) / 2, w, h);
+  ctx.restore();
+}
+
 function compose(graded, canvas, width) {
   const origin = graded.getBoundingClientRect();
   if (!origin.width || !origin.height) return false;
@@ -90,6 +114,7 @@ function compose(graded, canvas, width) {
   for (const slot of [...graded.querySelectorAll(".pl-layers > .pl-slot")].sort(byZ)) {
     if (!shown(slot)) continue;
     const clip = inset(slot, boxOf(slot, origin, k));
+    drawBackdrop(ctx, slot, clip);
     for (const media of slot.querySelectorAll(":scope > .pl-video, :scope > .pl-img")) drawMedia(ctx, media, clip, origin, k, graded);
   }
   const flash = graded.querySelector(".pl-flash");

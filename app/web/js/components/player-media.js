@@ -78,6 +78,9 @@ export function audioEntry() {
 // Every element of an audio clip's track entry.
 export const trackElements = (tr) => (tr.fx ? [tr.audio, tr.fx.audio] : [tr.audio]);
 
+// The 壓縮器 part of an element's voice (audio-mix.js routeGain): the clip's settings when it is on, else null.
+export const compVoice = (item) => (item && item.comp && item.comp.on ? { channels: 0, comp: item.comp, id: item.id } : null);
+
 // What the clip plays at `target` (source seconds): {el, holder (its pendingSeek), at (el's time), voice (for
 // routeGain)}. Its stems when `entry` (voiceStems[id], falsy without a running mix) was made for its settings as
 // they are now and holds target; otherwise its source file as it is. The element not chosen is paused; the one
@@ -89,7 +92,7 @@ export function voicePlay(tr, target, pid, entry, mode) {
   if (!use) {
     if (tr.fx && !tr.fx.audio.paused) tr.fx.audio.pause();
     if (!tr.audio.hasAttribute("src")) tr.audio.src = tr.src;
-    return { el: tr.audio, holder: tr, at: target, voice: null };
+    return { el: tr.audio, holder: tr, at: target, voice: compVoice(tr.item) };
   }
   if (!tr.fx) tr.fx = audioEntry();
   const src = fileUrl(pid, s.file);
@@ -98,6 +101,6 @@ export function voicePlay(tr, target, pid, entry, mode) {
     tr.fx.audio.src = src;
   }
   if (!tr.audio.paused) tr.audio.pause();
-  const voice = { channels: stemChannels(tr.item), plan: mixPlan(tr.item), monitor: mode };
+  const voice = { ...compVoice(tr.item), channels: stemChannels(tr.item), plan: mixPlan(tr.item), monitor: mode };
   return { el: tr.fx.audio, holder: tr.fx, at: target - s.from, voice };
 }

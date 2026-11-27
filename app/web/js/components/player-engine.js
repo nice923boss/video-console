@@ -5,7 +5,7 @@
 // first; the track switches (hide, mute) apply here as they do in the export. Driven by the playback
 // clock; nothing here re-renders through Preact. The sound is played by player-audio.js.
 import { fileUrl } from "../lib/format.js";
-import { clipIndexAt, clipSpeed, SOURCE_TRACK, sequenceDuration, overlayHeight, overlayShape } from "../lib/sequence.js";
+import { clipIndexAt, clipSpeed, SOURCE_TRACK, sequenceDuration, overlayHeight, overlayShape, framed } from "../lib/sequence.js";
 import { valueAt, steppedAt } from "../lib/keyframes.js";
 import { resolveStyle, anchorOf, textCss, blockCss, zonePad, stackDragged, shownCaptions } from "../lib/caption-style.js";
 import { litCount, fillCaption, ktvMarks, fillKtv, paintKtv } from "../lib/karaoke.js";
@@ -15,7 +15,7 @@ import { chromaMarkup } from "../lib/chroma.js";
 import { maskMarkup } from "../lib/masks.js";
 import { placeCss } from "../lib/transform.js";
 import { routeGain, unroute, setMonitor } from "../lib/audio-mix.js";
-import { release, seekTo, follow, DRIFT_PAUSED, CUE_LEAD, MAX_RATE } from "./player-media.js";
+import { release, seekTo, follow, compVoice, DRIFT_PAUSED, CUE_LEAD, MAX_RATE } from "./player-media.js";
 import { createSound, clipSounds, clipFades, clipLevel } from "./player-audio.js";
 
 // Seconds a video clip plays hidden before its cut while the sample clock leads (PB-01), so its first frame is
@@ -222,7 +222,7 @@ export function createEngine(host, hooks = {}) {
     if (slot.mode !== "video") return;
     // Before the clip's start (preroll) the file plays up to its in point.
     const target = Math.max(0, clip.in + Math.min(t - clip.start, Math.max(0, clip.length - EDGE)) * clip.speed);
-    setGain(video, gain, SOURCE_TRACK);
+    setGain(video, gain, SOURCE_TRACK, compVoice(clip.shot)); // the shot's 壓縮器 on its own sound
     if (playing) {
       follow(video, slot, target, Math.min(MAX_RATE, last.rate * clip.speed), lead);
     } else {
@@ -306,6 +306,9 @@ export function createEngine(host, hooks = {}) {
     if (shot && (slot.mode === "video" || slot.mode === "image")) {
       const grade = gradeDraft && gradeDraft.id === shot.id ? gradeDraft.grade : shot.grade;
       if (grade && !isNeutral(grade)) css = `url(#${filterFor(`shot:${shot.id}`, grade)})`;
+      // Green-screen key after the grade, as export.py keys the graded, fitted clip; placeSlot paints the backdrop.
+      const chroma = shot.chroma && shot.chroma.on ? shot.chroma : null;
+      if (chroma) css += ` url(#${cachedFilter(`key:${shot.id}`, JSON.stringify(chroma), (fid) => chromaMarkup(fid, chroma))})`;
     }
     if (css === slot.filterCss) return;
     slot.filterCss = css;
@@ -336,7 +339,11 @@ export function createEngine(host, hooks = {}) {
     const t = !shown ? null : transformDraft && transformDraft.id === shot.id ? transformDraft.transform : shot.transform;
     const { width, height } = project.settings;
     const css = t ? placeCss(t, Number(width), Number(height), slot.root.clientWidth, slot.root.clientHeight) : null;
-    const key = css ? `${css.transform}|${css.clipPath}|${css.opacity}` : "";
+    // A keyed shot shows its backdrop picture (covering the frame, as export.py fits it) where the key opens it.
+    const keyed = shown && shot.chroma && shot.chroma.on;
+    const back = keyed ? (project.media || {})[shot.backdrop || ""] : null;
+    const backCss = back && back.kind === "image" ? `#000 url("${fileUrl(project.id, back.file)}") center / cover no-repeat` : keyed ? "#000" : "";
+    const key = `${css ? `${css.transform}|${css.clipPath}|${css.opacity}` : ""}|${backCss}`;
     if (key === slot.placeKey) return;
     slot.placeKey = key;
     for (const node of [slot.video, slot.img, slot.masks]) {
@@ -347,7 +354,7 @@ export function createEngine(host, hooks = {}) {
       node.style.clipPath = css ? css.clipPath : "";
       node.style.opacity = css ? css.opacity : "";
     }
-    slot.root.style.background = css ? "#000" : "";
+    slot.root.style.background = backCss || (css ? "#000" : "");
   }
 
   // Slate text as export.py burns it: off the frames a transition shares with a neighbour, fading at both ends.
@@ -541,7 +548,7 @@ export function createEngine(host, hooks = {}) {
           if (!video) node.src = src; // a video loads near the playhead, see drawOverlays
           pips.set(item.id, ov);
         }
-        ov.item = item;
+        ov.item = framed(item, media, project.settings.width, project.settings.height);
         ov.layer = layer;
         ov.media = media;
         ov.node.style.zIndex = String(z + 1);
@@ -596,6 +603,7 @@ export function createEngine(host, hooks = {}) {
     const ids = new Set((project.adjustments || []).map((a) => a.id));
     for (const s of project.shots || []) if (s.grade) ids.add(`shot:${s.id}`);
     for (const o of project.overlays || []) if (o.chroma && o.chroma.on) ids.add(`chroma:${o.id}`);
+    for (const s of project.shots || []) if (s.chroma && s.chroma.on) ids.add(`key:${s.id}`);
     for (const [id, f] of filters) {
       if (ids.has(id)) continue;
       f.node.remove();

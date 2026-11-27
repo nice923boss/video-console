@@ -22,6 +22,7 @@ from typing import Callable
 from .captions import ass_text as _ass_text
 from .captions import ass_time as _ass_time
 from .captions import caption_ass, shown_captions
+from .compressor import dyn_job, ensure_dyn
 from .cover import covered_spans, uncovered
 from .duck import duck_db, duck_expr, voice_spans
 from .exportdir import file_ref, unique_path
@@ -31,7 +32,7 @@ from .keyframes import expr as kf_expr
 from .keyframes import source_keys, take_keys
 from .keyframes import steps as kf_steps
 from .media import ALPHA_DECODERS, AS_709, TAGS_709, TO_709, Media
-from .overlayshape import shape_overlay
+from .overlayshape import framed, shape_overlay
 from .sequence import VOICE_TRACK, XFADE_NAMES, audio_media, audio_track, build_sequence, overlay_speed, total_duration
 from .transform import transform_filter
 from .util import AppError, safe_filename
@@ -199,13 +200,19 @@ def build_ass(project: dict, clips: list[dict], opts: dict, width: int, height: 
 
 
 # ---------------------------------------------------------------- filtergraph
-def _fit_filter(fit: str, w: int, h: int) -> str:
+def _fit_filter(fit: str, w: int, h: int, pad: str = "black") -> str:
     if fit == "cover":
         return f"scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}"
     return (
         f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
-        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color={pad}"
     )
+
+
+def chroma_key(chroma: dict) -> str:
+    """ffmpeg chromakey for a cleaned colour key (opfields._chroma), shared by shots and upper-track clips."""
+    return (f"chromakey=color=0x{chroma['color'][1:]}:similarity={float(chroma['similarity']):.3f}:"
+            f"blend={float(chroma['blend']):.3f}")
 
 
 MASK_BLUR = 0.04  # blur radius at strength 1, a fraction of the frame height (web/js/lib/masks.js matches)
@@ -274,6 +281,7 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             if (item.get("layer") != layer.get("id") or not media or media.get("kind") not in ("image", "video")
                     or item.get("disabled")):
                 continue
+            item = framed(item, media, w, h)
             start = float(item.get("start") or 0.0)
             length = min(float(item.get("length") or 0.0), total - start)
             keyed = {k for kf in item.get("keyframes") or [] for k in kf if k != "t"}
@@ -306,8 +314,7 @@ def _plan_overlays(project: dict, project_dir: Path, label: str, total: float, o
             chroma = item.get("chroma") or {}
             if chroma.get("on"):
                 # Keyed on the clip's own pixels, before scaling blurs the edge of the colour.
-                chain.append(f"chromakey=color=0x{chroma['color'][1:]}:similarity={float(chroma['similarity']):.3f}:"
-                             f"blend={float(chroma['blend']):.3f}")
+                chain.append(chroma_key(chroma))
             if "opacity" in keyed:
                 # geq keeps the frame size it first saw, so it runs before a changing scale.
                 op = kf_expr(item, "opacity", "T", start, 1.0)
@@ -382,6 +389,17 @@ def _atempo(speed: float) -> str:
     return f"atempo={speed:.4f},"
 
 
+def _dyn_job(project: dict, project_dir: Path, item: dict, speed: float) -> dict | None:
+    """The 壓縮器 render of a clip's sound (compressor.py): its span at its speed, then the compressor."""
+    return dyn_job(project, project_dir, item, speed, _atempo(speed))
+
+
+def _dyn_file(project: dict, project_dir: Path, item: dict, speed: float) -> str | None:
+    """That render's file once render() has made it, else None (the clip then plays without the compressor)."""
+    job = _dyn_job(project, project_dir, item, speed)
+    return job["file"] if job and (project_dir / job["file"]).is_file() else None
+
+
 def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict, ass_rel: str | None = None,
                 luts: list[tuple[float, float, str]] | None = None, shot_luts: dict[int, str] | None = None) -> dict:
     """Build ffmpeg inputs and the filtergraph text for already prepared clips.
@@ -396,6 +414,7 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
     graph: list[str] = []
     video_index: dict[int, int] = {}
     frames, rate = clip_frames(clips, total, fps), frames_per_second(fps)
+    all_media = project.get("media") or {}
 
     for i, clip in enumerate(clips):
         length = clip["length"]
@@ -424,13 +443,33 @@ def plan_export(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         black = "drawbox=c=black:t=fill," if hidden and clip["source"] == "video" else ""
         # Opacity, move, scale, rotate, trim and distort (ED-30) work on the fitted, masked frame, so the boxes move
         # with the picture, as the preview's matrix3d carries them.
-        tf = transform_filter(clip["shot"].get("transform"), w, h) if clip["source"] in ("video", "image") and not (disabled or hidden) else ""
+        visible = clip["source"] in ("video", "image") and not (disabled or hidden)
+        # A keyed shot (green screen) loses its key colour after it is fitted and masked; what it leaves open,
+        # including the bars of a contained fit, which are padded in the key colour, shows its backdrop picture
+        # (or black). The transform then moves the keyed person alone, over a backdrop that stays put.
+        chroma = clip["shot"].get("chroma") or {}
+        keyed = visible and bool(chroma.get("on"))
+        tf = transform_filter(clip["shot"].get("transform"), w, h, alpha=keyed) if visible else ""
+        n = frames[i][1] - frames[i][0]
+        base = (f"[{idx}:v]setpts={pts},{lut}{_fit_filter(opts['fit'], w, h, '0x' + chroma['color'][1:] if keyed else 'black')},"
+                f"{black}setsar=1,fps={frame_rate(fps)},{TO_709},tpad=stop_mode=clone:stop_duration={length:.3f},trim=end_frame={n}")
+        if keyed:
+            graph.append(f"{base}[v{i}p{'m' if masks else ''}]")
+            graph.extend(_mask_chains(f"v{i}p", masks, w, h))
+            graph.append(f"[v{i}p]{chroma_key(chroma)},format=yuva420p{f',{tf}' if tf else ''}[v{i}k]")
+            back = all_media.get(clip["shot"].get("backdrop") or "")
+            if back and back.get("kind") == "image" and (project_dir / back["file"]).is_file():
+                inputs.append(["-loop", "1", "-framerate", frame_rate(fps), "-t", f"{length:.3f}", "-i", back["file"]])
+                fit_back = f"{_fit_filter('cover', w, h)},"
+            else:
+                inputs.append(["-f", "lavfi", "-t", f"{length:.3f}", "-i", f"color=c=black:s={w}x{h}:r={frame_rate(fps)}"])
+                fit_back = ""
+            graph.append(f"[{len(inputs) - 1}:v]{fit_back}setsar=1,fps={frame_rate(fps)},{TO_709},"
+                         f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end_frame={n}[v{i}b]")
+            graph.append(f"[v{i}b][v{i}k]overlay=0:0,{TO_709}[v{i}]")
+            continue
         main = f"v{i}t" if tf and masks else f"v{i}"
-        graph.append(
-            f"[{idx}:v]setpts={pts},{lut}{_fit_filter(opts['fit'], w, h)},{black}setsar=1,fps={frame_rate(fps)},{TO_709},"
-            f"tpad=stop_mode=clone:stop_duration={length:.3f},trim=end_frame={frames[i][1] - frames[i][0]}"
-            f"{f',{tf}' if tf and not masks else ''}[{main}{'m' if masks else ''}]"
-        )
+        graph.append(f"{base}{f',{tf}' if tf and not masks else ''}[{main}{'m' if masks else ''}]")
         graph.extend(_mask_chains(main, masks, w, h))
         if tf and masks:
             graph.append(f"[{main}]{tf}[v{i}]")
@@ -508,6 +547,17 @@ def _clip_sounds(clip: dict) -> bool:
             and not shot.get("audioDetached") and float(shot.get("volume", 1.0)) > 0)
 
 
+def _file_input(inputs: list[list[str]], file: str) -> int:
+    """The index of a whole-file input, added once: a sound placed many times (an effect on every badge) shares
+    one input, which ffmpeg feeds to each filter that reads it. Separate copies made the command line too long
+    for Windows (WinError 206)."""
+    args = ["-i", file]
+    if args in inputs:
+        return inputs.index(args)
+    inputs.append(args)
+    return len(inputs) - 1
+
+
 def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict, total: float,
                 inputs: list[list[str]], graph: list[str], video_index: dict[int, int],
                 pip_sounds: list[tuple[int, float, float, str, float]]) -> None:
@@ -536,9 +586,12 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             sound = shot_sound(clip)
             stems = stems_for(project, project_dir, sound)
             head = f"[{video_index[i]}:a]{aformat},"
-            if stems:
-                inputs.append(["-i", stems["file"]])
-                graph.extend(mix_lines(sound, f"{len(inputs) - 1}:a", f"vs{i}"))
+            # With 壓縮器 on it plays its render instead, already at its speed (compressor.py).
+            dyn = _dyn_file(project, project_dir, sound, clip.get("speed") or 1.0)
+            if dyn:
+                head = f"[{_file_input(inputs, dyn)}:a]{aformat},"
+            elif stems:
+                graph.extend(mix_lines(sound, f"{_file_input(inputs, stems['file'])}:a", f"vs{i}"))
                 head = (f"[vs{i}]{aformat},atrim=start={clip['in'] - stems['from']:.3f}"
                         f":duration={length * (clip.get('speed') or 1.0):.3f},asetpts=PTS-STARTPTS,")
             # The fades set on the shot's sound, on top of the short ones every cut and transition gets.
@@ -547,7 +600,7 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
             own_fades = ((f"afade=t=in:st=0:d={own_in:.3f}," if own_in > 0 else "")
                          + (f"afade=t=out:st={length - own_out:.3f}:d={own_out:.3f}," if own_out > 0 else ""))
             graph.append(
-                f"{head}{gain_filter}{_atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
+                f"{head}{gain_filter}{'' if dyn else _atempo(clip.get('speed') or 1.0)}atrim=duration={length:.3f},"
                 f"asetpts=PTS-STARTPTS,{key_filter}{own_fades}"
                 f"afade=t=in:st=0:d={fade_in:.3f},afade=t=out:st={length - fade_out:.3f}:d={fade_out:.3f},"
                 f"adelay=delays={ms}:all=1,{fix_pts}[ca{i}]"
@@ -577,18 +630,21 @@ def _plan_audio(project: dict, project_dir: Path, clips: list[dict], opts: dict,
         length = min((a_out - a_in) / speed, total - start)
         if length <= 0.05:
             continue
-        # A clip with 降噪 / 去回音 or one channel picked plays its stems (voiceclean.py), rendered before planning.
-        stems = stems_for(project, project_dir, track)
-        inputs.append(["-i", stems["file"] if stems else media["file"]])
-        idx = len(inputs) - 1
+        # A clip with 降噪 / 去回音 or one channel picked plays its stems (voiceclean.py), rendered before planning;
+        # one with 壓縮器 on plays its render, made of those stems at its speed (compressor.py).
+        dyn = _dyn_file(project, project_dir, track, speed)
+        stems = None if dyn else stems_for(project, project_dir, track)
+        idx = _file_input(inputs, dyn or (stems["file"] if stems else media["file"]))
         head = f"{idx}:a"
         if stems:
             graph.extend(mix_lines(track, head, f"vc{k}"))
             head = f"vc{k}"
         fi = min(float(track.get("fadeIn") or 0.0), length / 2)
         fo = min(float(track.get("fadeOut") or 0.0), length / 2)
-        chain = [aformat, f"atrim=start={a_in - (stems['from'] if stems else 0.0):.3f}:duration={length * speed:.3f}", "asetpts=PTS-STARTPTS",
-                 *([_atempo(speed).rstrip(",")] if _atempo(speed) else []),
+        trim = (f"atrim=start=0:duration={length:.3f}" if dyn else
+                f"atrim=start={a_in - (stems['from'] if stems else 0.0):.3f}:duration={length * speed:.3f}")
+        chain = [aformat, trim, "asetpts=PTS-STARTPTS",
+                 *([_atempo(speed).rstrip(",")] if _atempo(speed) and not dyn else []),
                  f"volume='{kf_expr(track, 'volume', 't', 0.0, 1.0)}':eval=frame"]
         duck = duck_expr(spans, start, length, duck_db(project["settings"])) if audio_track(track) in bgm else None
         if duck:
@@ -661,11 +717,12 @@ def measure_loudness(media: Media, plan: dict, project_dir: Path, script: Path, 
                      cancelled: Callable[[], bool] | None = None) -> dict | None:
     """loudnorm's first pass (EX-01): the sound-only `plan` through loudnorm into nothing. Returns the report loudnorm
     logs (input_i, input_tp, input_lra, input_thresh, target_offset), or None for a mix too quiet to measure."""
-    script.write_text(f"{plan['graph']};\n[aout]{loudnorm_filter(target)}:print_format=json[aloud]", encoding="utf-8")
-    args = [arg for inp in plan["inputs"] for arg in inp]
-    args += media.filter_script_args(Path("media/cache") / script.name)
-    args += ["-map", "[aloud]", "-t", f"{plan['total']:.3f}", "-f", "null", "-"]
-    text = media.run_progress(args, plan["total"], on_progress, cancelled, cwd=project_dir, loglevel="info")
+    tail = [*media.filter_script_args(Path("media/cache") / script.name),
+            "-map", "[aloud]", "-t", f"{plan['total']:.3f}", "-f", "null", "-"]
+    graph = f"{plan['graph']};\n[aout]{loudnorm_filter(target)}:print_format=json[aloud]"
+    args, graph = media.fit_inputs(plan["inputs"], graph, tail, project_dir, loglevel="info")
+    script.write_text(graph, encoding="utf-8")
+    text = media.run_progress(args + tail, plan["total"], on_progress, cancelled, cwd=project_dir, loglevel="info")
     try:
         report = json.loads(re.findall(r"\{[^{}]*\}", text)[-1])
         level = float(report["input_i"])  # "-inf" for silence
@@ -717,6 +774,16 @@ def render(
         for clip in clips:  # the same for the shots' own sound
             if _clip_sounds(clip):
                 ensure_stems(media, project, project_dir, shot_sound(clip), cancelled)
+    # The 壓縮器 renders _plan_audio plays, made after the stems they are made of.
+    for item in project.get("audio") or []:
+        job = None if item.get("muted") else _dyn_job(project, project_dir, item, float(item.get("speed") or 1.0))
+        if job:
+            ensure_dyn(media, project_dir, job, cancelled)
+    if opts["clipAudio"] and not (project.get("tracks") or {}).get("videoMuted"):
+        for clip in clips:
+            job = _dyn_job(project, project_dir, shot_sound(clip), clip.get("speed") or 1.0) if _clip_sounds(clip) else None
+            if job:
+                ensure_dyn(media, project_dir, job, cancelled)
     ass = None if sound_only else build_ass(project, clips, opts, int(project["settings"]["width"]),
                                             int(project["settings"]["height"]))
     if ass:
@@ -738,20 +805,23 @@ def render(
     loud_path = cache / f"{stamp}.loudness.txt"
     report: dict | None = None  # loudnorm's first-pass report when the mix is normalised (EX-01)
 
-    def args_for(encoder: str) -> list[str]:
-        args: list[str] = []
-        for inp in plan["inputs"]:
-            args += inp
-        args += media.filter_script_args(Path("media/cache") / graph_path.name)
+    def tail_for(encoder: str) -> list[str]:
+        """Everything after the inputs."""
+        args = media.filter_script_args(Path("media/cache") / graph_path.name)
         a_out = "[aloud]" if report else "[aout]"
         if sound_only:
             return args + ["-map", a_out, "-t", f"{plan['total']:.3f}", *AUDIO_CODECS[fmt], "-ar", "48000",
                            str(work_path)]
         args += ["-map", "[vout]", "-map", a_out, "-t", f"{plan['total']:.3f}"]
         args += [*media.encoder_args(encoder, opts["quality"], opts.get("maxrate") or 0), *TAGS_709]
+        if opts.get("keyint"):  # seconds between keyframes (review videos)
+            args += ["-g", str(max(1, round(float(project["settings"]["fps"]) * opts["keyint"])))]
         abr = "160k" if opts["quality"] == "compact" else "192k"
         args += ["-c:a", "aac", "-b:a", abr, "-ar", "48000", "-movflags", "+faststart", str(work_path)]
         return args
+
+    def args_for(encoder: str) -> list[str]:
+        return input_args + tail_for(encoder)
 
     encoder = AUDIO_CODECS[fmt][1] if sound_only else media.pick_encoder(encoder_pref)
     started = time.time()
@@ -767,6 +837,8 @@ def render(
             progress = on_progress and (lambda f: on_progress(0.3 + f * 0.7))
         if report:
             graph += f";\n[aout]{loudnorm_filter(target, report)},aresample=48000[aloud]"
+        # libx264's options, which a failed hardware encoder retries with, are no longer than a hardware one's.
+        input_args, graph = media.fit_inputs(plan["inputs"], graph, tail_for(encoder), project_dir)
         graph_path.write_text(graph, encoding="utf-8")
         try:
             media.run_progress(args_for(encoder), plan["total"], progress, cancelled, cwd=project_dir)

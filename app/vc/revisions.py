@@ -163,6 +163,7 @@ def _item(raw: dict, index: int, seen: set[str], duration: float, src: _Zip | _D
             "marks": [], "decision": None, "extra": "", "status": "pending", "result": ""}
     marks = raw.get("marks") if isinstance(raw.get("marks"), list) else []
     item["marks"] = [m for m in map(_mark, marks[:MAX_MARKS]) if m]
+    item["end"] = _end(raw.get("end"), duration, item["t"]) if kind == "note" else None
     if kind == "insert":
         ins = raw.get("insert") if isinstance(raw.get("insert"), dict) else {}
         typ = ins.get("type") if ins.get("type") in ("image", "video") else None
@@ -177,6 +178,19 @@ def _item(raw: dict, index: int, seen: set[str], duration: float, src: _Zip | _D
         else:
             item["insert"]["file"] = rel
     return item
+
+
+def _end(raw: Any, duration: float, start: float) -> dict | None:
+    """Where a note on a stretch of the video ends (the review page's 設定結束點), in the same terms as its start;
+    None for a note on one frame, or an end that is not after the start."""
+    if not isinstance(raw, dict):
+        return None
+    t = round(_num(raw.get("t"), 0, duration, -1.0), 3)
+    if t <= start:
+        return None
+    return {"t": t, "frame": int(_num(raw.get("frame"), 0, 1e8)), "shot": _text(raw.get("shot"), 40),
+            "no": int(_num(raw.get("no"), 0, 1e5)), "shotName": _text(raw.get("shotName"), 120),
+            "offset": round(_num(raw.get("offset"), 0, 36000), 3)}
 
 
 def _music(raw: Any, src: _Zip | _Dir) -> dict | None:
@@ -403,8 +417,24 @@ def describe_marks(marks: list[dict]) -> list[str]:
 
 def note_prompt(project: dict, item: dict) -> str:
     """What the assistant is asked to do for one written note."""
+    end = item.get("end")  # rounds loaded before notes could cover a stretch have no end
     if item["kind"] == "general":
         lines = ["客戶對整支影片的修改意見（沒有指定時間點），請照意見修改目前的專案。"]
+    elif end:
+        lines = [(f"客戶在審稿影片 {item['t']:.2f} 到 {end['t']:.2f} 秒這一段（共 {end['t'] - item['t']:.2f} 秒，"
+                  f"從鏡頭 #{item['no']}「{item['shotName']}」內第 {item['offset']:.2f} 秒，到鏡頭 #{end['no']}"
+                  f"「{end['shotName']}」內第 {end['offset']:.2f} 秒）留下修改意見，意見針對整段，請照意見修改目前的專案。")]
+        spot, last = locate(project, item), locate(project, end)
+        if spot and last and last["t"] > spot["t"]:
+            lines.append(f"這一段在目前時間軸上是 {spot['t']:.2f} 到 {last['t']:.2f} 秒，從鏡頭 id {item['shot']}"
+                         f"（第 {spot['clip']['index'] + 1} 個鏡頭）到鏡頭 id {end['shot']}"
+                         f"（第 {last['clip']['index'] + 1} 個鏡頭）。")
+        elif spot:
+            lines.append(f"這一段的起點在目前時間軸上是 {spot['t']:.2f} 秒，鏡頭 id {item['shot']}"
+                         f"（第 {spot['clip']['index'] + 1} 個鏡頭）；結束點的鏡頭審稿後已被刪除、移動或改短，"
+                         f"請用 timeline 工具確認範圍（審稿時長 {end['t'] - item['t']:.2f} 秒）。")
+        else:
+            lines.append("審稿後這一段起點的鏡頭已被刪除或移出剪輯序列，請用 timeline 工具找對應的位置；找不到就回覆需人工處理。")
     else:
         lines = [(f"客戶在審稿影片 {item['t']:.2f} 秒處（鏡頭 #{item['no']}「{item['shotName']}」內第 "
                   f"{item['offset']:.2f} 秒）留下修改意見，請照意見修改目前的專案。")]
@@ -414,9 +444,9 @@ def note_prompt(project: dict, item: dict) -> str:
                          f"（第 {spot['clip']['index'] + 1} 個鏡頭）。")
         else:
             lines.append("審稿後這個鏡頭已被刪除或移出剪輯序列，請用 timeline 工具找對應的位置；找不到就回覆需人工處理。")
-        if item["marks"]:
-            lines.append("客戶在畫面上的標註（座標是畫面寬高的百分比，原點在左上角）：")
-            lines += [f"- {m}" for m in describe_marks(item["marks"])]
+    if item["marks"]:
+        lines.append(f"客戶在{'這一段第一格' if end else ''}畫面上的標註（座標是畫面寬高的百分比，原點在左上角）：")
+        lines += [f"- {m}" for m in describe_marks(item["marks"])]
     lines.append(f"客戶原話：「{item['text'] or '（沒有文字，只有標註）'}」")
     if item["decision"] == "tweak" and item["extra"]:
         lines.append(f"我方補充指示（照這段調整做法）：「{item['extra']}」")

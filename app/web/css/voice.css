@@ -54,3 +54,35 @@
 
 .vch-bars path { stroke: var(--muted); stroke-width: 1; fill: none; }
 .vch-row.on .vch-bars path { stroke: var(--accent); }
+
+/* 壓縮器 (components/comp-panel.js) */
+.comp-num { width: 84px; }
+
+.comp-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.comp-meter-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.comp-meter-fill {
+  height: 100%;
+  margin-left: auto;
+  background: var(--warn);
+  transition: width 60ms linear;
+}
+
+.comp-meter-val {
+  min-width: 64px;
+  text-align: right;
+  color: var(--text-2);
+  font-size: calc(12px * var(--text-scale));
+}

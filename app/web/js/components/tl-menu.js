@@ -10,7 +10,7 @@ import { copyItem, pasteItem, copyAttrs, pasteAttrs } from "./tl-clipboard.js";
 import { splitAtPlayhead } from "./tl-edit.js";
 import {
   current, OFF_FIELD, KEYABLE, toggleEnabled, together, rangeFromClip, freezeFrame, detachAudio, reverseClip, isReverse,
-  focusSpeed, addKeyframe,
+  focusSpeed, addKeyframe, toggleFull,
 } from "./tl-commands.js";
 import { openMenu } from "./overlay.js";
 import { resetAttrs } from "../dialogs/reset-attrs.js";
@@ -96,10 +96,12 @@ function shotItems(cur, run, at) {
 }
 
 // An upper-track video clip's still goes on its own track; later clips there stay put, so it needs 5 s free.
-function overlayItems(project, cur, run, at) {
+function overlayItems(project, sel, cur, run, at) {
   const video = (project.media[cur.item.mediaId] || {}).kind === "video";
   return [
     { divider: true },
+    { label: "滿版", checked: together(project, sel, cur.item).every((x) => x.full), hint: keyLabel("edit.overlayFull"),
+      onClick: run(toggleFull), title: "整張畫面放滿畫框；關掉回到原本的位置、大小、裁剪與旋轉" },
     { label: "添加靜幀（5 秒）", icon: "image", hint: keyLabel("edit.freeze"), onClick: run(freezeFrame), disabled: !video || !at,
       title: !video ? "只有影片片段可以用（圖片本來就是靜止畫面）" : at ? "在播放頭插入 5 秒靜止畫面，同一軌片段後面要有 5 秒空位" : PLAYHEAD_OFF },
     { label: "變速…", icon: "gauge", hint: keyLabel("edit.speed"), onClick: run(focusSpeed), disabled: !video,
@@ -142,14 +144,14 @@ function clipItems(data, sel, cur) {
     { label: "複製", icon: "copy", hint: keyLabel("edit.copy"), onClick: run(copyItem) },
     { label: "在播放頭貼上", icon: "clipboard", hint: keyLabel("edit.paste"), onClick: () => pasteItem(data().project, data().clips) },
     ...(sel.type === "shot" || sel.type === "audio" ? [
-      { label: "複製聲音屬性", icon: "copy", hint: keyLabel("edit.copyAttrs"), onClick: run(copyAttrs) },
-      { label: `貼上聲音屬性${count}`, icon: "clipboard", hint: keyLabel("edit.pasteAttrs"), onClick: run(pasteAttrs) },
+      { label: "複製屬性", icon: "copy", hint: keyLabel("edit.copyAttrs"), onClick: run(copyAttrs) },
+      { label: `貼上屬性${count}`, icon: "clipboard", hint: keyLabel("edit.pasteAttrs"), onClick: run(pasteAttrs) },
     ] : []),
     { label: `重設屬性…${count}`, icon: "undo", hint: keyLabel("edit.resetAttrs"), onClick: run(resetAttrs) },
     { label: "在播放頭分割", icon: "scissors", hint: keyLabel("edit.split"), onClick: run(splitAtPlayhead),
       disabled: !inside, title: inside ? undefined : PLAYHEAD_OFF },
     ...(sel.type === "shot" ? shotItems(cur, run, at) : []),
-    ...(sel.type === "overlay" ? overlayItems(project, cur, run, at) : []),
+    ...(sel.type === "overlay" ? overlayItems(project, sel, cur, run, at) : []),
     ...(detachedSound ? [{ label: "還原原聲", icon: "music", hint: keyLabel("edit.detachAudio"), onClick: run(detachAudio) }] : []),
     ...(KEYABLE.includes(sel.type) ? [{ label: "添加關鍵幀", icon: "diamond", hint: keyLabel("edit.keyframeAdd"),
       onClick: run(addKeyframe), disabled: !at, title: at ? undefined : PLAYHEAD_OFF }] : []),

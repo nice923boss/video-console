@@ -9,7 +9,7 @@ import { comboLabel } from "../components/ui.js";
 
 export const PRESETS = [
   { value: "default", label: "Video Console" },
-  { value: "fcpx", label: "Final Cut Pro" },
+  { value: "fcpx", label: "專業剪輯鍵位" },
 ];
 
 export const PALETTE_GROUP = "指令面板";
@@ -69,6 +69,7 @@ const BUILT_IN = [
   cmd("edit", "edit.liftUp", "把鏡頭移到上層軌（原位留空白）", ["mod+alt+arrowup"]),
   cmd("edit", "edit.dropDown", "把上層軌的片段移回畫面軌", ["mod+alt+arrowdown"]),
   cmd("edit", "edit.toggleEnabled", "啟用或停用選取的片段", ["v"]),
+  cmd("edit", "edit.overlayFull", "上方軌片段滿版開關（關掉回到原本的位置、大小、裁剪與旋轉）", ["alt+shift+f"]),
   cmd("edit", "edit.addCaption", "在播放頭新增字幕", ["alt+c"]),
   cmd("edit", "edit.extendCaption", "選取的字幕延長到下一句的開頭", ["e"]),
   cmd("edit", "edit.extendAllCaptions", "整列字幕延長到下一句的開頭（選取字幕所在的列，沒選就是字幕列）", []),
@@ -121,8 +122,8 @@ const BUILT_IN = [
   cmd("edit", "edit.watch", "開始或結束觀看模式", []),
   cmd("edit", "edit.copy", "複製選取的片段", ["mod+c"]),
   cmd("edit", "edit.paste", "在播放頭貼上（鏡頭插在播放頭所在鏡頭之後）", ["mod+v"]),
-  cmd("edit", "edit.copyAttrs", "複製聲音屬性（音量、淡入淡出、聲道、降噪、去回音）", ["mod+alt+c"]),
-  cmd("edit", "edit.pasteAttrs", "把複製的聲音屬性貼到選取的音訊或鏡頭原聲", ["mod+alt+v"]),
+  cmd("edit", "edit.copyAttrs", "複製屬性：鏡頭的畫面（變換、裁剪、調色、遮罩、去背等）與聲音，音訊片段的聲音", ["mod+shift+c"]),
+  cmd("edit", "edit.pasteAttrs", "把複製的屬性貼到選取的鏡頭或音訊片段", ["mod+shift+v"]),
   cmd("edit", "edit.resetAttrs", "重設屬性：列出選取片段調整過的屬性，勾選的恢復成預設值", ["mod+alt+x"], ["mod+shift+x"]),
   cmd("edit", "edit.delete", "刪除選取的片段", ["delete", "backspace", "f2"], ["delete", "backspace"]),
   cmd("edit", "edit.rippleDelete", "漣漪刪除（後面的片段往前補位）", ["shift+delete", "shift+backspace"]),

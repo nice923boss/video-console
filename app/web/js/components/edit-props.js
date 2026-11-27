@@ -23,7 +23,7 @@ import { Icon } from "./icons.js";
 import { Inspector } from "./inspector.js";
 import { VoicePanel } from "./voice-panel.js";
 import { GradePanel } from "./grade-panel.js";
-import { KeyList, keyedPatch, useClipTime } from "./key-panel.js";
+import { KeyList, ShiftAllToggle, keyedPatch, useClipTime } from "./key-panel.js";
 import { addKeyframe, isStabilized, stabilizeClip, extendCaption } from "./tl-commands.js";
 import { extendTarget } from "../lib/caption-extend.js";
 import { mergeTextTarget, moveHeadTarget, moveTailTarget, splitTextTarget } from "../lib/caption-split.js";
@@ -265,7 +265,12 @@ function OverlayPanel({ project, item }) {
           <${Select} class="insp-speed" value=${speed} options=${speedOptions(speed)} onChange=${changeSpeed} />
         <//>
       </div>`}
-      <${Field} label="位置" hint=${keyed ? "這個片段有關鍵幀：下面顯示播放頭位置的值，有關鍵幀的項目會改寫播放頭位置的關鍵幀"
+      <${Toggle} checked=${!!item.full} label=${`滿版${keyHint("edit.overlayFull")}`}
+        hint=${item.full ? "滿版中：整張素材放滿畫框，下面的位置、大小、裁剪與旋轉先保留不用，關掉就回到原本的樣子"
+          : "一鍵讓整張素材放滿畫框，不用刪掉位置、大小、裁剪與旋轉；關掉就回到原本的樣子"}
+        onChange=${(on) => update({ full: on }, on ? "開啟滿版" : "關閉滿版")} />
+      ${keyed && html`<${ShiftAllToggle} />`}
+      <${Field} label="位置" hint=${keyed ? "這個片段有關鍵幀：下面顯示播放頭位置的值，有關鍵幀的項目會改寫播放頭位置的關鍵幀，開啟整組平移則全部一起移動"
         : "以畫面左上角為起點；滿版顯示整張素材，填滿蓋滿畫面並裁掉超出的部分"}>
         <div class="row">
           ${spots.map((s) => html`<${Button} size="sm" kind="ghost" onClick=${() => place(s)}>${s.label}<//>`)}
@@ -360,7 +365,7 @@ function ShapeFields({ crop, deg, set, update }) {
 }
 
 // Colour key (GR-09): pixels near the chosen colour turn transparent, for a clip shot on a green or blue screen.
-function ChromaField({ chroma, update }) {
+export function ChromaField({ chroma, update }) {
   const c = { ...DEFAULT_CHROMA, ...chroma };
   const save = (patch, label) => update({ chroma: { ...c, ...patch } }, label);
   const pct = (v) => `${Math.round(v * 100)}%`;
@@ -677,6 +682,11 @@ function OverlayBatchFields({ project, items, anchor }) {
       hint=${`影片片段改成同一個速度，長度跟著改，放慢時碰到同一軌下一個片段就停住${videos.length < items.length ? `；${items.length - videos.length} 張圖片沒有速度，會略過` : ""}`}>
       <${Select} class="insp-speed" value=${speed} options=${speedOptions(speed ?? 1)} placeholder="各段不同" onChange=${changeSpeed} />
     <//>`}
+    <${Toggle} checked=${items.every((x) => x.full)}
+      label=${`滿版${items.some((x) => x.full) && !items.every((x) => x.full) ? "（部分開啟）" : ""}${keyHint("edit.overlayFull")}`}
+      hint="每段整張素材放滿畫框，保留各自的位置、大小、裁剪與旋轉，關掉就回到原本的樣子"
+      onChange=${(on) => ops(items.map((x) => ({ op: "overlay.update", id: x.id, patch: { full: on } })),
+        { label: `${items.length} 個片段${on ? "開啟" : "關閉"}滿版` })} />
     <${Field} label="位置" hint="每段依自己的大小放到同一個角落；滿版、填滿也會改大小">
       <div class="row">
         ${spots.map(([text, spot]) => html`<${Button} size="sm" kind="ghost" onClick=${() => place(spot)}>${text}<//>`)}

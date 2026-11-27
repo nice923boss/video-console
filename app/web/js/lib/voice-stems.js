@@ -14,11 +14,12 @@ export const stemsParams = (media, item) => JSON.stringify([media ? media.file :
 // A sequence clip plays a sound of its own, which takes the same settings as an audio clip.
 export const hasOwnSound = (clip) => clip.source === "video" && !!clip.take.hasAudio && !clip.shot.audioDetached;
 
-// That sound as the audio clip the stems pass, the remix and the 聲道 / 降噪 / 去回音 panel take (mirror of
+// That sound as the audio clip the stems pass, the remix and the 聲道 / 降噪 / 去回音 / 壓縮器 panel take (mirror of
 // voiceclean.shot_sound): the shot's id, its version's file and range, and the shot's settings.
 export const shotSound = (clip) => ({
   id: clip.shot.id, takeId: clip.take.id, start: clip.start, in: clip.in, out: clip.out, speed: clip.speed || 1,
   channel: clip.shot.channel || null, denoise: clip.shot.denoise || null, dereverb: clip.shot.dereverb || null,
+  comp: clip.shot.comp || null,
 });
 
 function settle(pid, id, key, patch) {

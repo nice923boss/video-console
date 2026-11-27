@@ -74,6 +74,17 @@ export function toggleEnabled(project, clips, sel) {
     { label: `${off ? "停用" : "啟用"}${what}` });
 }
 
+// The "滿版" switch of upper-track clips: on fits each whole picture to the frame (keeping its own place, size,
+// crop and rotation for when it goes off). Several picked together all go on when any is off, else all off.
+export function toggleFull(project, clips, sel) {
+  const cur = current(project, clips, sel);
+  if (!cur || cur.type !== "overlay") return warn("先選取上方軌的片段");
+  const items = together(project, sel, cur.item);
+  const on = items.some((x) => !x.full);
+  const what = items.length > 1 ? `（${items.length} 個）` : "";
+  ops(items.map((x) => ({ op: "overlay.update", id: x.id, patch: { full: on } })), { label: `${on ? "開啟" : "關閉"}滿版${what}` });
+}
+
 // The selected caption runs on to where the next caption on its row starts; one that overlaps it is cut back there.
 export async function extendCaption(project, clips, sel) {
   const to = extendTarget(project, sel && sel.type === "caption" ? sel.id : null);

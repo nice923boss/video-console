@@ -2,7 +2,8 @@
 // The bus feeds the level meters before the player volume (so they show the mix as export.py renders it)
 // and the speakers after it. Gains above 1 (+dB) are heard here, which element.volume cannot do.
 // Elements of one timeline row share a track bus between their gain and the mix, so each row has its own
-// level (MX-02). The mix also feeds the loudness meter (loudness-worklet.js, MX-01).
+// level (MX-02). The mix also feeds the loudness meter (loudness-worklet.js, MX-01). A clip with 壓縮器 on goes
+// through compressor-worklet.js before its gain (compSlot).
 // One context for the page; it is created on first playback, since browsers start it only after a gesture. It runs
 // at 48 kHz, the rate the export mixes at and the preview's sound copies are made at (PB-01).
 import { LOW_HZ, HIGH_HZ, BASS_HZ, BODY_HZ, BODY_Q, TONE_HZ } from "./voice-mix.js";
@@ -20,7 +21,10 @@ let analysers = null;
 let monitorGain = 1;
 let loudnessNode = null;
 let loudness = null; // the worklet's latest reading
-const routes = new WeakMap(); // element -> {src, gain, value, track, c, voice}
+let compLoad = null; // the compressor worklet module loading
+let compReady = false;
+const reductions = new Map(); // clip id -> {db, at}: the compressor's latest gain reduction, for the meter
+const routes = new WeakMap(); // element -> {src, gain, value, track, c, voice, comp}
 const trackBuses = new Map(); // row key -> {input, analysers}
 const bufs = [new Float32Array(FFT), new Float32Array(FFT)];
 const trackBuf = new Float32Array(TRACK_FFT);
@@ -62,6 +66,7 @@ function ensure() {
   bus.connect(monitor);
   monitor.connect(ctx.destination);
   startLoudness();
+  loadComp(); // ready before the first clip with 壓縮器 plays
   return ctx;
 }
 
@@ -181,6 +186,65 @@ export function tuneVoice(voice, plan, monitor) {
   }
 }
 
+// ---- 壓縮器 (compressor.js run by compressor-worklet.js)
+function loadComp() {
+  if (!compLoad) {
+    compLoad = ctx.audioWorklet && typeof AudioWorkletNode !== "undefined"
+      ? ctx.audioWorklet.addModule(new URL("./compressor-worklet.js", import.meta.url)).then(() => { compReady = true; })
+      : Promise.reject(new Error("此瀏覽器不支援 AudioWorklet"));
+    compLoad.catch((err) => console.warn("無法啟動壓縮器", err));
+  }
+  return compLoad;
+}
+
+// A compressor between input and output for the clip `id` with settings `comp`: input passes straight to output
+// until the worklet module has loaded (or for good when it cannot), then through the worklet.
+export function compSlot(input, output, comp, id) {
+  const slot = { input, output, node: null, sent: "", comp, id, dead: false };
+  input.connect(output);
+  const swap = () => {
+    if (slot.dead) return;
+    const node = new AudioWorkletNode(ctx, "vc-compressor", {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+      channelCount: 2, channelCountMode: "explicit", channelInterpretation: "speakers",
+    });
+    node.port.onmessage = (e) => { reductions.set(slot.id, { db: e.data, at: performance.now() }); };
+    input.disconnect(output);
+    input.connect(node);
+    node.connect(output);
+    slot.node = node;
+    tuneComp(slot, slot.comp);
+  };
+  if (compReady) swap();
+  else loadComp().then(swap, () => {});
+  return slot;
+}
+
+// New settings for a slot; the worklet starts its compressor afresh only when they changed.
+export function tuneComp(slot, comp) {
+  slot.comp = comp;
+  if (!slot.node) return;
+  const sent = JSON.stringify(comp && comp.on ? comp : null);
+  if (sent === slot.sent) return;
+  slot.sent = sent;
+  slot.node.port.postMessage(comp && comp.on ? comp : null);
+}
+
+export function dropComp(slot) {
+  slot.dead = true;
+  slot.input.disconnect();
+  if (slot.node) {
+    slot.node.port.postMessage("end");
+    slot.node.disconnect();
+  }
+}
+
+// The gain reduction (dB, <= 0) clip `id`'s compressor applies now, or null when it is not playing.
+export function readReduction(id) {
+  const r = reductions.get(id);
+  return r && performance.now() - r.at < 300 ? r.db : null;
+}
+
 // The context (null before the first playback) and where a sound of timeline row `track` joins the mix: the row's
 // bus, or the mix itself for no row. For the sample scheduler (components/player-audio.js).
 export const mixContext = () => ctx;
@@ -189,7 +253,8 @@ export const mixInput = (track = "") => (ctx ? (track ? trackBus(track).input : 
 // Sets an element's gain (linear, may exceed 1), routing it into the mix the first time, through the bus of
 // timeline row `track`. False while the mix is not running and the element is not routed yet; the caller
 // then uses element.volume instead. voice {channels, plan, monitor}: the element plays stems (voiceclean.py) of
-// that many channels per stem, remixed by buildVoice.
+// that many channels per stem, remixed by buildVoice; voice {comp, id} (channels 0 without stems): clip `id`'s
+// 壓縮器 settings, applied after the remix.
 export function routeGain(media, gain, track = "", voice = null) {
   let r = routes.get(media);
   if (!r) {
@@ -197,18 +262,26 @@ export function routeGain(media, gain, track = "", voice = null) {
     const src = ctx.createMediaElementSource(media);
     const node = ctx.createGain();
     node.gain.value = gain;
-    r = { src, gain: node, value: gain, track: null, c: -1, voice: null };
+    r = { src, gain: node, value: gain, track: null, c: -1, voice: null, comp: null };
     routes.set(media, r);
   }
   const c = voice ? voice.channels : 0;
-  if (r.c !== c) {
+  const comp = voice && voice.comp && voice.comp.on ? voice.comp : null;
+  if (r.c !== c || !!r.comp !== !!comp) {
     r.src.disconnect();
     if (r.voice) r.voice.merge.disconnect();
-    r.voice = c ? buildVoice(r.src, r.gain, c) : null;
-    if (!c) r.src.connect(r.gain);
+    if (r.comp) dropComp(r.comp);
+    const into = comp ? gainNode() : r.gain;
+    r.voice = c ? buildVoice(r.src, into, c) : null;
+    if (!c) r.src.connect(into);
+    r.comp = comp ? compSlot(into, r.gain, comp, voice.id) : null;
     r.c = c;
   }
-  if (voice) tuneVoice(r.voice, voice.plan, voice.monitor);
+  if (r.voice) tuneVoice(r.voice, voice.plan, voice.monitor);
+  if (r.comp) {
+    r.comp.id = voice.id;
+    tuneComp(r.comp, comp);
+  }
   if (r.track !== track) {
     if (r.track !== null) r.gain.disconnect();
     r.gain.connect(track ? trackBus(track).input : bus);
@@ -227,6 +300,7 @@ export function unroute(media) {
   if (!r) return;
   r.src.disconnect();
   if (r.voice) r.voice.merge.disconnect();
+  if (r.comp) dropComp(r.comp);
   r.gain.disconnect();
   routes.delete(media);
 }

@@ -23,13 +23,13 @@ const keysWithout = (item, fields) => (item.keyframes || [])
   .map((k) => Object.fromEntries(Object.entries(k).filter(([f]) => !fields.includes(f))))
   .filter((k) => Object.keys(k).some((f) => f !== "t"));
 
-// Volume, fades, 聲道, 降噪 and 去回音 of an audio clip, or of a shot's own sound (own).
+// Volume, fades, 聲道, 降噪, 去回音 and 壓縮器 of an audio clip, or of a shot's own sound (own).
 function soundRows(item, own) {
   const name = own ? "原聲" : "";
   const id = (k) => (own ? `own.${k}` : k);
   const keys = keyCount(item, ["volume"]);
   const volume = Number(item.volume ?? 1);
-  const { channel, denoise, dereverb } = item;
+  const { channel, denoise, dereverb, comp } = item;
   return [
     (volume !== 1 || keys > 0) && { key: id("volume"), label: `${name}音量`, detail: keys ? keyed(keys) : pct(volume),
       patch: { volume: 1 }, dropKeys: ["volume"] },
@@ -38,6 +38,7 @@ function soundRows(item, own) {
     channel && { key: id("channel"), label: "聲道", detail: `只播聲道 ${Number(channel.index) + 1}`, patch: { channel: null } },
     denoise && { key: id("denoise"), label: "降噪", detail: onOff(denoise), unset: ["denoise"] },
     dereverb && { key: id("dereverb"), label: "去回音", detail: onOff(dereverb), unset: ["dereverb"] },
+    comp && { key: id("comp"), label: "壓縮器", detail: onOff(comp), unset: ["comp"] },
   ].filter(Boolean);
 }
 
@@ -56,6 +57,7 @@ function shotRows(shot, clip) {
       transform: { distort: Object.fromEntries(CORNERS.map((k) => [k, [0, 0]])) } },
     !isNeutral(shot.grade) && { key: "grade", label: "調色", detail: "", patch: { grade: null } },
     masks > 0 && { key: "masks", label: "遮罩", detail: `${masks} 個`, patch: { masks: [] } },
+    shot.chroma && shot.chroma.on && { key: "chroma", label: "綠幕去背", detail: "已開啟", patch: { chroma: { ...shot.chroma, on: false }, backdrop: null } },
     // the speed of a shot whose sound is detached is locked, as in the panel
     speed !== 1 && !shot.audioDetached && { key: "speed", label: "速度", detail: `${speed}x`, patch: { speed: 1 } },
     ...(sound ? soundRows(shot, true) : []),
@@ -76,6 +78,7 @@ function overlayRows(project, item) {
   const turn = Number(item.rotation || 0);
   const volume = Number(item.volume ?? 1);
   return [
+    item.full && { key: "full", label: "滿版", detail: "已開啟", patch: { full: false } },
     fit && (placeKeys > 0 || Object.keys(fit).some((k) => Math.abs(Number(item[k]) - fit[k]) > EPS)) && {
       key: "place", label: "位置與大小", detail: placeKeys ? keyed(placeKeys) : "恢復成滿版", patch: fit, dropKeys: ["x", "y", "w"] },
     (opacity !== 1 || opacityKeys > 0) && { key: "opacity", label: "不透明度", detail: opacityKeys ? keyed(opacityKeys) : pct(opacity),

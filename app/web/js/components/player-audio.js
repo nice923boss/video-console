@@ -8,7 +8,7 @@
 import { fileUrl } from "../lib/format.js";
 import { audioLength, audioSpeed, audioMedia, audioTrack, clipSpeed, VOICE_TRACK, SOURCE_TRACK } from "../lib/sequence.js";
 import { valueAt, takeKeys } from "../lib/keyframes.js";
-import { wakeMix, unroute, mixContext, mixInput, buildVoice, tuneVoice } from "../lib/audio-mix.js";
+import { wakeMix, unroute, mixContext, mixInput, buildVoice, tuneVoice, compSlot, tuneComp, dropComp } from "../lib/audio-mix.js";
 import { voiceSpans, duckGain, duckDb, bgmRows } from "../lib/duck.js";
 import { RATE, info, failed, peek, keepOnly, loading } from "../lib/pcm-cache.js";
 import { report } from "../lib/crash-report.js";
@@ -102,7 +102,9 @@ export function createSound(view, hooks) {
   function buildPlan({ project, clips, total, stems, monitor }) {
     const segs = new Map();
     const flags = project.tracks || {};
-    const add = (seg) => seg.f1 > seg.f0 && segs.set(seg.id, { ...seg, key: segKey(seg) });
+    // A sound with 壓縮器 on keeps its own key, so switching it on or off starts the sound again (makeVoice).
+    const add = (seg) => seg.f1 > seg.f0 && segs.set(seg.id, { ...seg, key: segKey(seg) + (seg.comp ? "|comp" : "") });
+    const compOf = (it) => (it && it.comp && it.comp.on ? it.comp : null);
     if (!flags.videoMuted) {
       clips.forEach((clip, i) => {
         if (!clipSounds(clip)) return;
@@ -123,6 +125,7 @@ export function createSound(view, hooks) {
         const [fi, fo] = clipFades(clips, i);
         add({ id: `c:${clip.shot.id}`, url: fileUrl(project.id, file), s0, f0: toFrame(clip.start),
           f1: toFrame(clip.start + clip.length), fi: toFrame(fi), fo: toFrame(fo), track: SOURCE_TRACK, fx,
+          comp: compOf(clip.shot), compId: clip.shot.id,
           level: (t) => clipLevel(clip, t - clip.start) * hooks.fade(t) });
       });
     }
@@ -166,7 +169,7 @@ export function createSound(view, hooks) {
       const ducked = bgm.includes(track);
       add({ id: `a:${item.id}`, url: fileUrl(project.id, file), s0, f0: toFrame(start),
         f1: toFrame(start + len), fi: toFrame(Math.min(Number(item.fadeIn || 0), len / 2)),
-        fo: toFrame(Math.min(Number(item.fadeOut || 0), len / 2)), track, fx,
+        fo: toFrame(Math.min(Number(item.fadeOut || 0), len / 2)), track, fx, comp: compOf(item), compId: item.id,
         level: (t) => Number(valueAt(item, "volume", t - start, 1)) * hooks.fade(t) * (ducked ? duckGain(duckSpans, t, db) : 1) });
     }
     return segs;
@@ -190,7 +193,9 @@ export function createSound(view, hooks) {
   const at = (u) => (anchor.C0 + u - anchor.F0) / RATE; // context seconds of unrolled timeline frame u
 
   // One sound of the plan in loop lap `lap`, from unrolled frame fromU on: its own fades on `edge`, its level (and
-  // the stems remix) after them, and `env` fading it in where it starts part way and out where it is dropped.
+  // the stems remix) after them, and `env` fading it in where it starts part way and out where it is dropped. With
+  // 壓縮器 on, the remix and the compressor come before the fades and the level, as the export renders it
+  // (compressor.py); the remix is linear, so without it where it sits makes no difference.
   function makeVoice(seg, lap, fromU) {
     const c = mixContext();
     const base = lap ? lap * anchor.L : 0;
@@ -198,18 +203,31 @@ export function createSound(view, hooks) {
     const env = c.createGain();
     const edge = c.createGain();
     const level = c.createGain();
-    env.connect(edge);
     let mix = null;
-    if (seg.fx) {
-      mix = buildVoice(edge, level, seg.fx.channels);
-      tuneVoice(mix, seg.fx.plan, seg.fx.monitor);
-    } else {
+    let comp = null;
+    if (seg.comp) {
+      const pre = c.createGain();
+      if (seg.fx) {
+        mix = buildVoice(env, pre, seg.fx.channels);
+        tuneVoice(mix, seg.fx.plan, seg.fx.monitor);
+      } else {
+        env.connect(pre);
+      }
+      comp = compSlot(pre, edge, seg.comp, seg.compId);
       edge.connect(level);
+    } else {
+      env.connect(edge);
+      if (seg.fx) {
+        mix = buildVoice(edge, level, seg.fx.channels);
+        tuneVoice(mix, seg.fx.plan, seg.fx.monitor);
+      } else {
+        edge.connect(level);
+      }
     }
     level.connect(mixInput(seg.track));
     edge.gain.setValueAtTime(edgeValue(seg, u0 - base), at(u0));
     for (const [F, value] of edgePoints(seg)) if (base + F > u0) edge.gain.linearRampToValueAtTime(value, at(base + F));
-    return { sk: seg.key, seg, base, u0, env, edge, mix, level, levelOf: null, levelTo: u0, sources: [], fedTo: u0,
+    return { sk: seg.key, seg, base, u0, env, edge, mix, comp, level, levelOf: null, levelTo: u0, sources: [], fedTo: u0,
       dry: u0 > base + seg.f0, endU: base + Math.min(seg.f1, anchor.L), waitAt: 0, lateSent: false };
   }
 
@@ -251,6 +269,7 @@ export function createSound(view, hooks) {
     v.env.disconnect();
     v.edge.disconnect();
     if (v.mix) v.mix.merge.disconnect();
+    if (v.comp) dropComp(v.comp);
     v.level.disconnect();
   }
 
@@ -358,6 +377,7 @@ export function createSound(view, hooks) {
       feed(v, fromU, toU);
       automate(v, fromU, toU, heard(v.seg.track, solo));
       if (v.mix) tuneVoice(v.mix, v.seg.fx.plan, v.seg.fx.monitor);
+      if (v.comp) tuneComp(v.comp, v.seg.comp);
       v.sources = v.sources.filter((s) => {
         if (s.end > c.currentTime) return true;
         s.node.disconnect();

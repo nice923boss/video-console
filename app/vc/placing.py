@@ -196,7 +196,8 @@ def lift_ops(project: dict, clip: dict, target: str, start: float) -> dict:
             "start": r3(max(0, start)), "in": r3(clip["in"]) if clip["source"] == "video" else 0,
             "length": r3(clip["length"]), **({"speed": clip["speed"]} if clip["speed"] != 1 else {}),
             **frame(media, float(settings["width"]), float(settings["height"])),
-            "opacity": 1, "volume": 1, **(shot.get("pip") or {}), **volume,
+            "opacity": 1, "volume": 1, **({"chroma": shot["chroma"]} if (shot.get("chroma") or {}).get("on") else {}),
+            **(shot.get("pip") or {}), **volume,
             **({"disabled": True} if shot.get("disabled") else {})}
     gap = {"id": new_id("s"), "name": "空白", "duration": r3(max(0.2, clip["length"])),
            **({"transition": shot["transition"]} if "transition" in shot else {})}
@@ -218,7 +219,8 @@ def drop_ops(project: dict, item: dict, media: dict, index: int, take: dict) -> 
     shot = {"id": take["shot"], "name": stem(str(item.get("name") or media.get("name") or "")),
             "duration": jsround(clamp(length, 0.2, 600), 3 if video else 2),
             **({"trimIn": t_in, "trimOut": None if end and out >= end - 1e-3 else out} if video else {}),
-            **({"speed": speed} if speed != 1 else {}), **({"pip": pip} if pip else {})}
+            **({"speed": speed} if speed != 1 else {}), **({"pip": pip} if pip else {}),
+            **({"chroma": item["chroma"]} if (item.get("chroma") or {}).get("on") else {})}  # stays keyed
     pick = {"activeVideo" if video else "activeImage": take["id"]}
     ops = [{"op": "shot.add", "shot": shot, "index": index}, {"op": "take.add", "take": take},
            {"op": "shot.update", "id": shot["id"], "patch": pick}]

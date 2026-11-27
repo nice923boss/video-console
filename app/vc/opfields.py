@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .grade import clean_grade
 from .transform import CROP_MAX, SIDES, clean_transform
+from .compressor import clean_comp
 from .util import AppError
 from .voiceclean import clean_channel, clean_denoise, clean_dereverb
 
@@ -264,7 +265,7 @@ MAX_OPS = 2000  # ops per batch level; longer lists are nested (apply_ops)
 MAX_PARKED = 500
 
 
-PIP_KEYS = ("x", "y", "w", "opacity", "volume", "chroma", "crop", "rotation", "keyframes")
+PIP_KEYS = ("x", "y", "w", "full", "opacity", "volume", "chroma", "crop", "rotation", "keyframes")
 
 
 def _pip(v: Any) -> dict | None:
@@ -367,9 +368,12 @@ SHOT_FIELDS: dict[str, Callable[[Any], Any]] = {
     "channel": clean_channel,
     "denoise": clean_denoise,
     "dereverb": clean_dereverb,
+    "comp": clean_comp,  # 壓縮器 on its own sound (compressor.py)
     "grade": clean_grade,  # colour grade of this shot's picture alone, under any adjustment layer (GR-01)
     "masks": _masks,  # blur or mosaic boxes over the shot's picture, to hide a face or a logo (GR-12)
     "transform": clean_transform,  # opacity, move, scale, rotate, trim and distort of its picture (ED-30)
+    "chroma": _chroma,  # green-screen key of its picture, as on upper-track clips; open parts show "backdrop"
+    "backdrop": _opt_id,  # media id of the picture behind a keyed shot; None: black
     "notes": _str(4000),
     "review": _review,  # comments a client wrote on the review page (review.py)
     "color": _opt_str(20),
@@ -409,6 +413,7 @@ AUDIO_FIELDS = {
     "speech": _bool,  # counts as voice: music on the 背景音樂 rows dips under it (duck.py)
     "denoise": clean_denoise,  # noise reduction learned from a sample of the clip (voiceclean.py)
     "dereverb": clean_dereverb,  # the classic echo remover
+    "comp": clean_comp,  # 壓縮器 after the Logic Compressor (compressor.py)
     "channel": clean_channel,  # the one channel of its file the clip plays; None: all of them
 }
 CAPTION_FIELDS = {"start": _float(0, 36000), "end": _float(0, 36000), "text": _str(500), "position": _str(10),
@@ -506,6 +511,7 @@ OVERLAY_FIELDS = {
     "opacity": _float(0, 1),
     "volume": _float(0, 4),
     "disabled": _bool,
+    "full": _bool,  # one-click full frame: fits the whole picture to the frame, keeping x, y, w, crop, rotation for later
     "chroma": _chroma,
     "crop": _overlay_crop,  # trimmed off its own picture; the cut part is transparent
     "rotation": _float(-3600, 3600),  # degrees, counterclockwise, about the center of the part left after crop

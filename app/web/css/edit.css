@@ -1162,6 +1162,6 @@
 .tl-mini { display: flex; flex: none; height: 30px; border-top: 1px solid var(--border); background: var(--surface-1); }
 .tl-mini-label { display: flex; align-items: center; flex: none; padding: 0 12px; font-size: calc(11px * var(--text-scale)); }
 .tl-mini-strip { position: relative; flex: 1; min-width: 0; margin: 4px 12px 4px 0; border-radius: var(--r-sm); background: var(--surface-3); cursor: pointer; overflow: hidden; touch-action: none; }
-.tl-mini-clip { position: absolute; top: 0; bottom: 0; border-right: 1px solid var(--surface-1); background: var(--surface-2) center / cover no-repeat; }
+.tl-mini-clip { position: absolute; top: 0; bottom: 0; border-right: 1px solid var(--surface-1); background: var(--surface-2) left center / auto 100% repeat-x; }
 .tl-mini-box { position: absolute; top: 0; bottom: 0; border: 1.5px solid var(--border-strong); border-radius: var(--r-sm); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45); pointer-events: none; }
 .tl-mini-head { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--accent-line); pointer-events: none; }

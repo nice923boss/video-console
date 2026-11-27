@@ -57,6 +57,19 @@ export function withKey(item, t, values) {
   return [...keys, { ...old, ...values, t: at }].sort((a, b) => a.t - b.t);
 }
 
+// Keyframes with every key of each field in `deltas` (numbers only) moved by that amount, held to the
+// [lo, hi] `limits` give the field.
+export function offsetKeys(item, deltas, limits = {}) {
+  return (item.keyframes || []).map((k) => {
+    const moved = Object.keys(deltas).filter((f) => typeof k[f] === "number");
+    if (!moved.length) return k;
+    return { ...k, ...Object.fromEntries(moved.map((f) => {
+      const [lo, hi] = limits[f] || [-Infinity, Infinity];
+      return [f, Math.round(Math.min(hi, Math.max(lo, k[f] + deltas[f])) * 1e4) / 1e4];
+    })) };
+  });
+}
+
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
 // Keyframes of the two halves of a clip cut d seconds in. Each half gets a key at the cut that holds what

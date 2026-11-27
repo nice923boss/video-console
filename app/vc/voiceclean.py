@@ -267,12 +267,12 @@ def pass_params(item: dict) -> dict | None:
     return {"sample": sample, "echo": echo, "channel": channel}
 
 
-SHOT_SOUND_FIELDS = ("channel", "denoise", "dereverb")
+SHOT_SOUND_FIELDS = ("channel", "denoise", "dereverb", "comp")
 
 
 def shot_sound(clip: dict) -> dict:
     """A sequence clip's own sound as the audio clip the pass and the remix take: the shot's id, its version's
-    file and range, and the shot's 聲道 / 降噪 / 去回音."""
+    file and range, and the shot's 聲道 / 降噪 / 去回音 / 壓縮器."""
     shot = clip["shot"]
     return {"id": shot["id"], "takeId": clip["take"]["id"], "in": clip["in"], "out": clip["out"],
             **{k: shot[k] for k in SHOT_SOUND_FIELDS if shot.get(k)}}

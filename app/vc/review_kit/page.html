@@ -15,51 +15,118 @@
   <details class="how">
     <summary>怎麼使用</summary>
     <ol>
-      <li>播放影片，看到要改的地方就暫停，可以用「上一格」「下一格」對準畫面。</li>
-      <li>按「在這一格加意見」，在畫面上拉出框線或箭頭、點一下放文字，再寫下要怎麼改。</li>
+      <li>播放影片，看到要改的地方就暫停。時間軸可以點、可以拖，滑鼠停在上面會看到那個時間的畫面；點時間可以直接輸入要跳到哪裡（例如 1:23）。</li>
+      <li>按「在這一格加意見」，在畫面上拉出框線或箭頭、點一下輸入文字，再寫下要怎麼改。意見是針對一整段（例如剪掉、換畫面）時，按「設定結束點」標出到哪裡為止。</li>
       <li>想放進自己的圖片或影片，按「插入圖片」或「插入影片」，素材會從這一格開始播，後面的畫面往後移。按「播放」就能預覽插入後的樣子。</li>
       <li>想換背景音樂，在右邊「更換配樂」上傳您要的音樂檔，按「播放」試聽，用音量滑桿調到您要的大小。</li>
-      <li>全部寫完，填上您的稱呼，按「打包回傳」，把下載的 ZIP 檔傳給製作方。</li>
+      <li>全部寫完，填上您的稱呼，按「打包回傳」，確認內容後把下載的 ZIP 檔傳給製作方。</li>
     </ol>
+    <p><b>快捷鍵</b></p>
+    <ul class="keys">
+      <li><kbd>空白鍵</kbd> 播放／暫停</li>
+      <li><kbd>←</kbd> <kbd>→</kbd> 上一格／下一格，按住 <kbd>Shift</kbd> 一次跳 1 秒</li>
+      <li><kbd>J</kbd> <kbd>L</kbd> 倒退／前進 5 秒</li>
+      <li><kbd>PageUp</kbd> <kbd>PageDown</kbd> 上一個／下一個鏡頭</li>
+      <li><kbd>Home</kbd> <kbd>End</kbd> 跳到開頭／結尾</li>
+      <li><kbd>N</kbd> 在這一格加意見；<kbd>[</kbd> <kbd>]</kbd> 跳到上一則／下一則意見</li>
+      <li><kbd>M</kbd> 靜音；<kbd>F</kbd> 全螢幕（也可以雙擊畫面）</li>
+      <li>編輯意見時：<kbd>←</kbd> <kbd>→</kbd> 把意見往前／往後挪一格（游標不在文字框時），<kbd>Ctrl</kbd>+<kbd>Enter</kbd> 儲存，<kbd>Esc</kbd> 取消</li>
+    </ul>
     <p class="dim">寫到一半關掉也沒關係，用同一台電腦、同一個瀏覽器再打開這個檔案會接著寫。</p>
   </details>
 </header>
 <div id="banner" class="banner" role="status" hidden></div>
 <main class="layout">
   <section class="stage-col">
-    <div class="stage" id="stage">
-      <video id="video" src="__VIDEO__" preload="auto" playsinline></video>
-      <svg id="ink" class="ink" viewBox="__VIEWBOX__" preserveAspectRatio="none" aria-hidden="true"></svg>
-      <div id="cue" class="cue" hidden></div>
-      <div id="stage-msg" class="stage-msg" hidden></div>
-    </div>
-    <div class="scrub">
-      <input type="range" id="scrub" min="0" max="1" step="0.001" value="0" aria-label="播放位置">
-      <div id="markers" class="markers"></div>
-    </div>
-    <div class="transport">
-      <button type="button" id="play" class="btn">播放</button>
-      <button type="button" id="prev" class="btn" title="上一格（←）">上一格</button>
-      <button type="button" id="next" class="btn" title="下一格（→）">下一格</button>
-      <span id="clock" class="clock">00:00.00</span>
-      <span id="shot-now" class="shot-now dim"></span>
+    <div class="player" id="player">
+      <div class="stage" id="stage">
+        <video id="video" src="__VIDEO__" preload="auto" playsinline></video>
+        <svg id="ink" class="ink" viewBox="__VIEWBOX__" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <div id="cue" class="cue" hidden></div>
+        <button type="button" id="here" class="here-chip" hidden></button>
+        <div id="flash" class="flash" role="status" hidden></div>
+        <div id="stage-msg" class="stage-msg" hidden></div>
+      </div>
+      <div class="timeline" id="timeline" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0">
+        <div class="tl-track">
+          <div id="tl-shots" class="tl-layer"></div>
+          <div id="tl-played" class="tl-played"></div>
+          <div id="tl-spans" class="tl-layer"></div>
+          <div id="tl-pick" class="tl-span pick" hidden></div>
+        </div>
+        <div id="markers" class="markers"></div>
+        <div id="tl-head" class="tl-head"></div>
+        <div id="tl-tip" class="tl-tip" hidden>
+          <video id="peek" src="__VIDEO__" muted preload="metadata" playsinline></video>
+          <b id="tip-time"></b>
+          <span id="tip-shot"></span>
+          <span id="tip-note"></span>
+        </div>
+      </div>
+      <div class="transport">
+        <button type="button" id="play" class="btn nav play-btn" title="播放／暫停（空白鍵）">播放</button>
+        <button type="button" id="back5" class="btn nav" title="倒退 5 秒（J）">−5 秒</button>
+        <button type="button" id="prev" class="btn nav" title="上一格（←）">上一格</button>
+        <button type="button" id="next" class="btn nav" title="下一格（→）">下一格</button>
+        <button type="button" id="fwd5" class="btn nav" title="前進 5 秒（L）">+5 秒</button>
+        <button type="button" id="prev-shot" class="btn nav" title="上一個鏡頭（PageUp）">上一鏡頭</button>
+        <button type="button" id="next-shot" class="btn nav" title="下一個鏡頭（PageDown）">下一鏡頭</button>
+        <button type="button" id="clock" class="clock nav" title="點一下輸入時間跳轉">00:00.00</button>
+        <input id="clock-input" class="clock-input" hidden maxlength="12" aria-label="跳到時間，例如 1:23" placeholder="例如 1:23">
+        <span class="grow"></span>
+        <span class="tp-side">
+        <label class="ctl" title="播放速度">速度
+          <select id="rate">
+            <option value="0.5">0.5 倍</option>
+            <option value="0.75">0.75 倍</option>
+            <option value="1" selected>1 倍</option>
+            <option value="1.25">1.25 倍</option>
+            <option value="1.5">1.5 倍</option>
+            <option value="2">2 倍</option>
+          </select></label>
+        <button type="button" id="mute" class="btn" title="靜音（M）">靜音</button>
+        <input type="range" id="vol" min="0" max="100" step="1" value="100" aria-label="音量">
+        <button type="button" id="full" class="btn" title="全螢幕（F 或雙擊畫面）">全螢幕</button>
+        </span>
+      </div>
+      <div class="now-line">
+        <span id="shot-now" class="shot-now dim"></span>
+        <button type="button" id="prev-note" class="btn ghost" title="上一則意見（[）">上一則意見</button>
+        <button type="button" id="next-note" class="btn ghost" title="下一則意見（]）">下一則意見</button>
+      </div>
     </div>
     <div class="actions">
-      <button type="button" id="add-note" class="btn primary">在這一格加意見</button>
+      <button type="button" id="add-note" class="btn primary" title="在這一格加意見（N）">在這一格加意見</button>
       <button type="button" id="add-image" class="btn">插入圖片</button>
       <button type="button" id="add-video" class="btn">插入影片</button>
       <input type="file" id="pick-image" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif" hidden>
       <input type="file" id="pick-video" accept=".mp4,.webm,.mov,.mkv,.m4v,.avi" hidden>
     </div>
     <section id="editor" class="editor" hidden>
-      <div class="ed-head"><b id="ed-title"></b><span id="ed-where" class="dim"></span></div>
+      <div class="ed-head">
+        <b id="ed-title"></b><span id="ed-where" class="dim"></span>
+        <span class="grow"></span>
+        <button type="button" id="ed-earlier" class="btn ghost" title="把意見往前挪一格（←）">往前一格</button>
+        <button type="button" id="ed-later" class="btn ghost" title="把意見往後挪一格（→）">往後一格</button>
+      </div>
       <div id="ed-tools" class="ed-tools">
         <span class="dim">在畫面上標出位置：</span>
         <button type="button" class="btn tool" data-tool="rect">框線</button>
         <button type="button" class="btn tool" data-tool="arrow">箭頭</button>
         <button type="button" class="btn tool" data-tool="text">文字</button>
+        <button type="button" class="btn tool" data-tool="erase" title="點一下畫面上的標註把它刪掉">擦掉</button>
         <button type="button" id="ed-undo" class="btn ghost">復原一筆</button>
         <button type="button" id="ed-clear" class="btn ghost">清除標註</button>
+      </div>
+      <div id="ed-span" class="ed-span" hidden>
+        <span id="ed-span-text" class="ed-span-text"></span>
+        <span class="ed-span-btns">
+          <button type="button" id="ed-span-set" class="btn">設定結束點</button>
+          <button type="button" id="ed-span-play" class="btn" hidden>播放這一段</button>
+          <button type="button" id="ed-span-clear" class="btn ghost" hidden>取消範圍</button>
+          <button type="button" id="ed-span-ok" class="btn primary" hidden>設為結束點</button>
+          <button type="button" id="ed-span-cancel" class="btn" hidden>不設了</button>
+        </span>
       </div>
       <div id="ed-insert" class="ed-insert" hidden>
         <div id="ed-thumb" class="ed-thumb"></div>
@@ -70,11 +137,23 @@
           <button type="button" id="ed-repick" class="btn ghost">換一個檔案</button>
         </div>
       </div>
+      <div class="ed-say">
       <label for="ed-text" id="ed-text-label">說明</label>
-      <textarea id="ed-text" rows="3" maxlength="2000"></textarea>
+      <div id="ed-quick" class="ed-quick">
+        <span class="dim small">常用：</span>
+        <button type="button" class="chip">字幕有錯字</button>
+        <button type="button" class="chip">這段剪掉</button>
+        <button type="button" class="chip">換一個畫面</button>
+        <button type="button" class="chip">聲音太大</button>
+        <button type="button" class="chip">聲音太小</button>
+        <button type="button" class="chip">節奏太慢</button>
+      </div>
+      </div>
+      <textarea id="ed-text" rows="2" maxlength="2000"></textarea>
       <div class="ed-actions">
         <button type="button" id="ed-delete" class="btn danger">刪除這則</button>
         <span class="grow"></span>
+        <span class="dim small">Ctrl+Enter 儲存</span>
         <button type="button" id="ed-cancel" class="btn">取消</button>
         <button type="button" id="ed-save" class="btn primary">儲存</button>
       </div>
@@ -117,6 +196,18 @@
     </div>
   </aside>
 </main>
+<dialog id="pack-dialog" class="pack-dialog">
+  <form method="dialog">
+    <b>確認要回傳的內容</b>
+    <ul id="pack-summary"></ul>
+    <p class="dim small">按「打包下載」會下載一個 ZIP 檔，請把它傳回給製作方。</p>
+    <div class="ed-actions">
+      <span class="grow"></span>
+      <button type="submit" value="back" id="pack-back" class="btn">返回修改</button>
+      <button type="submit" value="ok" id="pack-go" class="btn primary" autofocus>打包下載</button>
+    </div>
+  </form>
+</dialog>
 <script type="application/json" id="vc-meta">__META_JSON__</script>
 <script>__SCRIPT__</script>
 </body>

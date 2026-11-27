@@ -1,4 +1,4 @@
-// The 聲道 / 降噪 / 去回音 part of an audio clip's properties (edit-props.js AudioPanel) and of a shot's own sound
+// The 聲道 / 降噪 / 去回音 (and 壓縮器, comp-panel.js) part of an audio clip's properties (edit-props.js AudioPanel) and of a shot's own sound
 // (insp-edit.js, op "shot.update" on lib/voice-stems.js shotSound): which channel of its file the clip plays, noise reduction learned from a stretch of noise in the clip, and the classic echo remover. The
 // preview plays them from stems (lib/voice-stems.js) and the export renders the same (vc/voiceclean.py).
 import { html, useState, useEffect } from "../lib/h.js";
@@ -11,6 +11,7 @@ import { audioLength, audioSpeed } from "../lib/sequence.js";
 import { DEFAULT_DENOISE, DEFAULT_DEREVERB, MAX_SAMPLE, passParams } from "../lib/voice-mix.js";
 import { Field, Slider, Segmented, Toggle, Section, Button, Spinner } from "./ui.js";
 import { Icon } from "./icons.js";
+import { CompSection } from "./comp-panel.js";
 import { toast } from "./toast.js";
 
 const SAMPLE_LEN = 1; // seconds of noise taken at the playhead when no I/O range is marked on the clip
@@ -172,6 +173,7 @@ export function VoicePanel({ project, item, media, op = "audio.update" }) {
     <${ChannelSection} pid=${project.id} item=${item} media=${media} op=${op} />
     <${DenoiseSection} item=${item} media=${media} op=${op} />
     <${EchoSection} item=${item} op=${op} />
+    <${CompSection} item=${item} op=${op} />
     ${active && html`<${Field} label="預覽試聽" hint="原音是處理前的聲音，沒有補償音量差；只聽被移除的，用來檢查有沒有削到人聲">
       <${Segmented} size="sm" value=${mode} options=${MODES} onChange=${(m) => setState({ voiceMonitor: { id: item.id, mode: m } })} />
     <//>`}

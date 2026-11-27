@@ -45,7 +45,8 @@ export function liftOps(project, clip, target, start) {
   const item = {
     id, mediaId: media.id, layer, name: shot.name || media.name || "",
     start: round(Math.max(0, start), 3), in: clip.source === "video" ? round(clip.in, 3) : 0, length: round(clip.length, 3),
-    ...(clip.speed !== 1 ? { speed: clip.speed } : {}), ...place, opacity: 1, volume: 1, ...(shot.pip || {}),
+    ...(clip.speed !== 1 ? { speed: clip.speed } : {}), ...place, opacity: 1, volume: 1,
+    ...(shot.chroma && shot.chroma.on ? { chroma: shot.chroma } : {}), ...(shot.pip || {}),
     ...(sound ? { volume: Number(sound.volume ?? 1) } : shot.volume != null ? { volume: Number(shot.volume) } : {}),
     ...(shot.disabled ? { disabled: true } : {}),
   };
@@ -55,7 +56,7 @@ export function liftOps(project, clip, target, start) {
 }
 
 // Fields of an upper clip a shot keeps in "pip" (ED-16) for a lift back to restore.
-const PIP_KEYS = ["x", "y", "w", "opacity", "volume", "chroma", "crop", "rotation", "keyframes"];
+const PIP_KEYS = ["x", "y", "w", "full", "opacity", "volume", "chroma", "crop", "rotation", "keyframes"];
 
 // Drop (upper track to picture lane): the clip becomes a shot at `index` with the same piece of the file, and
 // the shots after it move back by its length. The picture lane plays shots full frame, so the clip's place,
@@ -75,6 +76,7 @@ export function dropOps(project, item, media, index, take) {
     duration: round(clamp(len, 0.2, 600), video ? 3 : 2),
     ...(video ? { trimIn: tIn, trimOut: end && out >= end - 1e-3 ? null : out } : {}),
     ...(speed !== 1 ? { speed } : {}), ...(Object.keys(pip).length ? { pip } : {}),
+    ...(item.chroma && item.chroma.on ? { chroma: item.chroma } : {}), // a keyed clip stays keyed in the picture lane
   };
   const pick = { [video ? "activeVideo" : "activeImage"]: take.id };
   const list = [{ op: "shot.add", shot, index }, { op: "take.add", take }, { op: "shot.update", id: shot.id, patch: pick }];

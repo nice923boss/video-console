@@ -30,10 +30,16 @@ function kindLabel(item) {
   return "文字意見";
 }
 
+const spanLength = (item) => `${(item.end.t - item.t).toFixed(1)} 秒`;
+const shotLabel = (at) => `#${at.no}${at.shotName ? `「${at.shotName}」` : ""}`;
+
 function where(item) {
   if (item.kind === "general") return "整支影片";
   if (item.kind === "music") return "整支影片的配樂";
-  return `${fmtTime(item.t)}，鏡頭 #${item.no}${item.shotName ? `「${item.shotName}」` : ""}`;
+  const end = item.end; // a note on a stretch (設定結束點 on the review page)
+  if (!end) return `${fmtTime(item.t)}，鏡頭 ${shotLabel(item)}`;
+  return `${fmtTime(item.t)} 到 ${fmtTime(end.t)}（${spanLength(item)}），鏡頭 ${shotLabel(item)}`
+    + (end.shot && end.shot !== item.shot ? ` 到 ${shotLabel(end)}` : "");
 }
 
 // The client's marks, drawn the way the review page drew them (review_kit/page.js) on a w x h frame.
@@ -62,9 +68,11 @@ function Marks({ marks, w, h }) {
   });
 }
 
-// The review video held on the note's frame, with the client's marks over it while it stays there.
-function Frame({ src, t, marks }) {
+// The review video held on the note's frame, with the client's marks over it while it stays there. A note on a
+// stretch (end) can play just that stretch, which stops at its end and goes back to the note's frame.
+function Frame({ src, t, end, marks }) {
   const ref = useRef(null);
+  const until = useRef(null); // where 播放這一段 stops
   const [dims, setDims] = useState([1920, 1080]);
   const [onFrame, setOnFrame] = useState(true);
   const [error, setError] = useState(false);
@@ -72,7 +80,33 @@ function Frame({ src, t, marks }) {
     const v = ref.current;
     if (v && v.readyState >= 1) v.currentTime = Math.min(t, Math.max(0, v.duration - 0.05));
   };
-  useEffect(seek, [t]);
+  useEffect(() => {
+    if (until.current != null) { // another note while a stretch plays: stop it there, on the new note's frame
+      until.current = null;
+      ref.current?.pause();
+    }
+    seek();
+  }, [t]);
+  const watch = () => {
+    const v = ref.current;
+    if (!v || until.current == null) return;
+    if (v.paused) {
+      until.current = null;
+    } else if (v.currentTime >= until.current) {
+      until.current = null;
+      v.pause();
+      seek();
+    } else {
+      requestAnimationFrame(watch);
+    }
+  };
+  const playSpan = () => {
+    const v = ref.current;
+    if (!v || v.readyState < 1) return;
+    seek();
+    until.current = end;
+    v.play().then(() => requestAnimationFrame(watch), () => { until.current = null; });
+  };
   const [w, h] = dims;
   if (error) {
     return html`<div class="note note-warn"><span class="note-text">找不到審稿影片（可能已被移動或刪除），只能看文字與標註說明。</span></div>`;
@@ -91,7 +125,10 @@ function Frame({ src, t, marks }) {
         <${Marks} marks=${marks} w=${w} h=${h} />
       </svg>`}
     </div>
-    ${!onFrame && html`<${Button} size="sm" icon="retry" onClick=${seek}>回到意見這一格<//>`}
+    <div class="rv-frame-acts">
+      ${end != null && html`<${Button} size="sm" icon="play" onClick=${playSpan}>播放這一段<//>`}
+      ${!onFrame && html`<${Button} size="sm" icon="retry" onClick=${seek}>回到意見這一格<//>`}
+    </div>
   </div>`;
 }
 
@@ -139,7 +176,8 @@ function Detail({ base, rid, item, busy, onDecide, onExtra, onApply }) {
       <${Badge} tone=${item.kind === "insert" || music ? "accent" : "neutral"}>${kindLabel(item)}<//>
       ${status && html`<${Badge} tone=${status[0]}>${status[1]}<//>`}
     </div>
-    ${item.kind !== "general" && !music && html`<${Frame} key=${rid} src=${`${base}/${enc(rid)}/video`} t=${item.t} marks=${item.marks} />`}
+    ${item.kind !== "general" && !music && html`<${Frame} key=${rid} src=${`${base}/${enc(rid)}/video`} t=${item.t}
+      end=${item.end ? item.end.t : null} marks=${item.marks} />`}
     ${item.kind === "insert" && html`<${Attachment} url=${fileUrl} insert=${item.insert} />`}
     ${music && html`<${MusicFile} url=${fileUrl} music=${item.music} />`}
     <div class="rv-said">
@@ -347,7 +385,7 @@ function RevisionsBody({ pid, close }) {
               onClick=${() => setCid(i.id)}>
             <span class="rv-row-head">
               <b>${i.kind === "general" ? "整體" : i.kind === "music" ? "配樂" : fmtTime(i.t)}</b>
-              <span class="dim">${kindLabel(i)}</span>
+              <span class="dim">${kindLabel(i)}${i.end ? `，一段 ${spanLength(i)}` : ""}</span>
               ${status ? html`<${Badge} tone=${status[0]}>${status[1]}<//>`
                 : i.decision && html`<${Badge} tone=${i.decision === "skip" ? "neutral" : "accent"}>${DECIDED[i.decision]}<//>`}
             </span>

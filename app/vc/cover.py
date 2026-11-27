@@ -6,6 +6,7 @@ that reaches every edge of the frame, on a shown track.
 """
 from __future__ import annotations
 
+from .overlayshape import framed
 from .sequence import build_sequence
 
 EDGE = 0.002  # fraction of the frame an edge may fall short and still count as reaching it
@@ -15,6 +16,7 @@ OPAQUE_STILLS = (".jpg", ".jpeg")  # stills that cannot be see-through
 def _hides_frame(item: dict, media: dict | None, frame_aspect: float) -> bool:
     if not media or item.get("disabled"):
         return False
+    item = framed(item, media, frame_aspect, 1.0)
     if media.get("kind") == "video":
         if media.get("alphaCodec"):
             return False
